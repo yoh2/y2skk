@@ -1,0 +1,10 @@
+[package]
+name = "skk-ipc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+skk-core.workspace = true
+serde      = { workspace = true }
+zbus       = { workspace = true }

@@ -1,0 +1,20 @@
+[Unit]
+Description=y2skk SKK input method daemon
+Documentation=https://github.com/yoh2/y2skk
+# Start after the D-Bus session bus is available.
+After=dbus.socket
+Requires=dbus.socket
+
+[Service]
+Type=dbus
+BusName=org.y2skk.Daemon
+ExecStart=%h/.cargo/bin/y2skk-daemon
+Restart=on-failure
+RestartSec=3
+
+# Harden the service a bit: no new privileges, private /tmp.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

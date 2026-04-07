@@ -1,0 +1,340 @@
+[meta]
+name = "romaji"
+description = "Standard JIS romaji layout"
+
+[trans]
+#from	input	to	output
+
+# 母音
+	a		あ
+	i		い
+	u		う
+	e		え
+	o		お
+
+# か行
+	k	k
+k	a		か
+k	i		き
+k	u		く
+k	e		け
+k	o		こ
+k	y	ky
+ky	a		きゃ
+ky	i		きぃ
+ky	u		きゅ
+ky	e		きぇ
+ky	o		きょ
+k	k	k	っ
+
+# が行
+	g	g
+g	a		が
+g	i		ぎ
+g	u		ぐ
+g	e		げ
+g	o		ご
+g	y	gy
+gy	a		ぎゃ
+gy	i		ぎぃ
+gy	u		ぎゅ
+gy	e		ぎぇ
+gy	o		ぎょ
+g	g	g	っ
+
+# さ行
+	s	s
+s	a		さ
+s	i		し
+s	u		す
+s	e		せ
+s	o		そ
+s	h	sh
+sh	a		しゃ
+sh	i		し
+sh	u		しゅ
+sh	e		しぇ
+sh	o		しょ
+s	y	sy
+sy	a		しゃ
+sy	i		しぃ
+sy	u		しゅ
+sy	e		しぇ
+sy	o		しょ
+s	s	s	っ
+
+# ざ行
+	z	z
+z	a		ざ
+z	i		じ
+z	u		ず
+z	e		ぜ
+z	o		ぞ
+z	 		　
+z	-		〜
+z	,		‥
+z	.		…
+z	[		『
+z	]		』
+z	/		・
+z	h		←
+z	j		↓
+z	k		↑
+z	l		→
+z	z	z	っ
+
+# た行
+	t	t
+t	a		た
+t	i		ち
+t	u		つ
+t	e		て
+t	o		と
+t	s	ts
+ts	u		つ
+ts	a		つぁ
+ts	e		つぇ
+ts	o		つぉ
+t	y	ty
+ty	a		ちゃ
+ty	i		ちぃ
+ty	u		ちゅ
+ty	e		ちぇ
+ty	o		ちょ
+t	h	th
+th	a		てゃ
+th	i		てぃ
+th	u		てゅ
+th	e		てぇ
+th	o		てょ
+t	t	t	っ
+
+# だ行
+	d	d
+d	a		だ
+d	i		ぢ
+d	u		づ
+d	e		で
+d	o		ど
+d	y	dy
+dy	a		ぢゃ
+dy	i		ぢぃ
+dy	u		ぢゅ
+dy	e		ぢぇ
+dy	o		ぢょ
+d	h	dh
+dh	a		でゃ
+dh	i		でぃ
+dh	u		でゅ
+dh	e		でぇ
+dh	o		でょ
+d	d	d	っ
+
+# な行
+	n	n
+n	a		な
+n	i		に
+n	u		ぬ
+n	e		ね
+n	o		の
+n	n		ん
+n	y	ny
+ny	a		にゃ
+ny	i		にぃ
+ny	u		にゅ
+ny	e		にぇ
+ny	o		にょ
+n	\*		ん
+
+# は行
+	h	h
+h	a		は
+h	i		ひ
+h	u		ふ
+h	e		へ
+h	o		ほ
+h	y	hy
+hy	a		ひゃ
+hy	i		ひぃ
+hy	u		ひゅ
+hy	e		ひぇ
+hy	o		ひょ
+h	h	h	っ
+
+# ば行
+	b	b
+b	a		ば
+b	i		び
+b	u		ぶ
+b	e		べ
+b	o		ぼ
+b	y	by
+by	a		びゃ
+by	i		びぃ
+by	u		びゅ
+by	e		びぇ
+by	o		びょ
+b	b	b	っ
+
+# ぱ行
+	p	p
+p	a		ぱ
+p	i		ぴ
+p	u		ぷ
+p	e		ぺ
+p	o		ぽ
+p	y	py
+py	a		ぴゃ
+py	i		ぴぃ
+py	u		ぴゅ
+py	e		ぴぇ
+py	o		ぴょ
+p	p	p	っ
+
+# ま行
+	m	m
+m	a		ま
+m	i		み
+m	u		む
+m	e		め
+m	o		も
+m	y	my
+my	a		みゃ
+my	i		みぃ
+my	u		みゅ
+my	e		みぇ
+my	o		みょ
+m	m	m	っ
+
+# や行
+	y	y
+y	a		や
+y	u		ゆ
+y	o		よ
+
+# ら行
+	r	r
+r	a		ら
+r	i		り
+r	u		る
+r	e		れ
+r	o		ろ
+r	y	ry
+ry	a		りゃ
+ry	i		りぃ
+ry	u		りゅ
+ry	e		りぇ
+ry	o		りょ
+r	r	r	っ
+
+# わ行
+	w	w
+w	a		わ
+w	i		ゐ
+w	e		ゑ
+w	o		を
+w	h	wh
+wh	a		うぁ
+wh	i		うぃ
+wh	e		うぇ
+wh	o		うぉ
+
+# ふ行
+	f	f
+f	a		ふぁ
+f	i		ふぃ
+f	u		ふ
+f	e		ふぇ
+f	o		ふぉ
+f	y	fy
+fy	a		ふぁ
+fy	i		ふぃ
+fy	u		ふゅ
+fy	e		ふぇ
+fy	o		ふぉ
+f	f	f	っ
+
+# じ行 (j)
+	j	j
+j	a		じゃ
+j	i		じ
+j	u		じゅ
+j	e		じぇ
+j	o		じょ
+j	y	jy
+jy	a		じゃ
+jy	i		じぃ
+jy	u		じゅ
+jy	e		じぇ
+jy	o		じょ
+j	j	j	っ
+
+# ち行 (c/ch)
+	c	c
+c	a		か
+c	i		し
+c	u		く
+c	e		せ
+c	o		こ
+c	h	ch
+ch	a		ちゃ
+ch	i		ち
+ch	u		ちゅ
+ch	e		ちぇ
+ch	o		ちょ
+c	y	cy
+cy	a		ちゃ
+cy	i		ちぃ
+cy	u		ちゅ
+cy	e		ちぇ
+cy	o		ちょ
+c	c	c	っ
+
+# vu
+	v	v
+v	u		ゔ
+v	y	vy
+vy	a		ゔぁ
+vy	i		ゔぃ
+vy	u		ゔゅ
+vy	e		ゔぇ
+vy	o		ゔぉ
+v	a		ゔぁ
+v	i		ゔぃ
+v	e		ゔぇ
+v	o		ゔぉ
+v	v	v	っ
+
+# 小書き文字（x プレフィクス）
+	x	x
+x	a		ぁ
+x	i		ぃ
+x	u		ぅ
+x	e		ぇ
+x	o		ぉ
+x	n		ん
+x	y	xy
+xy	a		ゃ
+xy	u		ゅ
+xy	o		ょ
+x	t	xt
+xt	s	xts
+xts	u		っ
+x	k	xk
+xk	a		ゕ
+xk	e		ゖ
+x	w	xw
+xw	a		ゎ
+
+# 記号・句読点
+	.		。
+	,		、
+	[		「
+	]		」
+	-		ー
+	/		・
+
+[trans.katakana]
+# ひらがな「ゔ」は全角カタカナでは「ヴ」に自動変換されるためオーバーライド不要
+
+[okuri_alias]

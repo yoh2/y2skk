@@ -1,0 +1,15 @@
+[package]
+name = "adapter-qt6"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# staticlib: linked into the C++ Qt plugin shared library.
+# cdylib: keeps cargo from warning about unused public symbols during `cargo check`.
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+skk-ipc.workspace = true
+zbus.workspace = true
+tracing.workspace = true

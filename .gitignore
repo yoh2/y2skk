@@ -1,0 +1,3 @@
+/target
+shim/qt6/build/
+shim/qt6/cmake-build-debug/

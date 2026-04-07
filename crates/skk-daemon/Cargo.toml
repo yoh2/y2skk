@@ -1,0 +1,26 @@
+[package]
+name = "skk-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "y2skk-daemon"
+path = "src/main.rs"
+
+[lib]
+name = "skk_daemon"
+path = "src/lib.rs"
+
+[dependencies]
+skk-core.workspace = true
+skk-ipc.workspace = true
+zbus.workspace = true
+tokio.workspace = true
+serde.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+dirs.workspace = true
