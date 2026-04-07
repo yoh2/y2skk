@@ -573,6 +573,13 @@ impl SkkEngine {
             return vec![EngineAction::HideCandidates, self.preedit_action()];
         }
 
+        // BackSpace → confirm current candidate, then pass BackSpace through to delete the last char
+        if event.key == Key::BackSpace {
+            let mut actions = self.commit_candidate(&candidates, index, &okuri);
+            actions.push(EngineAction::Passthrough);
+            return actions;
+        }
+
         // Return → confirm current candidate, then pass the key through to the app
         if event.key == Key::Return {
             let mut actions = self.commit_candidate(&candidates, index, &okuri);
@@ -744,6 +751,8 @@ fn decode_unicode_code(hex: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dict::entry::{DictEntry, DictError};
+    use crate::dict::traits::DictionaryProvider;
     use crate::kana::builtin::builtin_table;
     use crate::kana::table::KanaLayout;
 
@@ -758,6 +767,33 @@ mod tests {
 
     fn ctrl(ch: char) -> KeyEvent {
         KeyEvent::press(Key::Char(ch), Modifiers::CTRL)
+    }
+
+    fn backspace() -> KeyEvent {
+        KeyEvent::press(Key::BackSpace, Modifiers::empty())
+    }
+
+    /// Stub dictionary that returns a fixed candidate list for any lookup.
+    struct StubDict(Vec<Candidate>);
+
+    impl DictionaryProvider for StubDict {
+        fn lookup(&self, _midashi: &str, _okuri: Option<&str>) -> Option<DictEntry> {
+            Some(DictEntry {
+                midashi: String::new(),
+                okuri: None,
+                candidates: self.0.clone(),
+            })
+        }
+        fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> {
+            Ok(())
+        }
+    }
+
+    fn engine_with_dict(candidates: Vec<&str>) -> SkkEngine {
+        let mut eng = engine();
+        let cands = candidates.into_iter().map(Candidate::new).collect();
+        eng.add_dict(Box::new(StubDict(cands)));
+        eng
     }
 
     #[test]
@@ -782,5 +818,31 @@ mod tests {
         // After "ka", engine should have committed "か"
         // (tested implicitly by checking kana_state cleared)
         assert_eq!(eng.kana_state, "");
+    }
+
+    #[test]
+    fn test_selecting_backspace_commits_and_passes_through() {
+        // Enter Selecting phase: type "Ai" (midashi "あ") with a stub dict
+        let mut eng = engine_with_dict(vec!["亜", "阿"]);
+
+        // 'A' starts midashi, 'i' produces "あ", Space triggers conversion
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        let actions = eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }), "should be Selecting");
+        let _ = actions;
+
+        // BackSpace in Selecting phase: should commit the current candidate
+        // and pass BackSpace through so the application deletes the last character.
+        let actions = eng.process_key(&backspace());
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana, "should return to Hiragana after commit");
+        assert!(
+            actions.iter().any(|a| matches!(a, EngineAction::Commit(_))),
+            "should emit Commit"
+        );
+        assert!(
+            actions.contains(&EngineAction::Passthrough),
+            "should pass BackSpace through"
+        );
     }
 }
