@@ -83,7 +83,14 @@ impl SessionManager {
 
         let event = skk_ipc::convert::key_event_from_raw(key_sym, modifiers, is_press);
         let actions: Vec<EngineAction> = engine.process_key(&event);
-        actions.into_iter().map(IpcAction::from).collect()
+        let ipc_actions: Vec<IpcAction> = actions.into_iter().map(IpcAction::from).collect();
+
+        // Persist the user dict whenever a conversion is committed.
+        if ipc_actions.iter().any(|a| a.kind == skk_ipc::ACTION_COMMIT) {
+            self.flush_user_dict();
+        }
+
+        ipc_actions
     }
 
     /// Saves the user dict to disk if it has been modified.

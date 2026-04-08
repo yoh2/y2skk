@@ -63,7 +63,11 @@ pub enum SkkPhase {
     /// Candidate selection
     Selecting {
         midashi: String,
+        /// Okurigana kana text appended to the committed word (e.g. "いて").
         okuri: Option<String>,
+        /// Okurigana consonant key used for dictionary lookup (e.g. "k").
+        /// Stored separately from `okuri` so we can re-use it when learning.
+        okuri_key: Option<String>,
         candidates: Vec<Candidate>,
         index: usize,
     },
@@ -132,11 +136,12 @@ impl SkkEngine {
             SkkPhase::Okuri { midashi, okuri_prefix, roman_buf } => {
                 self.handle_okuri(event, midashi.clone(), *okuri_prefix, roman_buf.clone())
             }
-            SkkPhase::Selecting { midashi, okuri, candidates, index } => {
+            SkkPhase::Selecting { midashi, okuri, okuri_key, candidates, index } => {
                 self.handle_selecting(
                     event,
                     midashi.clone(),
                     okuri.clone(),
+                    okuri_key.clone(),
                     candidates.clone(),
                     *index,
                 )
@@ -539,10 +544,12 @@ impl SkkEngine {
             return vec![self.preedit_action()];
         }
 
+        let okuri_key_str = okuri.as_ref().map(|(k, _)| k.clone());
         let okuri_str = okuri.map(|(_, v)| v);
         self.phase = SkkPhase::Selecting {
             midashi,
             okuri: okuri_str,
+            okuri_key: okuri_key_str,
             candidates: candidates.clone(),
             index: 0,
         };
@@ -558,6 +565,7 @@ impl SkkEngine {
         event: &KeyEvent,
         midashi: String,
         okuri: Option<String>,
+        okuri_key: Option<String>,
         candidates: Vec<Candidate>,
         mut index: usize,
     ) -> Vec<EngineAction> {
@@ -575,14 +583,14 @@ impl SkkEngine {
 
         // BackSpace → confirm current candidate, then pass BackSpace through to delete the last char
         if event.key == Key::BackSpace {
-            let mut actions = self.commit_candidate(&candidates, index, &okuri);
+            let mut actions = self.commit_candidate(&midashi, &candidates, index, &okuri, &okuri_key);
             actions.push(EngineAction::Passthrough);
             return actions;
         }
 
         // Return → confirm current candidate, then pass the key through to the app
         if event.key == Key::Return {
-            let mut actions = self.commit_candidate(&candidates, index, &okuri);
+            let mut actions = self.commit_candidate(&midashi, &candidates, index, &okuri, &okuri_key);
             actions.push(EngineAction::Passthrough);
             return actions;
         }
@@ -590,7 +598,7 @@ impl SkkEngine {
         // Ctrl+j → confirm current candidate (key consumed, no passthrough)
         let is_ctrl_j = event.key == Key::Char('j') && event.modifiers.contains(Modifiers::CTRL);
         if is_ctrl_j {
-            return self.commit_candidate(&candidates, index, &okuri);
+            return self.commit_candidate(&midashi, &candidates, index, &okuri, &okuri_key);
         }
 
         // Space → advance to next candidate
@@ -599,6 +607,7 @@ impl SkkEngine {
             self.phase = SkkPhase::Selecting {
                 midashi,
                 okuri,
+                okuri_key,
                 candidates: candidates.clone(),
                 index,
             };
@@ -610,7 +619,7 @@ impl SkkEngine {
 
         // Any other printable character (without Ctrl) → confirm, then re-process in hiragana
         if event.printable_char().is_some() && !event.modifiers.contains(Modifiers::CTRL) {
-            let mut actions = self.commit_candidate(&candidates, index, &okuri);
+            let mut actions = self.commit_candidate(&midashi, &candidates, index, &okuri, &okuri_key);
             // Phase is now Hiragana; re-dispatch the character
             actions.extend(self.handle_kana(event));
             return actions;
@@ -619,15 +628,28 @@ impl SkkEngine {
         vec![EngineAction::Passthrough]
     }
 
-    /// Commits the candidate at `index` and resets to hiragana mode.
+    /// Commits the candidate at `index`, records it in the user dictionary, and resets to hiragana.
     fn commit_candidate(
         &mut self,
+        midashi: &str,
         candidates: &[Candidate],
         index: usize,
         okuri: &Option<String>,
+        okuri_key: &Option<String>,
     ) -> Vec<EngineAction> {
-        let word = candidates[index].word.clone();
-        let commit = format!("{}{}", word, okuri.as_deref().unwrap_or(""));
+        let chosen = candidates[index].clone();
+        let commit = format!("{}{}", chosen.word, okuri.as_deref().unwrap_or(""));
+
+        // Record the chosen candidate in all writable dictionaries (read-only ones return Err).
+        let entry = crate::dict::entry::DictEntry {
+            midashi: midashi.to_string(),
+            okuri: okuri_key.clone(),
+            candidates: vec![chosen],
+        };
+        for dict in self.dict.iter_mut() {
+            let _ = dict.learn(entry.clone());
+        }
+
         self.phase = SkkPhase::Hiragana;
         self.kana_state.clear();
         vec![
@@ -693,7 +715,7 @@ impl SkkEngine {
             SkkPhase::Okuri { midashi, okuri_prefix, roman_buf } => {
                 format!("▽{midashi}*{okuri_prefix}{roman_buf}")
             }
-            SkkPhase::Selecting { midashi: _, okuri, candidates, index } => {
+            SkkPhase::Selecting { midashi: _, okuri, okuri_key: _, candidates, index } => {
                 let word = &candidates[*index].word;
                 let ok = okuri.as_deref().unwrap_or("");
                 format!("▼{word}{ok}")
@@ -818,6 +840,36 @@ mod tests {
         // After "ka", engine should have committed "か"
         // (tested implicitly by checking kana_state cleared)
         assert_eq!(eng.kana_state, "");
+    }
+
+    #[test]
+    fn test_commit_learns_in_user_dict() {
+        use crate::dict::file::UserDict;
+        let mut eng = engine();
+        let user_dict = UserDict::empty(std::path::PathBuf::from("/tmp/y2skk_test_learn.dict"));
+        eng.add_dict(Box::new(user_dict));
+
+        // Add a stub dict so conversion succeeds
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("亜"),
+            Candidate::new("阿"),
+        ])));
+
+        // Enter Selecting and confirm "阿" (index 1)
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // Advance to index 1
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // Confirm with Ctrl+j
+        let actions = eng.process_key(&ctrl('j'));
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "阿")));
+
+        // The user dict (highest priority) should now have learned "阿" for "あい"
+        // ('A' → "あ", 'i' → "い" in midashi, so midashi is "あい")
+        let result = eng.dict[0].lookup("あい", None);
+        assert!(result.is_some(), "UserDict should have learned '阿' for 'あい'");
+        assert_eq!(result.unwrap().candidates[0].word, "阿");
     }
 
     #[test]
