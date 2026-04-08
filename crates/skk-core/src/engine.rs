@@ -589,16 +589,52 @@ impl SkkEngine {
         candidates: Vec<Candidate>,
         mut index: usize,
     ) -> Vec<EngineAction> {
-        // Escape / cancel key → back to midashi
+        // Escape / cancel key
         if event.key == Key::Escape
             || event.printable_char().map_or(false, |c| self.keybindings.cancel.contains(&c))
         {
-            self.phase = SkkPhase::Midashi {
-                kana_buf: midashi,
-                roman_buf: String::new(),
+            if index == 0 {
+                // At the first candidate → back to midashi (cancel conversion).
+                self.phase = SkkPhase::Midashi {
+                    kana_buf: midashi,
+                    roman_buf: String::new(),
+                };
+                self.kana_state.clear();
+                return vec![EngineAction::HideCandidates, self.preedit_action()];
+            }
+
+            // index > 0 → go back to the previous candidate / previous page.
+            let inline_count = self.keybindings.inline_count;
+            let sel_len = self.keybindings.selection_keys.len();
+            let in_listing = sel_len > 0 && index >= inline_count;
+
+            let prev = if in_listing {
+                let prev_raw = index.saturating_sub(sel_len);
+                if prev_raw < inline_count {
+                    // Crossed back into inline mode; show last inline candidate.
+                    inline_count.saturating_sub(1)
+                } else {
+                    prev_raw
+                }
+            } else {
+                index - 1
             };
-            self.kana_state.clear();
-            return vec![EngineAction::HideCandidates, self.preedit_action()];
+
+            self.phase = SkkPhase::Selecting {
+                midashi,
+                okuri,
+                okuri_key,
+                candidates: candidates.clone(),
+                index: prev,
+            };
+            let mut actions = vec![self.preedit_action()];
+            match self.listing_show_action(&candidates, prev) {
+                Some(show) => actions.insert(0, show),
+                // Crossed back to inline: hide the candidate window.
+                None if in_listing => actions.insert(0, EngineAction::HideCandidates),
+                None => {}
+            }
+            return actions;
         }
 
         // BackSpace → confirm current candidate, then pass BackSpace through to delete the last char
@@ -1018,6 +1054,79 @@ mod tests {
 
         // Space advances by page size (2), wraps to 0
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
+    }
+
+    #[test]
+    fn test_cancel_goes_back_one_candidate() {
+        // In ▼ mode, the cancel key ('x') should decrement the candidate index.
+        // Only when index==0 should it return to midashi.
+        let table = builtin_table(KanaLayout::Romaji);
+        let keybindings = SkkKeybindings {
+            inline_count: 3,
+            selection_keys: vec!['a', 's'],
+            cancel: vec!['x'],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(table, keybindings);
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("A"),
+            Candidate::new("B"),
+            Candidate::new("C"),
+            Candidate::new("D"),
+        ])));
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=0
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=1
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=2
+
+        // x → back to index=1
+        eng.process_key(&press('x'));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }));
+
+        // x → back to index=0
+        eng.process_key(&press('x'));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
+
+        // x at index=0 → back to midashi
+        eng.process_key(&press('x'));
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }));
+    }
+
+    #[test]
+    fn test_cancel_in_listing_goes_back_page() {
+        // In listing mode, cancel should go back one page; from the first listing
+        // page it should return to the last inline candidate.
+        let table = builtin_table(KanaLayout::Romaji);
+        let keybindings = SkkKeybindings {
+            inline_count: 1,
+            selection_keys: vec!['a', 's'],
+            cancel: vec!['x'],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(table, keybindings);
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("A"),
+            Candidate::new("B"),
+            Candidate::new("C"),
+            Candidate::new("D"),
+            Candidate::new("E"),
+        ])));
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=0 inline
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=1 listing page1
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=3 listing page2
+
+        // x → back to index=1 (listing page1)
+        eng.process_key(&press('x'));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }));
+
+        // x → back to index=0 (inline, last inline candidate = inline_count-1 = 0)
+        eng.process_key(&press('x'));
         assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
     }
 
