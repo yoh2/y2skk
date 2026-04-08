@@ -72,12 +72,23 @@ pub enum SkkPhase {
         candidates: Vec<Candidate>,
         index: usize,
     },
-    /// New-word registration
-    Register {
-        midashi: String,
-        okuri: Option<String>,
-        buf: String,
-    },
+}
+
+// ── Registration stack ────────────────────────────────────────────────────────
+
+/// One level of the (possibly recursive) dictionary registration mode.
+#[derive(Debug, Clone)]
+pub struct RegisterFrame {
+    /// Reading used as the dict lookup key (e.g. "へんかんちゅう").
+    pub midashi: String,
+    /// Okurigana consonant key stored in the dict entry (e.g. "k" for うごく).
+    pub okuri_key: Option<String>,
+    /// Okurigana kana appended to the commit string (e.g. "く").
+    pub okuri_kana: Option<String>,
+    /// Text accumulated so far for this registration level.
+    pub committed: String,
+    /// Byte offset of the editing cursor within `committed`.
+    pub cursor: usize,
 }
 
 // ── Engine ───────────────────────────────────────────────────────────────────
@@ -88,6 +99,8 @@ pub struct SkkEngine {
     kana_table: KanaTable,
     keybindings: SkkKeybindings,
     dict: Vec<Box<dyn DictionaryProvider>>,
+    /// Non-empty while in dictionary registration mode (supports recursive nesting).
+    register_stack: Vec<RegisterFrame>,
 }
 
 impl SkkEngine {
@@ -98,6 +111,7 @@ impl SkkEngine {
             kana_table,
             keybindings,
             dict: Vec::new(),
+            register_stack: Vec::new(),
         }
     }
 
@@ -122,7 +136,112 @@ impl SkkEngine {
     // ── Internal dispatch ─────────────────────────────────────────────────────
 
     fn handle_press(&mut self, event: &KeyEvent) -> Vec<EngineAction> {
-        match &self.phase.clone() {
+        // ── Registration mode special keys ──────────────────────────────────
+        if !self.register_stack.is_empty() {
+            let in_ready_state =
+                matches!(self.phase,
+                    SkkPhase::Hiragana | SkkPhase::Katakana | SkkPhase::HalfWidthKatakana)
+                && self.kana_state.is_empty();
+
+            let is_ctrl_g = event.key == Key::Char('g')
+                && event.modifiers.contains(Modifiers::CTRL);
+
+            if in_ready_state {
+                if event.key == Key::Return {
+                    let buf_empty = self.register_stack.last()
+                        .map(|f| f.committed.is_empty()).unwrap_or(true);
+                    return if buf_empty {
+                        self.cancel_register()
+                    } else {
+                        self.finalize_register()
+                    };
+                }
+                if is_ctrl_g || event.key == Key::Escape {
+                    return self.cancel_register();
+                }
+                // Cursor editing keys for the registration buffer.
+                match event.key {
+                    Key::BackSpace => {
+                        self.reg_backspace();
+                        return vec![self.preedit_action()];
+                    }
+                    Key::Delete => {
+                        self.reg_delete();
+                        return vec![self.preedit_action()];
+                    }
+                    Key::Left => {
+                        self.reg_move_left();
+                        return vec![self.preedit_action()];
+                    }
+                    Key::Right => {
+                        self.reg_move_right();
+                        return vec![self.preedit_action()];
+                    }
+                    _ => {}
+                }
+            } else if is_ctrl_g {
+                // C-g in any sub-phase: abort the sub-phase and cancel registration.
+                self.phase = SkkPhase::Hiragana;
+                self.kana_state.clear();
+                return self.cancel_register();
+            } else if matches!(self.phase, SkkPhase::Midashi { .. } | SkkPhase::Okuri { .. })
+                    && event.key == Key::Return {
+                // Return in ▽/okuri mode during registration: flush the typed kana to the
+                // registration buffer and return to Hiragana (ready state).  This allows
+                // the user to commit a kana string as-is without triggering a conversion.
+                let flush = match &self.phase {
+                    SkkPhase::Midashi { kana_buf, .. } => kana_buf.clone(),
+                    SkkPhase::Okuri { midashi, .. } => midashi.clone(),
+                    _ => unreachable!(),
+                };
+                self.phase = SkkPhase::Hiragana;
+                self.kana_state.clear();
+                if !flush.is_empty() {
+                    if let Some(frame) = self.register_stack.last_mut() {
+                        frame.committed.insert_str(frame.cursor, &flush);
+                        frame.cursor += flush.len();
+                    }
+                }
+                return vec![self.preedit_action()];
+            }
+
+            // In ASCII mode, printable chars and editing keys are redirected to the
+            // registration buffer instead of leaking to the application.
+            if matches!(self.phase, SkkPhase::Ascii) {
+                match event.key {
+                    Key::BackSpace => {
+                        self.reg_backspace();
+                        return vec![self.preedit_action()];
+                    }
+                    Key::Delete => {
+                        self.reg_delete();
+                        return vec![self.preedit_action()];
+                    }
+                    Key::Left => {
+                        self.reg_move_left();
+                        return vec![self.preedit_action()];
+                    }
+                    Key::Right => {
+                        self.reg_move_right();
+                        return vec![self.preedit_action()];
+                    }
+                    _ => {
+                        if let Some(ch) = event.printable_char() {
+                            if !event.modifiers.contains(Modifiers::CTRL) {
+                                if let Some(frame) = self.register_stack.last_mut() {
+                                    frame.committed.insert(frame.cursor, ch);
+                                    frame.cursor += ch.len_utf8();
+                                }
+                                return vec![self.preedit_action()];
+                            }
+                        }
+                        // Ctrl keys fall through to handle_ascii (e.g. Ctrl+j → Hiragana).
+                    }
+                }
+            }
+        }
+
+        let raw_actions = match &self.phase.clone() {
             SkkPhase::Ascii => self.handle_ascii(event),
             SkkPhase::Hiragana | SkkPhase::Katakana | SkkPhase::HalfWidthKatakana => {
                 self.handle_kana(event)
@@ -147,9 +266,13 @@ impl SkkEngine {
                     *index,
                 )
             }
-            SkkPhase::Register { midashi, okuri, buf } => {
-                self.handle_register(event, midashi.clone(), okuri.clone(), buf.clone())
-            }
+        };
+
+        // ── Intercept commits when in registration mode ──────────────────────
+        if !self.register_stack.is_empty() {
+            self.intercept_for_register(raw_actions)
+        } else {
+            raw_actions
         }
     }
 
@@ -552,12 +675,18 @@ impl SkkEngine {
             .collect();
 
         if candidates.is_empty() {
-            // No candidates → enter registration
-            self.phase = SkkPhase::Register {
+            // No candidates → enter (possibly nested) registration mode.
+            let okuri_kana = okuri.as_ref().map(|(_, v)| v.clone());
+            let okuri_key_str = okuri.map(|(k, _)| k);
+            self.register_stack.push(RegisterFrame {
                 midashi,
-                okuri: okuri.map(|(_, v)| v),
-                buf: String::new(),
-            };
+                okuri_key: okuri_key_str,
+                okuri_kana,
+                committed: String::new(),
+                cursor: 0,
+            });
+            self.phase = SkkPhase::Hiragana;
+            self.kana_state.clear();
             return vec![self.preedit_action()];
         }
 
@@ -657,17 +786,26 @@ impl SkkEngine {
             return self.commit_candidate(&midashi, &candidates, index, &okuri, &okuri_key);
         }
 
-        // Space → advance to next candidate (inline mode) or next page (listing mode)
+        // Space → advance to next candidate (inline mode) or next page (listing mode).
+        // When all candidates are exhausted, enter dictionary registration mode.
         if event.key == Key::Space {
             let inline_count = self.keybindings.inline_count;
             let sel_len = self.keybindings.selection_keys.len();
             let in_listing = sel_len > 0 && index >= inline_count;
             if in_listing {
-                // Advance by one full page; wrap back to 0 when exhausted.
                 let next = index + sel_len;
-                index = if next >= candidates.len() { 0 } else { next };
+                if next >= candidates.len() {
+                    // Past the last page: enter registration mode.
+                    return self.enter_register_from_selecting(midashi, okuri, okuri_key);
+                }
+                index = next;
             } else {
-                index = (index + 1) % candidates.len();
+                let next = index + 1;
+                if next >= candidates.len() {
+                    // Past the last inline candidate: enter registration mode.
+                    return self.enter_register_from_selecting(midashi, okuri, okuri_key);
+                }
+                index = next;
             }
             self.phase = SkkPhase::Selecting {
                 midashi,
@@ -677,11 +815,8 @@ impl SkkEngine {
                 index,
             };
             let mut actions = vec![self.preedit_action()];
-            match self.listing_show_action(&candidates, index) {
-                Some(show) => actions.insert(0, show),
-                // Wrapped back to inline mode: hide the candidate window.
-                None if in_listing => actions.insert(0, EngineAction::HideCandidates),
-                None => {}
+            if let Some(show) = self.listing_show_action(&candidates, index) {
+                actions.insert(0, show);
             }
             return actions;
         }
@@ -774,35 +909,159 @@ impl SkkEngine {
         ]
     }
 
-    fn handle_register(
+    // ── Registration cursor editing ───────────────────────────────────────────
+
+    /// Deletes the character immediately before the registration cursor.
+    fn reg_backspace(&mut self) {
+        if let Some(frame) = self.register_stack.last_mut() {
+            if frame.cursor > 0 {
+                let (idx, _) = frame.committed[..frame.cursor]
+                    .char_indices().next_back().unwrap();
+                frame.committed.remove(idx);
+                frame.cursor = idx;
+            }
+        }
+    }
+
+    /// Deletes the character immediately after the registration cursor.
+    fn reg_delete(&mut self) {
+        if let Some(frame) = self.register_stack.last_mut() {
+            if frame.cursor < frame.committed.len() {
+                frame.committed.remove(frame.cursor);
+            }
+        }
+    }
+
+    /// Moves the registration cursor one character to the left.
+    fn reg_move_left(&mut self) {
+        if let Some(frame) = self.register_stack.last_mut() {
+            if frame.cursor > 0 {
+                let (idx, _) = frame.committed[..frame.cursor]
+                    .char_indices().next_back().unwrap();
+                frame.cursor = idx;
+            }
+        }
+    }
+
+    /// Moves the registration cursor one character to the right.
+    fn reg_move_right(&mut self) {
+        if let Some(frame) = self.register_stack.last_mut() {
+            if frame.cursor < frame.committed.len() {
+                let ch = frame.committed[frame.cursor..].chars().next().unwrap();
+                frame.cursor += ch.len_utf8();
+            }
+        }
+    }
+
+    /// Enters registration mode from Selecting phase (no more candidates available).
+    fn enter_register_from_selecting(
         &mut self,
-        event: &KeyEvent,
         midashi: String,
         okuri: Option<String>,
-        mut buf: String,
+        okuri_key: Option<String>,
     ) -> Vec<EngineAction> {
-        if event.key == Key::Escape {
+        self.register_stack.push(RegisterFrame {
+            midashi,
+            okuri_key,
+            okuri_kana: okuri,
+            committed: String::new(),
+            cursor: 0,
+        });
+        self.phase = SkkPhase::Hiragana;
+        self.kana_state.clear();
+        vec![EngineAction::HideCandidates, self.preedit_action()]
+    }
+
+    // ── Registration mode helpers ─────────────────────────────────────────────
+
+    /// Completes the topmost registration frame: saves to user dict and either
+    /// commits to the application (outermost frame) or appends to the outer frame.
+    fn finalize_register(&mut self) -> Vec<EngineAction> {
+        let frame = self.register_stack.pop().expect("finalize_register called with empty stack");
+        let word = frame.committed.clone();
+        let okuri_kana = frame.okuri_kana.as_deref().unwrap_or("");
+
+        // Save the new entry to all writable dictionaries.
+        let entry = crate::dict::entry::DictEntry {
+            midashi: frame.midashi.clone(),
+            okuri: frame.okuri_key.clone(),
+            candidates: vec![Candidate { word: word.clone(), annotation: None }],
+        };
+        for dict in self.dict.iter_mut() {
+            let _ = dict.learn(entry.clone());
+        }
+
+        if self.register_stack.is_empty() {
+            // Outermost frame: commit to the application.
             self.phase = SkkPhase::Hiragana;
-            return vec![EngineAction::ClearPreedit];
-        }
-        if event.key == Key::Return {
-            // Commit the registered word
-            let commit = format!("{}{}", buf, okuri.as_deref().unwrap_or(""));
-            // TODO: persist to user dict
+            self.kana_state.clear();
+            let commit = format!("{}{}", word, okuri_kana);
+            vec![EngineAction::Commit(commit), EngineAction::ClearPreedit]
+        } else {
+            // Inner frame: insert into the enclosing registration buffer at its cursor.
+            if let Some(outer) = self.register_stack.last_mut() {
+                outer.committed.insert_str(outer.cursor, &word);
+                outer.cursor += word.len();
+            }
             self.phase = SkkPhase::Hiragana;
-            return vec![EngineAction::Commit(commit), EngineAction::ClearPreedit];
+            self.kana_state.clear();
+            vec![self.preedit_action()]
         }
-        if event.key == Key::BackSpace {
-            buf.pop();
-            self.phase = SkkPhase::Register { midashi, okuri, buf };
-            return vec![self.preedit_action()];
+    }
+
+    /// Cancels the topmost registration frame and returns to ▽ midashi mode.
+    /// If nested, returns to the outer registration frame instead.
+    fn cancel_register(&mut self) -> Vec<EngineAction> {
+        let frame = self.register_stack.pop().expect("cancel_register called with empty stack");
+        self.phase = SkkPhase::Hiragana;
+        self.kana_state.clear();
+
+        if self.register_stack.is_empty() {
+            // Return to ▽ midashi mode with the original reading.
+            self.phase = SkkPhase::Midashi {
+                kana_buf: frame.midashi,
+                roman_buf: String::new(),
+            };
+            vec![EngineAction::HideCandidates, self.preedit_action()]
+        } else {
+            // Return to the outer registration frame.
+            vec![self.preedit_action()]
         }
-        if let Some(ch) = event.printable_char() {
-            buf.push(ch);
-            self.phase = SkkPhase::Register { midashi, okuri, buf };
-            return vec![self.preedit_action()];
+    }
+
+    /// Intercepts `Commit` and preedit actions produced by sub-phases while in
+    /// registration mode, redirecting committed text into the register buffer.
+    fn intercept_for_register(&mut self, raw_actions: Vec<EngineAction>) -> Vec<EngineAction> {
+        let mut result = Vec::new();
+        let mut need_preedit = false;
+
+        for action in raw_actions {
+            match action {
+                EngineAction::Commit(text) => {
+                    if let Some(frame) = self.register_stack.last_mut() {
+                        frame.committed.insert_str(frame.cursor, &text);
+                        frame.cursor += text.len();
+                    }
+                    need_preedit = true;
+                }
+                EngineAction::ClearPreedit | EngineAction::UpdatePreedit(_) => {
+                    need_preedit = true;
+                }
+                // Candidate window actions pass through unchanged.
+                EngineAction::ShowCandidates(_, _, _) | EngineAction::HideCandidates => {
+                    result.push(action);
+                }
+                // Drop Passthrough: keys should not reach the app while registering.
+                EngineAction::Passthrough => {}
+            }
         }
-        vec![EngineAction::Passthrough]
+
+        // Always emit a preedit update so the adapter reports the key as consumed.
+        // (An empty action list would cause consumed=false, letting the key leak to the app.)
+        if need_preedit || result.is_empty() {
+            result.push(self.preedit_action());
+        }
+        result
     }
 
     // ── Preedit helpers ───────────────────────────────────────────────────────
@@ -812,7 +1071,37 @@ impl SkkEngine {
     }
 
     fn build_preedit(&self) -> Preedit {
-        let text = match &self.phase {
+        let inner = self.build_inner_preedit();
+
+        if let Some(frame) = self.register_stack.last() {
+            // Depth is shown as nested brackets: [辞書登録], [[辞書登録]], ...
+            let depth = self.register_stack.len();
+            let open  = "[".repeat(depth);
+            let close = "]".repeat(depth);
+            let midashi_disp = format!(
+                "{}{}",
+                frame.midashi,
+                frame.okuri_kana.as_deref().unwrap_or("")
+            );
+            // Split the committed text at the editing cursor so the IM cursor
+            // is placed between `before` and `after` in the displayed preedit.
+            let before = &frame.committed[..frame.cursor];
+            let after  = &frame.committed[frame.cursor..];
+            let prefix = format!("{}辞書登録{} {}: ", open, close, midashi_disp);
+            // Layout: <prefix><before><inner_preedit><after>
+            // IM cursor sits at the end of <inner_preedit>.
+            let text   = format!("{}{}{}{}", prefix, before, inner, after);
+            let cursor = prefix.len() + before.len() + inner.len();
+            return Preedit { text, cursor };
+        }
+
+        let cursor = inner.len();
+        Preedit { text: inner, cursor }
+    }
+
+    /// Returns the preedit text for the current phase, without any register prefix.
+    fn build_inner_preedit(&self) -> String {
+        match &self.phase {
             SkkPhase::Hiragana | SkkPhase::Katakana | SkkPhase::HalfWidthKatakana => {
                 self.kana_state.clone()
             }
@@ -838,13 +1127,7 @@ impl SkkEngine {
                     None => format!("▼{}{}", cand.word, ok),
                 }
             }
-            SkkPhase::Register { midashi, okuri, buf } => {
-                let ok = okuri.as_deref().unwrap_or("");
-                format!("({midashi}{ok}): {buf}")
-            }
-        };
-        let cursor = text.len();
-        Preedit { text, cursor }
+        }
     }
 }
 
@@ -1052,9 +1335,10 @@ mod tests {
         // index=1, listing page start (B, C)
         assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }));
 
-        // Space advances by page size (2), wraps to 0
+        // Space past the last page: enter registration mode (index=1+2=3 >= len=3)
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
-        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
+        assert!(!eng.register_stack.is_empty(), "should enter register mode after last candidate");
+        assert!(matches!(eng.phase(), SkkPhase::Hiragana));
     }
 
     #[test]
@@ -1214,6 +1498,131 @@ mod tests {
         assert!(
             actions.contains(&EngineAction::Passthrough),
             "should pass BackSpace through"
+        );
+    }
+
+    #[test]
+    fn test_register_basic() {
+        // When no candidates exist, engine enters registration mode.
+        // User types romaji (→ kana), then RET → word is saved and committed.
+        let mut eng = engine(); // no dict → all conversions go to register mode
+
+        // Trigger conversion of "あい" (no candidates → register mode)
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        let actions = eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // Should have UpdatePreedit with registration prompt
+        assert!(
+            actions.iter().any(|a| matches!(a, EngineAction::UpdatePreedit(p) if p.text.contains("辞書登録"))),
+            "should show registration prompt; got: {:?}", actions
+        );
+        assert!(!eng.register_stack.is_empty(), "register_stack should be non-empty");
+
+        // Type "か" via romaji "ka"
+        eng.process_key(&press('k'));
+        eng.process_key(&press('a'));
+
+        // RET → commit
+        let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
+        assert!(
+            actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "か")),
+            "should commit registered word; got: {:?}", actions
+        );
+        assert!(eng.register_stack.is_empty(), "register_stack should be empty after finalize");
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+    }
+
+    #[test]
+    fn test_register_cancel_returns_to_midashi() {
+        let mut eng = engine();
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // enter register mode
+
+        // C-g cancels → should return to ▽ midashi
+        let actions = eng.process_key(&KeyEvent::press(
+            Key::Char('g'), Modifiers::CTRL,
+        ));
+        assert!(eng.register_stack.is_empty());
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { kana_buf, .. } if kana_buf == "あい"),
+            "should return to midashi あい; phase: {:?}", eng.phase());
+        // preedit should show ▽あい
+        assert!(
+            actions.iter().any(|a| matches!(a, EngineAction::UpdatePreedit(p) if p.text.contains("▽あい"))),
+            "should update preedit to ▽あい; got: {:?}", actions
+        );
+    }
+
+    #[test]
+    fn test_register_empty_return_cancels() {
+        let mut eng = engine();
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        // RET with empty buf → cancel, return to midashi
+        eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
+        assert!(eng.register_stack.is_empty());
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }));
+    }
+
+    #[test]
+    fn test_register_saves_to_user_dict() {
+        use crate::dict::file::UserDict;
+        let table = builtin_table(KanaLayout::Romaji);
+        let mut eng = SkkEngine::new(table, SkkKeybindings::default());
+        // UserDict with no entries: lookup returns None → register mode; learn actually stores.
+        let user_dict = UserDict::empty(std::path::PathBuf::from("/tmp/y2skk_test_register.dict"));
+        eng.add_dict(Box::new(user_dict));
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // enter register
+
+        // Type "か" via romaji "ka"
+        eng.process_key(&press('k'));
+        eng.process_key(&press('a'));
+        eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty())); // finalize
+
+        // Dict should now have the entry
+        let result = eng.dict[0].lookup("あい", None);
+        assert!(result.is_some(), "user dict should have learned あい");
+        assert_eq!(result.unwrap().candidates[0].word, "か");
+    }
+
+    #[test]
+    fn test_register_recursive() {
+        // Recursive registration: while registering "さいきてき", the user triggers
+        // an inner conversion for "さいき" (also no entry) → nested registration.
+        // After registering "さいき" → "か" (romaji), back to outer registration.
+        let mut eng = engine(); // no dict
+
+        // Start outer conversion: さいきてき
+        for ch in ['S','a','i','k','i','t','e','k','i'] { eng.process_key(&press(ch)); }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert_eq!(eng.register_stack.len(), 1, "should be in outer register");
+
+        // Within registration, start inner conversion: さいき
+        for ch in ['S','a','i','k','i'] { eng.process_key(&press(ch)); }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert_eq!(eng.register_stack.len(), 2, "should be in nested register");
+
+        // Register "さいき" → "か" (romaji "ka")
+        eng.process_key(&press('k'));
+        eng.process_key(&press('a'));
+        eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
+        assert_eq!(eng.register_stack.len(), 1, "should be back in outer register");
+        // Outer committed buf should now contain "か"
+        assert_eq!(eng.register_stack[0].committed, "か");
+
+        // Now type "き" (romaji "ki") and finalize the outer registration
+        eng.process_key(&press('k'));
+        eng.process_key(&press('i'));
+        let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
+        assert!(eng.register_stack.is_empty());
+        assert!(
+            actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "かき")),
+            "should commit かき; got: {:?}", actions
         );
     }
 }
