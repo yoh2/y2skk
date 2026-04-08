@@ -412,6 +412,22 @@ impl SkkEngine {
             return vec![EngineAction::Passthrough];
         };
 
+        // '>', '<', '?' trigger prefix conversion: append '>' to the midashi and
+        // convert immediately (looks up "reading>" in the dictionary).
+        if matches!(ch, '>' | '<' | '?') {
+            if !roman_buf.is_empty() {
+                kana_buf.push_str(&roman_buf);
+            }
+            self.kana_state.clear();
+            if kana_buf.is_empty() {
+                // Nothing to convert; stay in midashi mode.
+                self.phase = SkkPhase::Midashi { kana_buf, roman_buf: String::new() };
+                return vec![self.preedit_action()];
+            }
+            kana_buf.push('>');
+            return self.start_conversion(kana_buf, None);
+        }
+
         // Uppercase letter starts okurigana.
         // The okuri_prefix is the first consonant of the okurigana sequence:
         // - if there is a pending kana state (e.g. "w" in "KawA"), that is the prefix;
@@ -615,6 +631,20 @@ impl SkkEngine {
                 EngineAction::ShowCandidates(candidates, index),
                 self.preedit_action(),
             ];
+        }
+
+        // '>', '<', '?' → commit current candidate and enter suffix mode (new ▽ with '>' prefix)
+        if event.printable_char().map_or(false, |c| matches!(c, '>' | '<' | '?')) {
+            let mut actions = self.commit_candidate(&midashi, &candidates, index, &okuri, &okuri_key);
+            // Start a new midashi with '>' as the initial kana_buf so the next
+            // conversion looks up ">reading" (suffix entries).
+            self.phase = SkkPhase::Midashi {
+                kana_buf: ">".to_string(),
+                roman_buf: String::new(),
+            };
+            self.kana_state.clear();
+            actions.push(self.preedit_action());
+            return actions;
         }
 
         // Any other printable character (without Ctrl) → confirm, then re-process in hiragana
@@ -873,6 +903,67 @@ mod tests {
         let result = eng.dict[0].lookup("あい", None);
         assert!(result.is_some(), "UserDict should have learned '阿' for 'あい'");
         assert_eq!(result.unwrap().candidates[0].word, "阿");
+    }
+
+    #[test]
+    fn test_prefix_conversion_in_midashi() {
+        // '>' in ▽ mode appends '>' to midashi and triggers conversion ("ちょう>" → "超").
+        struct PrefixDict;
+        impl DictionaryProvider for PrefixDict {
+            fn lookup(&self, midashi: &str, _okuri: Option<&str>) -> Option<DictEntry> {
+                match midashi {
+                    "ちょう>" => Some(DictEntry {
+                        midashi: midashi.to_string(), okuri: None,
+                        candidates: vec![Candidate::new("超")],
+                    }),
+                    _ => None,
+                }
+            }
+            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> { Ok(()) }
+        }
+
+        let mut eng = engine();
+        eng.add_dict(Box::new(PrefixDict));
+
+        // Type ▽ちょう  (T y o u)
+        eng.process_key(&press('T'));
+        eng.process_key(&press('y'));
+        eng.process_key(&press('o'));
+        eng.process_key(&press('u'));
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }));
+
+        // Press '>' → should trigger conversion on "ちょう>" → Selecting with "超"
+        eng.process_key(&press('>'));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }), "should be Selecting after '>'");
+    }
+
+    #[test]
+    fn test_suffix_mode_in_selecting() {
+        // '>' in ▼ mode commits the candidate and starts new ▽ with '>' prefix.
+        let mut eng = engine_with_dict(vec!["小林"]);
+
+        eng.process_key(&press('K'));
+        eng.process_key(&press('o'));
+        eng.process_key(&press('b'));
+        eng.process_key(&press('a'));
+        eng.process_key(&press('y'));
+        eng.process_key(&press('a'));
+        eng.process_key(&press('s'));
+        eng.process_key(&press('h'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }));
+
+        // Press '>' → commit "小林" and enter ▽> mode
+        let actions = eng.process_key(&press('>'));
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(_))), "should commit");
+        match eng.phase() {
+            SkkPhase::Midashi { kana_buf, roman_buf } => {
+                assert_eq!(kana_buf, ">", "kana_buf should start with '>'");
+                assert!(roman_buf.is_empty());
+            }
+            other => panic!("expected Midashi, got {other:?}"),
+        }
     }
 
     #[test]
