@@ -215,11 +215,11 @@ c\tk
             next_state: "".into(),
         });
 
-        // n + k → ん (wildcard match)
+        // n + k → ん via wildcard; 'k' is retried from the start state (OkRetry)
         let r = table.transition("n", 'k', KanaMode::Hiragana);
-        assert_eq!(r, super::super::table::TransitionResult::Ok {
+        assert_eq!(r, super::super::table::TransitionResult::OkRetry {
             output: "ん".into(),
-            next_state: "".into(),
+            retry: 'k',
         });
     }
 }

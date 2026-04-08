@@ -413,15 +413,36 @@ impl SkkEngine {
                     actions
                 }
             }
-            TransitionResult::NoMatch { flush, retry } => {
+            TransitionResult::OkRetry { output, retry } => {
+                // Wildcard rule fired (e.g. n + consonant → "ん").  Emit the output and then
+                // re-process the triggering character from the start state so it is not lost.
+                self.kana_state.clear();
+                let mut actions = if output.is_empty() {
+                    vec![]
+                } else {
+                    vec![EngineAction::Commit(output)]
+                };
+                actions.extend(self.feed_kana(retry, mode));
+                actions
+            }
+            TransitionResult::NoMatch { flush: _, retry } => {
+                // The accumulated intermediate state failed to match.  The partial sequence
+                // (flush) is silently discarded rather than committed to the application.
+                // This prevents stray characters like a lone "c" from appearing in the output
+                // when the user types an unrecognised romaji sequence (e.g. "cde" → "で").
+                //
+                // Exception: when NoMatch fires from the *empty* start state (flush would have
+                // been empty anyway and there is no retry), the input character itself did not
+                // start any sequence at all — pass it through as-is so that digits, punctuation,
+                // and other non-kana characters are committed normally.
                 self.kana_state.clear();
                 let mut actions = Vec::new();
-                if !flush.is_empty() {
-                    actions.push(EngineAction::Commit(flush));
-                }
                 if let Some(retry_ch) = retry {
                     actions.extend(self.feed_kana(retry_ch, mode));
                 } else {
+                    // No accumulated state and no retry means the character simply does not
+                    // begin any kana sequence: commit it directly (e.g. '1', '.', ' ').
+                    actions.push(EngineAction::Commit(ch.to_string()));
                     actions.push(EngineAction::ClearPreedit);
                 }
                 actions
@@ -518,9 +539,13 @@ impl SkkEngine {
         if event.key == Key::BackSpace {
             if !roman_buf.is_empty() {
                 roman_buf.pop();
+                // Keep kana_state in sync with roman_buf so subsequent input
+                // is processed from the correct intermediate state.
+                self.kana_state = roman_buf.clone();
             } else if !kana_buf.is_empty() {
                 // Remove the last kana character
                 kana_buf.pop();
+                self.kana_state.clear();
             } else {
                 // Empty midashi — cancel
                 self.phase = SkkPhase::Hiragana;
@@ -533,10 +558,13 @@ impl SkkEngine {
 
         // Space — trigger conversion
         if event.key == Key::Space {
-            // Flush any pending roman buffer as-is before lookup
-            if !roman_buf.is_empty() {
-                kana_buf.push_str(&roman_buf);
+            // Flush any pending roman buffer before lookup.
+            // "n" is a special case: it should become "ん" at end of reading.
+            // Any other partial romaji sequence is discarded (e.g. "k" in "▽しk").
+            if roman_buf == "n" {
+                kana_buf.push('ん');
             }
+            self.kana_state.clear();
             if kana_buf.is_empty() {
                 self.phase = SkkPhase::Hiragana;
                 return vec![EngineAction::ClearPreedit];
@@ -602,9 +630,11 @@ impl SkkEngine {
                 self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
                 vec![self.preedit_action()]
             }
-            TransitionResult::NoMatch { flush, retry } => {
-                if !flush.is_empty() {
-                    kana_buf.push_str(&flush);
+            TransitionResult::OkRetry { output, retry } => {
+                // Wildcard rule (e.g. n + consonant → "ん"): add output to midashi and
+                // re-dispatch the triggering character so it is not lost.
+                if !output.is_empty() {
+                    kana_buf.push_str(&output);
                 }
                 self.kana_state.clear();
                 roman_buf.clear();
@@ -612,8 +642,19 @@ impl SkkEngine {
                     kana_buf: kana_buf.clone(),
                     roman_buf: String::new(),
                 };
+                let fake_event = KeyEvent::press(Key::Char(retry), Modifiers::empty());
+                self.handle_midashi(&fake_event, kana_buf, String::new())
+            }
+            TransitionResult::NoMatch { flush: _, retry } => {
+                // Partial romaji sequence failed: discard the accumulated state (flush)
+                // rather than adding it to the midashi reading.
+                self.kana_state.clear();
+                roman_buf.clear();
+                self.phase = SkkPhase::Midashi {
+                    kana_buf: kana_buf.clone(),
+                    roman_buf: String::new(),
+                };
                 if let Some(retry_ch) = retry {
-                    // Re-enter midashi handling with the retry character
                     let fake_event = KeyEvent::press(Key::Char(retry_ch), Modifiers::empty());
                     self.handle_midashi(&fake_event, kana_buf, String::new())
                 } else {
@@ -658,9 +699,21 @@ impl SkkEngine {
                 self.phase = SkkPhase::Okuri { midashi, okuri_prefix, roman_buf };
                 vec![self.preedit_action()]
             }
-            TransitionResult::NoMatch { flush, retry } => {
-                // Feed failed; treat remaining buffer as mistype
-                let _ = (flush, retry);
+            TransitionResult::OkRetry { output, retry: _ } => {
+                // Wildcard matched (e.g. "n" + consonant → "ん") while typing okurigana.
+                // Treat the wildcard output as the complete okurigana and start conversion;
+                // the retry character is dropped since we cannot re-dispatch here.
+                self.kana_state.clear();
+                if !output.is_empty() {
+                    let okuri_key = self.kana_table.okuri_key(okuri_prefix).to_string();
+                    self.phase = SkkPhase::Hiragana;
+                    return self.start_conversion(midashi, Some((okuri_key, output)));
+                }
+                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, roman_buf };
+                vec![self.preedit_action()]
+            }
+            TransitionResult::NoMatch { flush: _, retry: _ } => {
+                // Feed failed; treat remaining buffer as mistype and clear state.
                 self.kana_state.clear();
                 self.phase = SkkPhase::Okuri { midashi, okuri_prefix, roman_buf };
                 vec![self.preedit_action()]

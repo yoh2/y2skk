@@ -49,8 +49,12 @@ pub enum TransitionResult {
     /// Transition succeeded. `output` holds the kana string (empty if not yet finalized),
     /// `next_state` holds the new state.
     Ok { output: String, next_state: String },
+    /// Transition succeeded via a wildcard rule.  `output` is emitted and then `retry` is
+    /// re-processed from the start state.  Used for rules like `n + * → "ん"` so that the
+    /// triggering consonant is not lost (e.g. "nka" → "ん" + retry 'k' → "か").
+    OkRetry { output: String, retry: char },
     /// No rule matched the current state and input (mistype).
-    /// `flush` contains the intermediate buffer to discard and output as-is (if any).
+    /// `flush` contains the intermediate buffer that should be discarded (not output).
     /// `retry` contains the input character to re-process from the start state (if any).
     NoMatch { flush: String, retry: Option<char> },
 }
@@ -94,9 +98,14 @@ impl KanaTable {
             return TransitionResult::Ok { output, next_state: t.to.clone() };
         }
 
-        // Wildcard match: `\*` in the table file is stored as input == '*' and matches any char
+        // Wildcard match: `\*` in the table file is stored as input == '*' and matches any char.
+        // When the wildcard rule has no explicit next state (to == ""), the matched character is
+        // retried from the start state so it is not silently dropped (e.g. "nka" → "ん" + "か").
         if let Some(t) = transitions.iter().find(|t| t.from == state && t.input == '*') {
             let output = self.convert_output(&t.output, mode);
+            if t.to.is_empty() {
+                return TransitionResult::OkRetry { output, retry: input };
+            }
             return TransitionResult::Ok { output, next_state: t.to.clone() };
         }
 
