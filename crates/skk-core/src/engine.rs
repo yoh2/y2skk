@@ -209,6 +209,18 @@ impl SkkEngine {
             // registration buffer instead of leaking to the application.
             if matches!(self.phase, SkkPhase::Ascii) {
                 match event.key {
+                    Key::Return => {
+                        let buf_empty = self.register_stack.last()
+                            .map(|f| f.committed.is_empty()).unwrap_or(true);
+                        return if buf_empty {
+                            self.cancel_register()
+                        } else {
+                            self.finalize_register()
+                        };
+                    }
+                    Key::Escape => {
+                        return self.cancel_register();
+                    }
                     Key::BackSpace => {
                         self.reg_backspace();
                         return vec![self.preedit_action()];
