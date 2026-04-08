@@ -170,13 +170,28 @@ void Y2skkInputContext::cbClearPreedit(void *ctx)
     send_im_event(ev);
 }
 
-void Y2skkInputContext::cbShowCandidates(void *ctx, const char **words, uint32_t focused)
+void Y2skkInputContext::cbShowCandidates(void *ctx, const char **words, uint32_t focused, const char *keys)
 {
-    // Candidate window not yet implemented.
-    (void)ctx; (void)words; (void)focused;
+    auto *self = static_cast<Y2skkInputContext *>(ctx);
+
+    if (!self->m_candidates)
+        self->m_candidates = new CandidateWindow();
+
+    QStringList list;
+    for (const char **p = words; *p != nullptr; ++p)
+        list.append(QString::fromUtf8(*p));
+
+    self->m_candidates->setSelectionKeys(QString::fromUtf8(keys));
+    self->m_candidates->updateCandidates(list);
+
+    // Position the window only on first show; subsequent calls just repaint.
+    if (!self->m_candidates->isVisible())
+        self->m_candidates->showAtCursor();
 }
 
 void Y2skkInputContext::cbHideCandidates(void *ctx)
 {
-    (void)ctx;
+    auto *self = static_cast<Y2skkInputContext *>(ctx);
+    if (self->m_candidates)
+        self->m_candidates->hide();
 }

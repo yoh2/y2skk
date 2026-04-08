@@ -39,10 +39,12 @@ typedef struct Y2skkCallbacks {
     /* Clear the preedit string (shorthand for update_preedit with empty text). */
     void (*clear_preedit)(void *ctx);
 
-    /* Show a candidate list.
-     * words   — NULL-terminated array of UTF-8 candidate strings
-     * focused — index of the currently focused candidate */
-    void (*show_candidates)(void *ctx, const char **words, uint32_t focused);
+    /* Show a candidate list (listing mode only; never called during inline candidates).
+     * words   — NULL-terminated array of UTF-8 candidate strings for the current page
+     * focused — index within the page of the focused candidate (currently always 0)
+     * keys    — selection key characters as a UTF-8 string (e.g. "asdfjkl;"); words[i]
+     *           is selected by pressing keys[i] */
+    void (*show_candidates)(void *ctx, const char **words, uint32_t focused, const char *keys);
 
     /* Hide the candidate list. */
     void (*hide_candidates)(void *ctx);

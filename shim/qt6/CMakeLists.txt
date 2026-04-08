@@ -8,7 +8,34 @@ set(CMAKE_AUTOMOC ON)
 # ── Dependencies ──────────────────────────────────────────────────────────────
 
 find_package(Qt6 REQUIRED COMPONENTS Gui)
-find_package(Qt6 REQUIRED COMPONENTS GuiPrivate)
+
+# Add Qt6 private headers (for QPlatformInputContext / QPlatformInputContextPlugin)
+# without calling find_package(GuiPrivate), which would emit a version-coupling
+# warning.  Private headers live at <QtGui-include-dir>/<Qt-version>/QtGui.
+# Locate Qt6 private headers (for QPlatformInputContext / QPlatformInputContextPlugin)
+# without calling find_package(GuiPrivate), which emits a version-coupling warning.
+# Qt6::GuiPrivate normally adds two paths per module:
+#   <qt-include-dir>/<module>/<ver>  and  <qt-include-dir>/<module>/<ver>/<module>
+# We replicate this for both QtGui and QtCore (GuiPrivate depends on CorePrivate).
+function(collect_qt6_private_includes out_var module_include_dirs module_name)
+    foreach(_dir IN LISTS ${module_include_dirs})
+        if(EXISTS "${_dir}/${Qt6_VERSION}/${module_name}")
+            set(_base "${_dir}/${Qt6_VERSION}")
+            list(APPEND _result "${_base}" "${_base}/${module_name}")
+            break()
+        endif()
+    endforeach()
+    set(${out_var} "${_result}" PARENT_SCOPE)
+endfunction()
+
+collect_qt6_private_includes(_qt6_gui_private_incs  Qt6Gui_INCLUDE_DIRS  QtGui)
+collect_qt6_private_includes(_qt6_core_private_incs Qt6Core_INCLUDE_DIRS QtCore)
+
+if(NOT _qt6_gui_private_incs)
+    message(FATAL_ERROR
+        "Cannot find Qt6 Gui private headers under Qt6Gui_INCLUDE_DIRS"
+        " (${Qt6Gui_INCLUDE_DIRS}) for version ${Qt6_VERSION}")
+endif()
 
 # Corrosion: integrates Cargo builds into CMake.
 # Try a system installation first; fall back to FetchContent.
@@ -42,17 +69,19 @@ qt_add_plugin(y2skk-qt6-plugin
 target_sources(y2skk-qt6-plugin PRIVATE
     src/plugin.cpp
     src/context.cpp
+    src/candidate_window.cpp
     src/y2skk.json
 )
 
 target_include_directories(y2skk-qt6-plugin PRIVATE
     include
     src
+    ${_qt6_gui_private_incs}
+    ${_qt6_core_private_incs}
 )
 
 target_link_libraries(y2skk-qt6-plugin PRIVATE
     Qt6::Gui
-    Qt6::GuiPrivate
     # Corrosion copies the staticlib as libadapter_qt6.a (underscores) but
     # generates a -ladapter-qt6 (hyphens) linker flag which the linker cannot
     # resolve.  Work around by linking the file directly and declaring the

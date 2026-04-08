@@ -9,6 +9,7 @@
 #include <QtCore/QList>
 
 #include "rust_bridge.h"
+#include "candidate_window.h"
 
 class Y2skkInputContext : public QPlatformInputContext
 {
@@ -29,14 +30,15 @@ public:
     QString preeditText() const { return m_preedit; }
 
 private:
-    uint32_t m_session_id  = 0;
-    bool     m_has_focus   = false;
-    QString  m_preedit;
+    uint32_t        m_session_id  = 0;
+    bool            m_has_focus   = false;
+    QString         m_preedit;
+    CandidateWindow *m_candidates = nullptr;
 
     static void cbCommit(void *ctx, const char *text);
     static void cbUpdatePreedit(void *ctx, const char *text, uint32_t cursor);
     static void cbClearPreedit(void *ctx);
-    static void cbShowCandidates(void *ctx, const char **words, uint32_t focused);
+    static void cbShowCandidates(void *ctx, const char **words, uint32_t focused, const char *keys);
     static void cbHideCandidates(void *ctx);
 
     static const Y2skkCallbacks s_callbacks;

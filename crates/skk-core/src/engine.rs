@@ -24,8 +24,9 @@ pub enum EngineAction {
     UpdatePreedit(Preedit),
     /// Clear the preedit display.
     ClearPreedit,
-    /// Show a candidate list (vec of candidates, focused index).
-    ShowCandidates(Vec<Candidate>, usize),
+    /// Show a candidate list (page slice, focused index within page, selection key chars).
+    /// Only emitted when in listing mode (index >= inline_count).
+    ShowCandidates(Vec<Candidate>, usize, String),
     /// Hide the candidate list.
     HideCandidates,
     /// Key was not consumed; pass it through to the application.
@@ -570,10 +571,13 @@ impl SkkEngine {
             index: 0,
         };
 
-        vec![
-            EngineAction::ShowCandidates(candidates, 0),
-            self.preedit_action(),
-        ]
+        // Show candidates immediately only when listing mode starts at index 0
+        // (i.e. inline_count == 0). Otherwise the preedit (▼word) is enough.
+        let mut actions = vec![self.preedit_action()];
+        if let Some(show) = self.listing_show_action(&candidates, 0) {
+            actions.insert(0, show);
+        }
+        actions
     }
 
     fn handle_selecting(
@@ -617,9 +621,18 @@ impl SkkEngine {
             return self.commit_candidate(&midashi, &candidates, index, &okuri, &okuri_key);
         }
 
-        // Space → advance to next candidate
+        // Space → advance to next candidate (inline mode) or next page (listing mode)
         if event.key == Key::Space {
-            index = (index + 1) % candidates.len();
+            let inline_count = self.keybindings.inline_count;
+            let sel_len = self.keybindings.selection_keys.len();
+            let in_listing = sel_len > 0 && index >= inline_count;
+            if in_listing {
+                // Advance by one full page; wrap back to 0 when exhausted.
+                let next = index + sel_len;
+                index = if next >= candidates.len() { 0 } else { next };
+            } else {
+                index = (index + 1) % candidates.len();
+            }
             self.phase = SkkPhase::Selecting {
                 midashi,
                 okuri,
@@ -627,10 +640,33 @@ impl SkkEngine {
                 candidates: candidates.clone(),
                 index,
             };
-            return vec![
-                EngineAction::ShowCandidates(candidates, index),
-                self.preedit_action(),
-            ];
+            let mut actions = vec![self.preedit_action()];
+            match self.listing_show_action(&candidates, index) {
+                Some(show) => actions.insert(0, show),
+                // Wrapped back to inline mode: hide the candidate window.
+                None if in_listing => actions.insert(0, EngineAction::HideCandidates),
+                None => {}
+            }
+            return actions;
+        }
+
+        // Listing-mode selection: when index >= inline_count, selection keys pick a candidate
+        // directly by offset from the current page start.
+        {
+            let inline_count = self.keybindings.inline_count;
+            let sel_len = self.keybindings.selection_keys.len();
+            if sel_len > 0 && index >= inline_count {
+                if let Some(ch) = event.printable_char() {
+                    if let Some(sel_idx) = self.keybindings.selection_keys.iter().position(|&k| k == ch) {
+                        let cand_idx = index + sel_idx;
+                        if cand_idx < candidates.len() {
+                            return self.commit_candidate(&midashi, &candidates, cand_idx, &okuri, &okuri_key);
+                        }
+                        // Key pressed but no candidate at that position — consume and ignore.
+                        return vec![];
+                    }
+                }
+            }
         }
 
         // '>', '<', '?' → commit current candidate and enter suffix mode (new ▽ with '>' prefix)
@@ -656,6 +692,19 @@ impl SkkEngine {
         }
 
         vec![EngineAction::Passthrough]
+    }
+
+    /// Returns a `ShowCandidates` action for the current page when in listing mode,
+    /// or `None` when `index` is still in inline mode.
+    fn listing_show_action(&self, candidates: &[Candidate], index: usize) -> Option<EngineAction> {
+        let inline_count = self.keybindings.inline_count;
+        let sel_len = self.keybindings.selection_keys.len();
+        if sel_len == 0 || index < inline_count {
+            return None;
+        }
+        let page: Vec<Candidate> = candidates[index..].iter().take(sel_len).cloned().collect();
+        let sel_keys: String = self.keybindings.selection_keys[..page.len()].iter().collect();
+        Some(EngineAction::ShowCandidates(page, 0, sel_keys))
     }
 
     /// Commits the candidate at `index`, records it in the user dictionary, and resets to hiragana.
@@ -903,6 +952,73 @@ mod tests {
         let result = eng.dict[0].lookup("あい", None);
         assert!(result.is_some(), "UserDict should have learned '阿' for 'あい'");
         assert_eq!(result.unwrap().candidates[0].word, "阿");
+    }
+
+    #[test]
+    fn test_listing_mode_selection_key() {
+        // With inline_count=2 and selection_keys="as", after 2 inline candidates
+        // the next Space enters listing mode; pressing 'a' or 's' picks a candidate.
+        let table = builtin_table(KanaLayout::Romaji);
+        let keybindings = SkkKeybindings {
+            inline_count: 2,
+            selection_keys: vec!['a', 's'],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(table, keybindings);
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("A"),
+            Candidate::new("B"),
+            Candidate::new("C"),
+            Candidate::new("D"),
+        ])));
+
+        // Enter Selecting
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // index=0 (inline)
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
+
+        // Space → index=1 (still inline)
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }));
+
+        // Space → index=2 (listing mode starts, page shows C, D)
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 2, .. }));
+
+        // 'a' picks index 2 ("C")
+        let actions = eng.process_key(&press('a'));
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "C")));
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+    }
+
+    #[test]
+    fn test_listing_mode_page_advance() {
+        let table = builtin_table(KanaLayout::Romaji);
+        let keybindings = SkkKeybindings {
+            inline_count: 1,
+            selection_keys: vec!['a', 's'],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(table, keybindings);
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("A"),
+            Candidate::new("B"),
+            Candidate::new("C"),
+        ])));
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // index=0, inline
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // index=1, listing page start (B, C)
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }));
+
+        // Space advances by page size (2), wraps to 0
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
     }
 
     #[test]

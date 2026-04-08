@@ -15,7 +15,7 @@ impl From<EngineAction> for IpcAction {
                 IpcAction::update_preedit(text, cursor as u32)
             }
             EngineAction::ClearPreedit => IpcAction::clear_preedit(),
-            EngineAction::ShowCandidates(candidates, focused) => {
+            EngineAction::ShowCandidates(candidates, focused, sel_keys) => {
                 // Include annotation with ';' separator when present (standard SKK convention).
                 let words = candidates
                     .into_iter()
@@ -24,7 +24,11 @@ impl From<EngineAction> for IpcAction {
                         None => c.word,
                     })
                     .collect();
-                IpcAction::show_candidates(words, focused as u32)
+                // Use the `text` field (otherwise unused for ShowCandidates) to carry
+                // the selection key characters so the UI can display labels like "a:候補".
+                let mut action = IpcAction::show_candidates(words, focused as u32);
+                action.text = sel_keys;
+                action
             }
             EngineAction::HideCandidates => IpcAction::hide_candidates(),
             EngineAction::Passthrough => IpcAction::passthrough(),

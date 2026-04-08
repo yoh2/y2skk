@@ -19,6 +19,7 @@ pub struct SessionManager {
     sessions: HashMap<SessionId, SkkEngine>,
     next_id: SessionId,
     layout: KanaLayout,
+    keybindings: SkkKeybindings,
     /// Shared read-only dictionaries (system dicts, loaded once at startup).
     dicts: Vec<Arc<dyn DictionaryProvider>>,
     /// Writable user dictionary (exclusive to the daemon).
@@ -29,10 +30,12 @@ impl SessionManager {
     pub fn new(config: &Config) -> Self {
         let layout = parse_layout(&config.input.kana_layout);
         let (dicts, user_dict) = load_dicts(config);
+        let keybindings = keybindings_from_config(config);
         Self {
             sessions: HashMap::new(),
             next_id: 1,
             layout,
+            keybindings,
             dicts,
             user_dict,
         }
@@ -44,7 +47,7 @@ impl SessionManager {
         self.next_id += 1;
 
         let table = builtin_table(self.layout);
-        let mut engine = SkkEngine::new(table, SkkKeybindings::default());
+        let mut engine = SkkEngine::new(table, self.keybindings.clone());
 
         // Attach shared dictionaries (highest-priority first).
         // User dict is always first.
@@ -135,6 +138,14 @@ fn load_dicts(config: &Config) -> (Vec<Arc<dyn DictionaryProvider>>, Arc<Mutex<U
     }
 
     (dicts, Arc::new(Mutex::new(user_dict)))
+}
+
+fn keybindings_from_config(config: &Config) -> SkkKeybindings {
+    SkkKeybindings {
+        inline_count: config.candidates.inline_count,
+        selection_keys: config.candidates.selection_keys.chars().collect(),
+        ..SkkKeybindings::default()
+    }
 }
 
 fn parse_layout(name: &str) -> KanaLayout {
