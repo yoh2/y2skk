@@ -716,9 +716,12 @@ impl SkkEngine {
                 format!("▽{midashi}*{okuri_prefix}{roman_buf}")
             }
             SkkPhase::Selecting { midashi: _, okuri, okuri_key: _, candidates, index } => {
-                let word = &candidates[*index].word;
+                let cand = &candidates[*index];
                 let ok = okuri.as_deref().unwrap_or("");
-                format!("▼{word}{ok}")
+                match &cand.annotation {
+                    Some(ann) => format!("▼{}{};{}", cand.word, ok, ann),
+                    None => format!("▼{}{}", cand.word, ok),
+                }
             }
             SkkPhase::Register { midashi, okuri, buf } => {
                 let ok = okuri.as_deref().unwrap_or("");

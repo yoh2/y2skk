@@ -16,7 +16,14 @@ impl From<EngineAction> for IpcAction {
             }
             EngineAction::ClearPreedit => IpcAction::clear_preedit(),
             EngineAction::ShowCandidates(candidates, focused) => {
-                let words = candidates.into_iter().map(|c| c.word).collect();
+                // Include annotation with ';' separator when present (standard SKK convention).
+                let words = candidates
+                    .into_iter()
+                    .map(|c| match c.annotation {
+                        Some(ann) => format!("{};{}", c.word, ann),
+                        None => c.word,
+                    })
+                    .collect();
                 IpcAction::show_candidates(words, focused as u32)
             }
             EngineAction::HideCandidates => IpcAction::hide_candidates(),
