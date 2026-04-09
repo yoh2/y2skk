@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use skk_core::config::SkkKeybindings;
 use skk_core::dict::file::{DictEncoding, FileDict, UserDict};
 use skk_core::dict::traits::DictionaryProvider;
-use skk_core::engine::{EngineAction, SkkEngine};
+use skk_core::engine::{EngineAction, SkkEngine, SkkPhase};
 use skk_core::kana::builtin::builtin_table;
 use skk_core::kana::table::KanaLayout;
 use skk_ipc::{IpcAction, SessionId};
@@ -20,6 +20,7 @@ pub struct SessionManager {
     next_id: SessionId,
     layout: KanaLayout,
     keybindings: SkkKeybindings,
+    initial_phase: SkkPhase,
     /// Shared read-only dictionaries (system dicts, loaded once at startup).
     dicts: Vec<Arc<dyn DictionaryProvider>>,
     /// Writable user dictionary (exclusive to the daemon).
@@ -31,11 +32,13 @@ impl SessionManager {
         let layout = parse_layout(&config.input.kana_layout);
         let (dicts, user_dict) = load_dicts(config);
         let keybindings = keybindings_from_config(config);
+        let initial_phase = parse_default_mode(&config.input.default_mode);
         Self {
             sessions: HashMap::new(),
             next_id: 1,
             layout,
             keybindings,
+            initial_phase,
             dicts,
             user_dict,
         }
@@ -47,7 +50,8 @@ impl SessionManager {
         self.next_id += 1;
 
         let table = builtin_table(self.layout);
-        let mut engine = SkkEngine::new(table, self.keybindings.clone());
+        let mut engine = SkkEngine::new(table, self.keybindings.clone())
+            .with_initial_phase(self.initial_phase.clone());
 
         // Attach shared dictionaries (highest-priority first).
         // User dict is always first.
@@ -145,6 +149,16 @@ fn keybindings_from_config(config: &Config) -> SkkKeybindings {
         inline_count: config.candidates.inline_count,
         selection_keys: config.candidates.selection_keys.chars().collect(),
         ..SkkKeybindings::default()
+    }
+}
+
+fn parse_default_mode(name: &str) -> SkkPhase {
+    match name {
+        "katakana" => SkkPhase::Katakana,
+        "half-width-katakana" | "halfwidth-katakana" => SkkPhase::HalfWidthKatakana,
+        "wide-ascii" | "wideascii" | "zenkaku" => SkkPhase::WideAscii,
+        "ascii" | "latin" => SkkPhase::Ascii,
+        _ => SkkPhase::Hiragana,
     }
 }
 

@@ -45,7 +45,7 @@ impl Default for InputConfig {
         Self {
             kana_layout: "romaji".into(),
             kana_table: None,
-            default_mode: "hiragana".into(),
+            default_mode: "ascii".into(),
             toggle_keys: vec!["shift+space".into()],
         }
     }

@@ -122,6 +122,21 @@ impl SkkEngine {
         }
     }
 
+    /// Sets the initial input phase (builder pattern).
+    /// Only "safe" phases (Hiragana, Katakana, HalfWidthKatakana, WideAscii, Ascii) are accepted;
+    /// mid-conversion phases are silently ignored.
+    pub fn with_initial_phase(mut self, phase: SkkPhase) -> Self {
+        match phase {
+            SkkPhase::Hiragana
+            | SkkPhase::Katakana
+            | SkkPhase::HalfWidthKatakana
+            | SkkPhase::WideAscii
+            | SkkPhase::Ascii => self.phase = phase,
+            _ => {}
+        }
+        self
+    }
+
     /// Attaches a dictionary provider (appended; sorted by priority when looking up).
     pub fn add_dict(&mut self, provider: Box<dyn DictionaryProvider>) {
         self.dict.push(provider);
