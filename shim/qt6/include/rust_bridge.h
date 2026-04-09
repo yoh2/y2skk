@@ -24,6 +24,7 @@ extern "C" {
 #define Y2SKK_ACTION_CLEAR_PREEDIT   3
 #define Y2SKK_ACTION_SHOW_CANDIDATES 4
 #define Y2SKK_ACTION_HIDE_CANDIDATES 5
+#define Y2SKK_ACTION_UPDATE_STATUS   6
 
 /* ── Action callbacks provided by C++ to Rust ───────────────────────────── */
 
@@ -48,6 +49,10 @@ typedef struct Y2skkCallbacks {
 
     /* Hide the candidate list. */
     void (*hide_candidates)(void *ctx);
+
+    /* Show the mode indicator popup (e.g. "あ", "ア", "a").
+     * indicator — UTF-8 string of the mode indicator character */
+    void (*update_status)(void *ctx, const char *indicator);
 } Y2skkCallbacks;
 
 /* ── Rust-side functions called from C++ ────────────────────────────────── */

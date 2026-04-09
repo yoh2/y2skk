@@ -17,6 +17,7 @@ pub const ACTION_UPDATE_PREEDIT: u8 = 2;
 pub const ACTION_CLEAR_PREEDIT: u8 = 3;
 pub const ACTION_SHOW_CANDIDATES: u8 = 4;
 pub const ACTION_HIDE_CANDIDATES: u8 = 5;
+pub const ACTION_UPDATE_STATUS: u8 = 6;
 
 // ── IpcAction ─────────────────────────────────────────────────────────────────
 
@@ -64,6 +65,10 @@ impl IpcAction {
 
     pub fn hide_candidates() -> Self {
         Self { kind: ACTION_HIDE_CANDIDATES, text: String::new(), cursor: 0, candidates: vec![], focused: 0 }
+    }
+
+    pub fn update_status(indicator: impl Into<String>) -> Self {
+        Self { kind: ACTION_UPDATE_STATUS, text: indicator.into(), cursor: 0, candidates: vec![], focused: 0 }
     }
 }
 

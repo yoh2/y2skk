@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use proxy::DaemonProxy;
 use skk_ipc::{
     ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
-    ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT,
+    ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
 };
 
 // ── Callbacks struct (mirrors rust_bridge.h) ──────────────────────────────────
@@ -20,6 +20,7 @@ pub struct Y2skkCallbacks {
     pub clear_preedit: unsafe extern "C" fn(*mut c_void),
     pub show_candidates: unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
+    pub update_status: unsafe extern "C" fn(*mut c_void, *const c_char),
 }
 
 // ── Global D-Bus proxy ────────────────────────────────────────────────────────
@@ -146,6 +147,12 @@ pub unsafe extern "C" fn y2skk_process_key(
             k if k == ACTION_HIDE_CANDIDATES => {
                 consumed = true;
                 (cbs.hide_candidates)(ctx);
+            }
+            k if k == ACTION_UPDATE_STATUS => {
+                consumed = true;
+                if let Ok(cs) = CString::new(action.text.as_str()) {
+                    (cbs.update_status)(ctx, cs.as_ptr());
+                }
             }
             _ => {}
         }

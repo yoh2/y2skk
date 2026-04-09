@@ -22,6 +22,7 @@ const Y2skkCallbacks Y2skkInputContext::s_callbacks = {
     .clear_preedit   = Y2skkInputContext::cbClearPreedit,
     .show_candidates = Y2skkInputContext::cbShowCandidates,
     .hide_candidates = Y2skkInputContext::cbHideCandidates,
+    .update_status   = Y2skkInputContext::cbUpdateStatus,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -129,11 +130,19 @@ void Y2skkInputContext::cbCommit(void *ctx, const char *text)
     QInputMethodEvent ev;
     ev.setCommitString(QString::fromUtf8(text));
     send_im_event(ev);
+
+    // The cursor has moved; keep the status window aligned if visible.
+    if (self->m_status)
+        self->m_status->followCursor();
 }
 
 void Y2skkInputContext::cbUpdatePreedit(void *ctx, const char *text, uint32_t cursor)
 {
     auto *self = static_cast<Y2skkInputContext *>(ctx);
+
+    // Keep the status window aligned as the preedit cursor moves.
+    if (self->m_status)
+        self->m_status->followCursor();
 
     self->m_preedit = QString::fromUtf8(text);
 
@@ -194,4 +203,14 @@ void Y2skkInputContext::cbHideCandidates(void *ctx)
     auto *self = static_cast<Y2skkInputContext *>(ctx);
     if (self->m_candidates)
         self->m_candidates->hide();
+}
+
+void Y2skkInputContext::cbUpdateStatus(void *ctx, const char *indicator)
+{
+    auto *self = static_cast<Y2skkInputContext *>(ctx);
+
+    if (!self->m_status)
+        self->m_status = new StatusWindow();
+
+    self->m_status->showWithIndicator(QString::fromUtf8(indicator));
 }

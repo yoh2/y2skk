@@ -29,6 +29,9 @@ pub enum EngineAction {
     ShowCandidates(Vec<Candidate>, usize, String),
     /// Hide the candidate list.
     HideCandidates,
+    /// Notify the UI that the input mode changed.  The string is the mode indicator
+    /// character shown in the status popup: "あ"/"ア"/"ｱ"/"a"/"Ａ".
+    UpdateStatus(String),
     /// Key was not consumed; pass it through to the application.
     Passthrough,
 }
@@ -126,7 +129,26 @@ impl SkkEngine {
         if !event.is_press {
             return vec![EngineAction::Passthrough];
         }
-        self.handle_press(event)
+        let before = self.current_mode_indicator();
+        let mut actions = self.handle_press(event);
+        let after = self.current_mode_indicator();
+        if after != before {
+            actions.push(EngineAction::UpdateStatus(after.to_string()));
+        }
+        actions
+    }
+
+    /// Returns the one-character mode indicator for the current phase.
+    /// Sub-phases (▽ midashi, ▼ selecting, registration) are considered part of
+    /// Hiragana mode and all return "あ".
+    fn current_mode_indicator(&self) -> &'static str {
+        match &self.phase {
+            SkkPhase::Katakana          => "ア",
+            SkkPhase::HalfWidthKatakana => "ｱ",
+            SkkPhase::Ascii             => "a",
+            SkkPhase::WideAscii         => "Ａ",
+            _                           => "あ",
+        }
     }
 
     pub fn phase(&self) -> &SkkPhase {
@@ -1112,8 +1134,10 @@ impl SkkEngine {
                 EngineAction::ClearPreedit | EngineAction::UpdatePreedit(_) => {
                     need_preedit = true;
                 }
-                // Candidate window actions pass through unchanged.
-                EngineAction::ShowCandidates(_, _, _) | EngineAction::HideCandidates => {
+                // Candidate window and status indicator actions pass through unchanged.
+                EngineAction::ShowCandidates(_, _, _)
+                | EngineAction::HideCandidates
+                | EngineAction::UpdateStatus(_) => {
                     result.push(action);
                 }
                 // Drop Passthrough: keys should not reach the app while registering.

@@ -70,6 +70,7 @@ target_sources(y2skk-qt6-plugin PRIVATE
     src/plugin.cpp
     src/context.cpp
     src/candidate_window.cpp
+    src/status_window.cpp
     src/y2skk.json
 )
 

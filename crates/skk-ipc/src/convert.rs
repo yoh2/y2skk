@@ -31,6 +31,7 @@ impl From<EngineAction> for IpcAction {
                 action
             }
             EngineAction::HideCandidates => IpcAction::hide_candidates(),
+            EngineAction::UpdateStatus(indicator) => IpcAction::update_status(indicator),
             EngineAction::Passthrough => IpcAction::passthrough(),
         }
     }
