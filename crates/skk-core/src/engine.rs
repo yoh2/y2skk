@@ -366,10 +366,10 @@ impl SkkEngine {
             return vec![EngineAction::ClearPreedit];
         }
 
-        // Escape clears any pending roman buffer
+        // Escape clears any pending roman buffer and passes through to the application.
         if event.key == Key::Escape {
             self.kana_state.clear();
-            return vec![EngineAction::ClearPreedit];
+            return vec![EngineAction::ClearPreedit, EngineAction::Passthrough];
         }
 
         // BackSpace removes last character from roman buffer
@@ -384,6 +384,13 @@ impl SkkEngine {
         let Some(ch) = event.printable_char() else {
             return vec![EngineAction::Passthrough];
         };
+
+        // Ctrl+key combinations not handled above (i.e. not C-j or C-q) are not
+        // IME operations and must reach the application (e.g. C-c for SIGINT).
+        if event.modifiers.contains(Modifiers::CTRL) {
+            self.kana_state.clear();
+            return vec![EngineAction::Passthrough];
+        }
 
         // Mode switches (only in start state to avoid conflict with roman sequences)
         if self.kana_state.is_empty() {
@@ -759,6 +766,7 @@ impl SkkEngine {
         let Some(ch) = event.printable_char() else {
             return vec![EngineAction::Passthrough];
         };
+
         let lower = ch.to_ascii_lowercase();
         roman_buf.push(lower);
 
