@@ -143,15 +143,23 @@ impl SkkEngine {
     }
 
     /// Returns the one-character mode indicator for the current phase.
-    /// Sub-phases (▽ midashi, ▼ selecting, registration) are considered part of
-    /// Hiragana mode and all return "あ".
+    /// For conversion sub-phases (▽/▼/okurigana), returns the indicator of the
+    /// kana mode that was active when ▽ was entered, so that mode-switch events
+    /// (e.g. q confirming from katakana ▼) are correctly detected.
     fn current_mode_indicator(&self) -> &'static str {
         match &self.phase {
             SkkPhase::Katakana          => "ア",
             SkkPhase::HalfWidthKatakana => "ｱ",
             SkkPhase::Ascii             => "a",
             SkkPhase::WideAscii         => "Ａ",
-            _                           => "あ",
+            SkkPhase::Midashi { .. }
+            | SkkPhase::Okuri { .. }
+            | SkkPhase::Selecting { .. } => match self.midashi_display_mode {
+                KanaMode::Katakana  => "ア",
+                KanaMode::HalfWidth => "ｱ",
+                KanaMode::Hiragana  => "あ",
+            },
+            _ => "あ",
         }
     }
 
