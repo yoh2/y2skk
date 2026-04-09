@@ -60,6 +60,9 @@ pub enum SkkPhase {
     Ascii,
     /// Code input mode (`\` or `\u`)
     CodeInput { prefix: CodeInputPrefix, buf: String },
+    /// Abbrev mode: ASCII characters typed directly as the dictionary key (▽ascii).
+    /// Entered from a kana mode by the abbrev trigger key (default: `/`).
+    Abbrev { buf: String },
     /// Midashi (headword) being typed; `buf` accumulates kana
     Midashi { kana_buf: String, roman_buf: String },
     /// Okurigana being typed
@@ -92,6 +95,9 @@ pub struct RegisterFrame {
     pub committed: String,
     /// Byte offset of the editing cursor within `committed`.
     pub cursor: usize,
+    /// True when this frame was entered via abbrev mode (ASCII midashi).
+    /// Used by `cancel_register` to decide whether to return to Abbrev or Midashi.
+    pub is_abbrev: bool,
 }
 
 // ── Engine ───────────────────────────────────────────────────────────────────
@@ -107,6 +113,9 @@ pub struct SkkEngine {
     /// Kana display mode active when ▽ (midashi) mode was entered.
     /// Used to show the midashi in the correct script (hiragana/katakana/half-width).
     midashi_display_mode: KanaMode,
+    /// True when the current midashi/conversion was entered via abbrev mode.
+    /// Used by `cancel_register` to restore abbrev mode instead of ▽ midashi mode.
+    midashi_is_abbrev: bool,
 }
 
 impl SkkEngine {
@@ -119,6 +128,7 @@ impl SkkEngine {
             dict: Vec::new(),
             register_stack: Vec::new(),
             midashi_display_mode: KanaMode::Hiragana,
+            midashi_is_abbrev: false,
         }
     }
 
@@ -167,7 +177,8 @@ impl SkkEngine {
             SkkPhase::HalfWidthKatakana => "ｱ",
             SkkPhase::Ascii             => "a",
             SkkPhase::WideAscii         => "Ａ",
-            SkkPhase::Midashi { .. }
+            SkkPhase::Abbrev { .. }
+            | SkkPhase::Midashi { .. }
             | SkkPhase::Okuri { .. }
             | SkkPhase::Selecting { .. } => match self.midashi_display_mode {
                 KanaMode::Katakana  => "ア",
@@ -233,12 +244,15 @@ impl SkkEngine {
                 self.phase = SkkPhase::Hiragana;
                 self.kana_state.clear();
                 return self.cancel_register();
-            } else if matches!(self.phase, SkkPhase::Midashi { .. } | SkkPhase::Okuri { .. })
+            } else if matches!(
+                    self.phase,
+                    SkkPhase::Abbrev { .. } | SkkPhase::Midashi { .. } | SkkPhase::Okuri { .. })
                     && event.key == Key::Return {
-                // Return in ▽/okuri mode during registration: flush the typed kana to the
+                // Return in abbrev/▽/okuri mode during registration: flush the typed text to the
                 // registration buffer and return to Hiragana (ready state).  This allows
-                // the user to commit a kana string as-is without triggering a conversion.
+                // the user to commit a kana/ascii string as-is without triggering a conversion.
                 let flush = match &self.phase {
+                    SkkPhase::Abbrev { buf } => buf.clone(),
                     SkkPhase::Midashi { kana_buf, .. } => kana_buf.clone(),
                     SkkPhase::Okuri { midashi, .. } => midashi.clone(),
                     _ => unreachable!(),
@@ -310,6 +324,9 @@ impl SkkEngine {
             SkkPhase::WideAscii => self.handle_wide_ascii(event),
             SkkPhase::CodeInput { prefix, buf } => {
                 self.handle_code_input(event, prefix.clone(), buf.clone())
+            }
+            SkkPhase::Abbrev { buf } => {
+                self.handle_abbrev(event, buf.clone())
             }
             SkkPhase::Midashi { kana_buf, roman_buf } => {
                 self.handle_midashi(event, kana_buf.clone(), roman_buf.clone())
@@ -417,6 +434,12 @@ impl SkkEngine {
                 self.phase = SkkPhase::WideAscii;
                 return vec![EngineAction::ClearPreedit];
             }
+            if self.keybindings.abbrev_mode.contains(&ch) {
+                self.midashi_display_mode = mode;
+                self.midashi_is_abbrev = true;
+                self.phase = SkkPhase::Abbrev { buf: String::new() };
+                return vec![self.preedit_action()];
+            }
             if self.keybindings.katakana_mode.contains(&ch) {
                 // q toggles between hiragana and katakana only.
                 // From half-width katakana, q returns to hiragana (not full-width katakana).
@@ -431,6 +454,7 @@ impl SkkEngine {
                 // Remember the kana mode so the midashi preedit can be displayed
                 // in the correct script (e.g. katakana when entering from Katakana mode).
                 self.midashi_display_mode = mode;
+                self.midashi_is_abbrev = false;
                 self.phase = SkkPhase::Midashi {
                     kana_buf: String::new(),
                     roman_buf: String::new(),
@@ -579,6 +603,82 @@ impl SkkEngine {
         vec![EngineAction::Passthrough]
     }
 
+    // ── Abbrev mode ───────────────────────────────────────────────────────────
+
+    fn handle_abbrev(&mut self, event: &KeyEvent, mut buf: String) -> Vec<EngineAction> {
+        // Escape → cancel abbrev, return to the kana mode we came from
+        if event.key == Key::Escape {
+            self.phase = self.kana_phase_from_display_mode();
+            return vec![EngineAction::ClearPreedit];
+        }
+
+        // BackSpace
+        if event.key == Key::BackSpace {
+            if buf.is_empty() {
+                self.phase = self.kana_phase_from_display_mode();
+                return vec![EngineAction::ClearPreedit];
+            }
+            buf.pop();
+            self.phase = SkkPhase::Abbrev { buf };
+            return vec![self.preedit_action()];
+        }
+
+        // Space → trigger conversion
+        if event.key == Key::Space {
+            if buf.is_empty() {
+                self.phase = SkkPhase::Abbrev { buf };
+                return vec![self.preedit_action()];
+            }
+            return self.start_conversion(buf, None);
+        }
+
+        // C-j → commit as-is and return to kana mode (Enter does NOT pass through for C-j).
+        if event.key == Key::Char('j') && event.modifiers.contains(Modifiers::CTRL) {
+            self.phase = self.kana_phase_from_display_mode();
+            if buf.is_empty() {
+                return vec![EngineAction::ClearPreedit];
+            }
+            return vec![EngineAction::Commit(buf), EngineAction::ClearPreedit];
+        }
+
+        // Enter → commit as-is, return to kana mode, AND forward Enter to the application.
+        if event.key == Key::Return {
+            self.phase = self.kana_phase_from_display_mode();
+            if buf.is_empty() {
+                return vec![EngineAction::ClearPreedit, EngineAction::Passthrough];
+            }
+            return vec![
+                EngineAction::Commit(buf),
+                EngineAction::ClearPreedit,
+                EngineAction::Passthrough,
+            ];
+        }
+
+        let Some(ch) = event.printable_char() else {
+            // Non-printable, non-special key (e.g. arrow keys): consume without action.
+            return vec![self.preedit_action()];
+        };
+
+        // Unhandled Ctrl+key combinations are consumed (not forwarded to the application)
+        // while the abbrev buffer is active, the same as in ▽ mode.
+        if event.modifiers.contains(Modifiers::CTRL) {
+            return vec![self.preedit_action()];
+        }
+
+        buf.push(ch);
+        self.phase = SkkPhase::Abbrev { buf };
+        vec![self.preedit_action()]
+    }
+
+    /// Returns the `SkkPhase` corresponding to `midashi_display_mode`.
+    fn kana_phase_from_display_mode(&self) -> SkkPhase {
+        match self.midashi_display_mode {
+            KanaMode::Katakana  => SkkPhase::Katakana,
+            KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
+            KanaMode::Hiragana  => SkkPhase::Hiragana,
+        }
+    }
+
     // ── Midashi mode ──────────────────────────────────────────────────────────
 
     fn handle_midashi(
@@ -613,6 +713,24 @@ impl SkkEngine {
             }
             self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
             return vec![self.preedit_action()];
+        }
+
+        // Enter — commit accumulated kana as-is and forward Enter to the application.
+        if event.key == Key::Return {
+            // Flush "n" to "ん" if pending, discard other partial romaji.
+            if roman_buf == "n" {
+                kana_buf.push('ん');
+            }
+            self.phase = self.kana_phase_from_display_mode();
+            self.kana_state.clear();
+            if kana_buf.is_empty() {
+                return vec![EngineAction::ClearPreedit, EngineAction::Passthrough];
+            }
+            return vec![
+                EngineAction::Commit(kana_buf),
+                EngineAction::ClearPreedit,
+                EngineAction::Passthrough,
+            ];
         }
 
         // Space — trigger conversion
@@ -849,6 +967,7 @@ impl SkkEngine {
                 okuri_kana,
                 committed: String::new(),
                 cursor: 0,
+                is_abbrev: self.midashi_is_abbrev,
             });
             self.phase = SkkPhase::Hiragana;
             self.kana_state.clear();
@@ -1136,6 +1255,7 @@ impl SkkEngine {
             okuri_kana: okuri,
             committed: String::new(),
             cursor: 0,
+            is_abbrev: self.midashi_is_abbrev,
         });
         self.phase = SkkPhase::Hiragana;
         self.kana_state.clear();
@@ -1187,10 +1307,11 @@ impl SkkEngine {
         self.kana_state.clear();
 
         if self.register_stack.is_empty() {
-            // Return to ▽ midashi mode with the original reading.
-            self.phase = SkkPhase::Midashi {
-                kana_buf: frame.midashi,
-                roman_buf: String::new(),
+            // Return to the mode that triggered the conversion.
+            self.phase = if frame.is_abbrev {
+                SkkPhase::Abbrev { buf: frame.midashi }
+            } else {
+                SkkPhase::Midashi { kana_buf: frame.midashi, roman_buf: String::new() }
             };
             vec![EngineAction::HideCandidates, self.preedit_action()]
         } else {
@@ -1278,6 +1399,7 @@ impl SkkEngine {
                 self.kana_state.clone()
             }
             SkkPhase::WideAscii | SkkPhase::Ascii => String::new(),
+            SkkPhase::Abbrev { buf } => format!("▽{buf}"),
             SkkPhase::CodeInput { prefix, buf } => {
                 let prefix_str = match prefix {
                     CodeInputPrefix::Jis => "\\",

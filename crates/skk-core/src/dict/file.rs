@@ -224,7 +224,10 @@ fn parse_skk_dict(src: &str) -> Result<EntryMap, DictError> {
 fn split_midashi_okuri(raw: &str) -> (&str, Option<&str>) {
     let bytes = raw.as_bytes();
     if let Some(&last) = bytes.last() {
-        if last.is_ascii_alphabetic() {
+        // The trailing ASCII letter is the okurigana consonant only when the midashi
+        // contains kana characters.  A purely ASCII midashi (abbrev mode entry such as
+        // "is" or "define") must not be split.
+        if last.is_ascii_alphabetic() && raw.chars().any(|c| !c.is_ascii()) {
             let split = raw.len() - 1;
             return (&raw[..split], Some(&raw[split..]));
         }
