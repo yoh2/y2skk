@@ -153,7 +153,7 @@ impl KanaTable {
 }
 
 /// Converts hiragana to katakana using Unicode offsets (U+3041–U+3096 → U+30A1–U+30F6).
-fn hiragana_to_katakana(s: &str) -> String {
+pub fn hiragana_to_katakana(s: &str) -> String {
     s.chars().map(|c| {
         if ('\u{3041}'..='\u{3096}').contains(&c) {
             char::from_u32(c as u32 + 0x60).unwrap_or(c)
@@ -164,7 +164,7 @@ fn hiragana_to_katakana(s: &str) -> String {
 }
 
 /// Converts hiragana to half-width katakana.
-fn hiragana_to_halfwidth(s: &str) -> String {
+pub fn hiragana_to_halfwidth(s: &str) -> String {
     s.chars().flat_map(to_halfwidth_katakana).collect()
 }
 
