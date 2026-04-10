@@ -462,8 +462,9 @@ impl SkkEngine {
                 // Re-dispatch as midashi input
                 return self.handle_midashi(event, String::new(), String::new());
             }
-            // `\` starts code input
+            // `\` starts code input; remember current kana mode for restoration on exit.
             if ch == '\\' {
+                self.midashi_display_mode = mode;
                 self.phase = SkkPhase::CodeInput {
                     prefix: CodeInputPrefix::Jis,
                     buf: String::new(),
@@ -562,14 +563,35 @@ impl SkkEngine {
         prefix: CodeInputPrefix,
         mut buf: String,
     ) -> Vec<EngineAction> {
+        // Escape → cancel and return to previous kana mode
         if event.key == Key::Escape {
-            self.phase = SkkPhase::Hiragana;
+            self.phase = self.kana_phase_from_display_mode();
             self.kana_state.clear();
             return vec![EngineAction::ClearPreedit];
         }
 
-        // `\u` prefix detection (second character)
-        if buf.is_empty() {
+        // BackSpace
+        if event.key == Key::BackSpace {
+            if !buf.is_empty() {
+                buf.pop();
+                self.phase = SkkPhase::CodeInput { prefix, buf };
+            } else if matches!(prefix, CodeInputPrefix::Unicode) {
+                // Back from `\u` to plain `\`
+                self.phase = SkkPhase::CodeInput {
+                    prefix: CodeInputPrefix::Jis,
+                    buf: String::new(),
+                };
+            } else {
+                // Back from `\` to kana mode
+                self.phase = self.kana_phase_from_display_mode();
+                self.kana_state.clear();
+                return vec![EngineAction::ClearPreedit];
+            }
+            return vec![self.preedit_action()];
+        }
+
+        // `\u` prefix detection: first character after `\` is 'u'
+        if matches!(prefix, CodeInputPrefix::Jis) && buf.is_empty() {
             if let Some('u') = event.printable_char() {
                 self.phase = SkkPhase::CodeInput {
                     prefix: CodeInputPrefix::Unicode,
@@ -579,12 +601,15 @@ impl SkkEngine {
             }
         }
 
-        if event.key == Key::Return {
+        // Enter (or C-j) → commit and return to previous kana mode
+        if event.key == Key::Return
+            || (event.key == Key::Char('j') && event.modifiers.contains(Modifiers::CTRL))
+        {
             let result = match prefix {
                 CodeInputPrefix::Jis => decode_jis_code(&buf),
                 CodeInputPrefix::Unicode => decode_unicode_code(&buf),
             };
-            self.phase = SkkPhase::Hiragana;
+            self.phase = self.kana_phase_from_display_mode();
             self.kana_state.clear();
             return match result {
                 Some(s) => vec![EngineAction::Commit(s), EngineAction::ClearPreedit],
@@ -592,15 +617,17 @@ impl SkkEngine {
             };
         }
 
+        // Hex digit input
         if let Some(ch) = event.printable_char() {
-            if ch.is_ascii_hexdigit() {
-                buf.push(ch);
+            if ch.is_ascii_hexdigit() && !event.modifiers.contains(Modifiers::CTRL) {
+                buf.push(ch.to_ascii_lowercase());
                 self.phase = SkkPhase::CodeInput { prefix, buf };
                 return vec![self.preedit_action()];
             }
         }
 
-        vec![EngineAction::Passthrough]
+        // Non-hex, non-special key: consume without action
+        vec![self.preedit_action()]
     }
 
     // ── Abbrev mode ───────────────────────────────────────────────────────────
@@ -1454,18 +1481,34 @@ fn to_wide_ascii(c: char) -> Option<char> {
 }
 
 /// Decodes a JIS code point (4 hex digits) to a Unicode string.
+/// Decodes a 4-digit hex JIS X 0208 code to a Unicode string via EUC-JP.
+///
+/// The input is a 4-digit hex string representing a two-byte JIS X 0208 code point
+/// (e.g. "2422" → あ).  Each byte must be in the range 0x21–0x7E.
+/// The conversion adds 0x80 to each byte to obtain the EUC-JP encoding, then
+/// decodes to UTF-8 using encoding_rs.
 fn decode_jis_code(hex: &str) -> Option<String> {
     if hex.len() != 4 {
         return None;
     }
-    let code = u32::from_str_radix(hex, 16).ok()?;
-    // JIS X 0208: row-cell (ku-ten) encoding; rough mapping via EUC-JP
-    // For now, treat as a Unicode code point directly (full implementation requires EUC-JP table)
-    char::from_u32(code).map(|c| c.to_string())
+    let code = u16::from_str_radix(hex, 16).ok()?;
+    let b1 = (code >> 8) as u8;
+    let b2 = (code & 0xFF) as u8;
+    // Valid JIS X 0208 range for both bytes: 0x21–0x7E
+    if !(0x21..=0x7E).contains(&b1) || !(0x21..=0x7E).contains(&b2) {
+        return None;
+    }
+    // EUC-JP: add 0x80 to each byte
+    let euc = [b1 + 0x80, b2 + 0x80];
+    let (decoded, _, had_errors) = encoding_rs::EUC_JP.decode(&euc);
+    if had_errors { None } else { Some(decoded.into_owned()) }
 }
 
 /// Decodes a Unicode code point (1–6 hex digits) to a string.
 fn decode_unicode_code(hex: &str) -> Option<String> {
+    if hex.is_empty() || hex.len() > 6 {
+        return None;
+    }
     let code = u32::from_str_radix(hex, 16).ok()?;
     char::from_u32(code).map(|c| c.to_string())
 }
@@ -1944,6 +1987,50 @@ mod tests {
             actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "アイウ")),
             "expected commit アイウ, got: {:?}", actions
         );
+    }
+
+    #[test]
+    fn test_code_input_jis() {
+        // \2422 + Enter → あ (JIS X 0208 code 0x2422 = あ)
+        let mut eng = engine();
+        eng.process_key(&press('\\'));
+        assert!(matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Jis));
+        eng.process_key(&press('2'));
+        eng.process_key(&press('4'));
+        eng.process_key(&press('2'));
+        eng.process_key(&press('2'));
+        let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
+        assert!(actions.iter().any(|a| *a == EngineAction::Commit("あ".into())));
+        assert!(matches!(eng.phase, SkkPhase::Hiragana));
+    }
+
+    #[test]
+    fn test_code_input_unicode() {
+        // \u3042 → あ (U+3042)
+        let mut eng = engine();
+        eng.process_key(&press('\\'));
+        eng.process_key(&press('u'));
+        assert!(matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Unicode));
+        eng.process_key(&press('3'));
+        eng.process_key(&press('0'));
+        eng.process_key(&press('4'));
+        eng.process_key(&press('2'));
+        let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
+        assert!(actions.iter().any(|a| *a == EngineAction::Commit("あ".into())));
+        assert!(matches!(eng.phase, SkkPhase::Hiragana));
+    }
+
+    #[test]
+    fn test_code_input_backspace() {
+        // BackSpace from \u returns to \, then BackSpace cancels
+        let mut eng = engine();
+        eng.process_key(&press('\\'));
+        eng.process_key(&press('u'));
+        assert!(matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Unicode));
+        eng.process_key(&KeyEvent::press(Key::BackSpace, Modifiers::empty()));
+        assert!(matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Jis));
+        eng.process_key(&KeyEvent::press(Key::BackSpace, Modifiers::empty()));
+        assert!(matches!(eng.phase, SkkPhase::Hiragana));
     }
 
     #[test]
