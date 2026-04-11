@@ -4,6 +4,43 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::sync::OnceLock;
 
+// ── GTK3 IM module entry points ───────────────────────────────────────────────
+//
+// Rust's cdylib linker version script only exports #[no_mangle] pub extern "C"
+// symbols.  The actual GObject/GTK logic lives in the C shim (im_module.c) under
+// _y2skk_im_module_* names; these thin Rust wrappers give them the required
+// public names.
+
+extern "C" {
+    fn _y2skk_im_module_list(contexts: *mut *const *const c_void, n_contexts: *mut c_int);
+    fn _y2skk_im_module_init(module: *mut c_void);
+    fn _y2skk_im_module_exit();
+    fn _y2skk_im_module_create(context_id: *const c_char) -> *mut c_void;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn im_module_list(
+    contexts: *mut *const *const c_void,
+    n_contexts: *mut c_int,
+) {
+    _y2skk_im_module_list(contexts, n_contexts);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn im_module_init(module: *mut c_void) {
+    _y2skk_im_module_init(module);
+}
+
+#[no_mangle]
+pub extern "C" fn im_module_exit() {
+    unsafe { _y2skk_im_module_exit() };
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn im_module_create(context_id: *const c_char) -> *mut c_void {
+    _y2skk_im_module_create(context_id)
+}
+
 use proxy::DaemonProxy;
 use skk_ipc::{
     ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,

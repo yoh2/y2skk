@@ -231,15 +231,21 @@ static const GtkIMContextInfo y2skk_info = {
 
 static const GtkIMContextInfo *y2skk_info_list[] = { &y2skk_info };
 
-G_MODULE_EXPORT void
-gtk_im_module_list(const GtkIMContextInfo ***contexts, int *n_contexts)
+/* These functions are called from Rust #[no_mangle] wrappers (lib.rs) so that
+ * the GTK3 IM module entry points end up in the cdylib's dynamic symbol table.
+ * Rust's cdylib linker version script only exports #[no_mangle] pub extern "C"
+ * symbols, so the Rust side owns the public names; the C side provides the
+ * implementations under internal _y2skk_ prefixed names. */
+
+void
+_y2skk_im_module_list(const GtkIMContextInfo ***contexts, int *n_contexts)
 {
     *contexts   = y2skk_info_list;
     *n_contexts = G_N_ELEMENTS(y2skk_info_list);
 }
 
-G_MODULE_EXPORT void
-gtk_im_module_init(GTypeModule *module)
+void
+_y2skk_im_module_init(GTypeModule *module)
 {
     (void)module;
     y2skk_im_context_get_type(); /* registers the GType */
@@ -247,14 +253,14 @@ gtk_im_module_init(GTypeModule *module)
         g_warning("y2skk: failed to connect to D-Bus daemon");
 }
 
-G_MODULE_EXPORT void
-gtk_im_module_exit(void)
+void
+_y2skk_im_module_exit(void)
 {
     y2skk_fini();
 }
 
-G_MODULE_EXPORT GtkIMContext *
-gtk_im_module_create(const gchar *context_id)
+GtkIMContext *
+_y2skk_im_module_create(const gchar *context_id)
 {
     if (g_strcmp0(context_id, "y2skk") == 0)
         return GTK_IM_CONTEXT(g_object_new(y2skk_im_context_get_type(), NULL));
