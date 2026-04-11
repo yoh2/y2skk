@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use zbus::zvariant::Type;
 
 pub mod convert;
+pub mod proxy;
 
 pub type SessionId = u32;
 

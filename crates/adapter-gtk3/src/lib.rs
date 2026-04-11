@@ -1,5 +1,3 @@
-mod proxy;
-
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::sync::OnceLock;
@@ -41,7 +39,7 @@ pub unsafe extern "C" fn im_module_create(context_id: *const c_char) -> *mut c_v
     _y2skk_im_module_create(context_id)
 }
 
-use proxy::DaemonProxy;
+use skk_ipc::proxy::blocking::DaemonProxy;
 use skk_ipc::{
     ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
     ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
