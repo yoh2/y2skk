@@ -45,6 +45,10 @@ typedef struct Y2skkCallbacks {
 
     /* Notify the shim that the candidate list should be hidden. */
     void (*hide_candidates)(void *ctx);
+
+    /* Show the mode indicator with the given label (e.g. "あ", "ア", "a").
+     * timeout_ms — milliseconds before auto-hide (0 = always visible) */
+    void (*update_status)(void *ctx, const char *label, uint32_t timeout_ms);
 } Y2skkCallbacks;
 
 /* ── Rust-side functions called from C ──────────────────────────────────── */

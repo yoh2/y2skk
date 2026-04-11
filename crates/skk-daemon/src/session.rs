@@ -25,6 +25,8 @@ pub struct SessionManager {
     dicts: Vec<Arc<dyn DictionaryProvider>>,
     /// Writable user dictionary (exclusive to the daemon).
     user_dict: Arc<Mutex<UserDict>>,
+    /// Indicator auto-hide timeout in milliseconds (0 = always visible).
+    indicator_timeout_ms: u32,
 }
 
 impl SessionManager {
@@ -41,6 +43,11 @@ impl SessionManager {
             initial_phase,
             dicts,
             user_dict,
+            indicator_timeout_ms: if config.indicator.enabled {
+                config.indicator.timeout_ms
+            } else {
+                0
+            },
         }
     }
 
@@ -90,7 +97,22 @@ impl SessionManager {
 
         let event = skk_ipc::convert::key_event_from_raw(key_sym, modifiers, is_press);
         let actions: Vec<EngineAction> = engine.process_key(&event);
-        let ipc_actions: Vec<IpcAction> = actions.into_iter().map(IpcAction::from).collect();
+        let timeout_ms = self.indicator_timeout_ms;
+        let ipc_actions: Vec<IpcAction> = actions.into_iter().map(IpcAction::from)
+            .filter(|a| {
+                // Drop UpdateStatus when the indicator is disabled (timeout_ms == 0
+                // means disabled; adapters would show without ever hiding it).
+                !(a.kind == skk_ipc::ACTION_UPDATE_STATUS && timeout_ms == 0)
+            })
+            .map(|mut a| {
+                // Pack indicator timeout into the unused cursor field so adapters
+                // can auto-hide the status window without knowing the config.
+                if a.kind == skk_ipc::ACTION_UPDATE_STATUS {
+                    a.cursor = timeout_ms;
+                }
+                a
+            })
+            .collect();
 
         // Persist the user dict whenever a conversion is committed.
         if ipc_actions.iter().any(|a| a.kind == skk_ipc::ACTION_COMMIT) {

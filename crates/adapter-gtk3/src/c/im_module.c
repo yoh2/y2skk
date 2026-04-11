@@ -37,17 +37,22 @@ typedef struct _Y2skkIMContextClass Y2skkIMContextClass;
 
 struct _Y2skkIMContext {
     GtkIMContext   parent;
-    uint32_t       session_id;     /* 0 = not yet allocated */
-    gchar         *preedit_text;   /* owned, may be NULL */
-    gint           preedit_cursor; /* byte offset */
-    GdkWindow     *client_window;  /* window the context is attached to */
-    GdkRectangle   cursor_area;    /* last known cursor rectangle (widget coords) */
-    GtkWidget     *cand_window;    /* floating candidate popup, or NULL */
+    uint32_t       session_id;       /* 0 = not yet allocated */
+    gchar         *preedit_text;     /* owned, may be NULL */
+    gint           preedit_cursor;   /* byte offset */
+    GdkWindow     *client_window;    /* window the context is attached to */
+    GdkRectangle   cursor_area;      /* last known cursor rectangle (widget coords) */
+    GtkWidget     *cand_window;      /* floating candidate popup, or NULL */
+    GtkWidget     *status_window;    /* floating mode indicator, or NULL */
+    GtkWidget     *status_label;     /* label inside status_window */
+    guint          status_timer_id;  /* GSource ID for auto-hide (0 = none) */
 };
 
 struct _Y2skkIMContextClass {
     GtkIMContextClass parent_class;
 };
+
+static void reposition_popup (Y2skkIMContext *self, GtkWidget *win);
 
 /* ── GType registration ──────────────────────────────────────────────────── */
 
@@ -101,6 +106,9 @@ static void y2skk_im_context_init(GtkIMContext *ctx)
     self->client_window  = NULL;
     memset(&self->cursor_area, 0, sizeof(self->cursor_area));
     self->cand_window    = NULL;
+    self->status_window  = NULL;
+    self->status_label   = NULL;
+    self->status_timer_id = 0;
 
     self->session_id = y2skk_create_session("gtk3");
 }
@@ -119,6 +127,15 @@ static void y2skk_im_context_finalize(GObject *obj)
     if (self->cand_window) {
         gtk_widget_destroy(self->cand_window);
         self->cand_window = NULL;
+    }
+    if (self->status_timer_id != 0) {
+        g_source_remove(self->status_timer_id);
+        self->status_timer_id = 0;
+    }
+    if (self->status_window) {
+        gtk_widget_destroy(self->status_window);
+        self->status_window = NULL;
+        self->status_label  = NULL;
     }
     if (self->client_window) {
         g_object_unref(self->client_window);
@@ -150,6 +167,14 @@ static void ensure_candidate_css(void)
         ".y2skk-cand-focused {"
         "  background-color: @theme_selected_bg_color;"
         "  color: @theme_selected_fg_color;"
+        "}"
+        ".y2skk-status-window {"
+        "  background-color: @theme_base_color;"
+        "  border: 1px solid @theme_fg_color;"
+        "}"
+        ".y2skk-status-label {"
+        "  padding: 2px 6px;"
+        "  font-size: larger;"
         "}",
         -1, NULL);
     gtk_style_context_add_provider_for_screen(
@@ -258,32 +283,7 @@ static void cb_show_candidates(void *ctx_ptr, const char **words, uint32_t focus
     }
 
     gtk_widget_show_all(self->cand_window);
-
-    /* Position below the cursor. */
-    gint ox = 0, oy = 0;
-    if (self->client_window)
-        gdk_window_get_origin(self->client_window, &ox, &oy);
-
-    gint x = ox + self->cursor_area.x;
-    gint y = oy + self->cursor_area.y + self->cursor_area.height;
-
-    /* Clamp to the monitor that contains the cursor position. */
-    GdkDisplay  *display = gdk_display_get_default();
-    GdkMonitor  *monitor = gdk_display_get_monitor_at_point(display, x, y);
-    GdkRectangle mgeom;
-    gdk_monitor_get_geometry(monitor, &mgeom);
-
-    GtkRequisition req;
-    gtk_widget_get_preferred_size(self->cand_window, NULL, &req);
-
-    if (x + req.width  > mgeom.x + mgeom.width)
-        x = mgeom.x + mgeom.width  - req.width;
-    if (y + req.height > mgeom.y + mgeom.height)
-        y = oy + self->cursor_area.y - req.height; /* flip above cursor */
-    if (x < mgeom.x) x = mgeom.x;
-    if (y < mgeom.y) y = mgeom.y;
-
-    gtk_window_move(GTK_WINDOW(self->cand_window), x, y);
+    reposition_popup(self, self->cand_window);
 }
 
 static void cb_hide_candidates(void *ctx_ptr)
@@ -292,12 +292,63 @@ static void cb_hide_candidates(void *ctx_ptr)
     cand_window_destroy(self);
 }
 
+/* Auto-hide timer callback: hides the status window and clears the timer ID. */
+static gboolean status_window_hide_cb(gpointer user_data)
+{
+    Y2skkIMContext *self = (Y2skkIMContext *)user_data;
+    if (self->status_window)
+        gtk_widget_hide(self->status_window);
+    self->status_timer_id = 0;
+    return G_SOURCE_REMOVE;
+}
+
+static void cb_update_status(void *ctx_ptr, const char *label, uint32_t timeout_ms)
+{
+    Y2skkIMContext *self = (Y2skkIMContext *)ctx_ptr;
+
+    ensure_candidate_css();
+
+    /* Cancel any running auto-hide timer. */
+    if (self->status_timer_id != 0) {
+        g_source_remove(self->status_timer_id);
+        self->status_timer_id = 0;
+    }
+
+    /* Create the status window on first use. */
+    if (!self->status_window) {
+        GtkWidget *win = gtk_window_new(GTK_WINDOW_POPUP);
+        gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
+        gtk_window_set_skip_taskbar_hint(GTK_WINDOW(win), TRUE);
+        gtk_window_set_skip_pager_hint(GTK_WINDOW(win), TRUE);
+
+        GtkStyleContext *wsc = gtk_widget_get_style_context(win);
+        gtk_style_context_add_class(wsc, "y2skk-status-window");
+
+        GtkWidget *lbl = gtk_label_new(NULL);
+        gtk_style_context_add_class(gtk_widget_get_style_context(lbl),
+                                    "y2skk-status-label");
+        gtk_container_add(GTK_CONTAINER(win), lbl);
+
+        self->status_window = win;
+        self->status_label  = lbl;
+    }
+
+    gtk_label_set_text(GTK_LABEL(self->status_label), label ? label : "");
+    gtk_widget_show_all(self->status_window);
+    reposition_popup(self, self->status_window);
+
+    /* Schedule auto-hide if timeout is set. */
+    if (timeout_ms > 0)
+        self->status_timer_id = g_timeout_add(timeout_ms, status_window_hide_cb, self);
+}
+
 static const Y2skkCallbacks g_callbacks = {
     .commit          = cb_commit,
     .update_preedit  = cb_update_preedit,
     .clear_preedit   = cb_clear_preedit,
     .show_candidates = cb_show_candidates,
     .hide_candidates = cb_hide_candidates,
+    .update_status   = cb_update_status,
 };
 
 /* ── GtkIMContext virtual function implementations ───────────────────────── */
@@ -327,36 +378,46 @@ static void y2skk_set_client_window(GtkIMContext *ctx, GdkWindow *window)
     self->client_window = window ? g_object_ref(window) : NULL;
 }
 
+/* Reposition a popup window below the current cursor area, clamped to monitor. */
+static void reposition_popup(Y2skkIMContext *self, GtkWidget *win)
+{
+    gint ox = 0, oy = 0;
+    if (self->client_window)
+        gdk_window_get_origin(self->client_window, &ox, &oy);
+
+    gint x = ox + self->cursor_area.x;
+    gint y = oy + self->cursor_area.y + self->cursor_area.height;
+
+    GdkDisplay  *display = gdk_display_get_default();
+    GdkMonitor  *monitor = gdk_display_get_monitor_at_point(display, x, y);
+    GdkRectangle mgeom;
+    gdk_monitor_get_geometry(monitor, &mgeom);
+
+    GtkRequisition req;
+    gtk_widget_get_preferred_size(win, NULL, &req);
+
+    if (x + req.width  > mgeom.x + mgeom.width)
+        x = mgeom.x + mgeom.width  - req.width;
+    if (y + req.height > mgeom.y + mgeom.height)
+        y = oy + self->cursor_area.y - req.height;
+    if (x < mgeom.x) x = mgeom.x;
+    if (y < mgeom.y) y = mgeom.y;
+
+    gtk_window_move(GTK_WINDOW(win), x, y);
+}
+
 static void y2skk_set_cursor_location(GtkIMContext *ctx, GdkRectangle *area)
 {
     Y2skkIMContext *self = (Y2skkIMContext *)ctx;
     if (area)
         self->cursor_area = *area;
 
-    /* Reposition the candidate window if it is currently visible. */
-    if (self->cand_window && gtk_widget_get_visible(self->cand_window)) {
-        gint ox = 0, oy = 0;
-        if (self->client_window)
-            gdk_window_get_origin(self->client_window, &ox, &oy);
+    /* Reposition any visible popup windows to follow the cursor. */
+    if (self->cand_window && gtk_widget_get_visible(self->cand_window))
+        reposition_popup(self, self->cand_window);
 
-        gint x = ox + self->cursor_area.x;
-        gint y = oy + self->cursor_area.y + self->cursor_area.height;
-
-        GdkDisplay  *display = gdk_display_get_default();
-        GdkMonitor  *monitor = gdk_display_get_monitor_at_point(display, x, y);
-        GdkRectangle mgeom;
-        gdk_monitor_get_geometry(monitor, &mgeom);
-
-        GtkRequisition req;
-        gtk_widget_get_preferred_size(self->cand_window, NULL, &req);
-
-        if (x + req.width  > mgeom.x + mgeom.width)  x = mgeom.x + mgeom.width  - req.width;
-        if (y + req.height > mgeom.y + mgeom.height)  y = oy + self->cursor_area.y - req.height;
-        if (x < mgeom.x) x = mgeom.x;
-        if (y < mgeom.y) y = mgeom.y;
-
-        gtk_window_move(GTK_WINDOW(self->cand_window), x, y);
-    }
+    if (self->status_window && gtk_widget_get_visible(self->status_window))
+        reposition_popup(self, self->status_window);
 }
 
 static void y2skk_focus_in_cb(GtkIMContext *ctx)
