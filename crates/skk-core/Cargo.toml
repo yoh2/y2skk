@@ -8,4 +8,5 @@ license.workspace = true
 thiserror.workspace = true
 bitflags.workspace = true
 encoding_rs.workspace = true
+indexmap.workspace = true
 tracing.workspace = true

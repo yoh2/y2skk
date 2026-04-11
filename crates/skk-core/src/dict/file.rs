@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use indexmap::IndexMap;
+
 use super::entry::{Candidate, DictEntry, DictError};
 use super::traits::DictionaryProvider;
 
@@ -92,6 +94,22 @@ impl DictionaryProvider for FileDict {
     fn priority(&self) -> i32 {
         self.priority
     }
+
+    /// Returns all okuri-nashi headwords starting with `prefix` (excluding
+    /// `prefix` itself) in sorted order.
+    fn complete(&self, prefix: &str) -> Vec<String> {
+        let mut results: Vec<String> = self.entries
+            .iter()
+            .filter(|(midashi, okuri_map)| {
+                midashi.starts_with(prefix)
+                    && midashi.as_str() != prefix
+                    && okuri_map.contains_key(&None)
+            })
+            .map(|(midashi, _)| midashi.clone())
+            .collect();
+        results.sort();
+        results
+    }
 }
 
 // ── UserDict (read-write) ─────────────────────────────────────────────────────
@@ -99,18 +117,20 @@ impl DictionaryProvider for FileDict {
 /// Writable user dictionary, always stored as UTF-8.
 ///
 /// The daemon owns the user dict exclusively; adapters never write to it directly.
-/// Learned entries are prepended (highest priority) within their section.
+/// Headwords are stored in an IndexMap ordered oldest-first; `learn()` moves the
+/// used headword to the end so `complete()` (which iterates in reverse) returns
+/// the most-recently-used headwords first.
 pub struct UserDict {
     path: PathBuf,
-    /// midashi → okuri → candidates (ordered: most-recently-learned first)
-    entries: HashMap<String, HashMap<Option<String>, Vec<Candidate>>>,
+    /// midashi → okuri → candidates (IndexMap: oldest first, most-recently-used last)
+    entries: UserEntryMap,
     dirty: bool,
 }
 
 impl UserDict {
     /// Creates an empty in-memory user dict pointed at `path` (not yet saved).
     pub fn empty(path: PathBuf) -> Self {
-        Self { path, entries: HashMap::new(), dirty: false }
+        Self { path, entries: IndexMap::new(), dirty: false }
     }
 
     /// Loads the user dict from disk, creating an empty dict if the file does not exist.
@@ -118,9 +138,9 @@ impl UserDict {
         let path = path.as_ref().to_path_buf();
         let entries = if path.exists() {
             let src = std::fs::read_to_string(&path)?;
-            parse_skk_dict(&src)?
+            parse_skk_dict_ordered(&src)?
         } else {
-            HashMap::new()
+            IndexMap::new()
         };
         Ok(Self { path, entries, dirty: false })
     }
@@ -134,7 +154,7 @@ impl UserDict {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = serialize_skk_dict(&self.entries);
+        let content = serialize_user_dict(&self.entries);
         std::fs::write(&self.path, content)?;
         self.dirty = false;
         Ok(())
@@ -158,10 +178,14 @@ impl DictionaryProvider for UserDict {
     }
 
     /// Learns a new conversion, promoting it to the front of the candidate list.
+    /// Also moves the headword to the end of the IndexMap so that `complete()`
+    /// (which iterates in reverse) returns the most-recently-used headwords first.
     fn learn(&mut self, entry: DictEntry) -> Result<(), DictError> {
-        let okuri_map = self.entries.entry(entry.midashi).or_default();
-        let list = okuri_map.entry(entry.okuri).or_default();
+        // Remove and re-insert at the end to record recency.
+        let mut okuri_map = self.entries.shift_remove(&entry.midashi)
+            .unwrap_or_default();
 
+        let list = okuri_map.entry(entry.okuri).or_default();
         for new_cand in entry.candidates.into_iter().rev() {
             // Remove any existing occurrence of the same word.
             list.retain(|c| c.word != new_cand.word);
@@ -169,6 +193,8 @@ impl DictionaryProvider for UserDict {
             list.insert(0, new_cand);
         }
 
+        // Re-insert at the end (= most recently used position).
+        self.entries.insert(entry.midashi, okuri_map);
         self.dirty = true;
         Ok(())
     }
@@ -177,11 +203,27 @@ impl DictionaryProvider for UserDict {
         // User dict has highest priority.
         i32::MAX
     }
+
+    /// Returns okuri-nashi headwords starting with `prefix` (excluding `prefix`
+    /// itself) in most-recently-used-first order (reverse IndexMap iteration).
+    fn complete(&self, prefix: &str) -> Vec<String> {
+        self.entries
+            .iter()
+            .rev()
+            .filter(|(midashi, okuri_map)| {
+                midashi.starts_with(prefix)
+                    && midashi.as_str() != prefix
+                    && okuri_map.contains_key(&None)
+            })
+            .map(|(midashi, _)| midashi.clone())
+            .collect()
+    }
 }
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
 type EntryMap = HashMap<String, HashMap<Option<String>, Vec<Candidate>>>;
+type UserEntryMap = IndexMap<String, HashMap<Option<String>, Vec<Candidate>>>;
 
 fn parse_skk_dict(src: &str) -> Result<EntryMap, DictError> {
     let mut map: EntryMap = HashMap::new();
@@ -257,9 +299,53 @@ fn parse_candidates(s: &str, line_num: usize) -> Result<Vec<Candidate>, DictErro
     Ok(candidates)
 }
 
+// ── Parsing (ordered, for UserDict) ──────────────────────────────────────────
+
+/// Like `parse_skk_dict` but inserts into an IndexMap, preserving file line order.
+/// This ensures that the initial load reflects the serialized recency ordering.
+fn parse_skk_dict_ordered(src: &str) -> Result<UserEntryMap, DictError> {
+    let mut map: UserEntryMap = IndexMap::new();
+
+    for (lineno, line) in src.lines().enumerate() {
+        let line_num = lineno + 1;
+
+        if line.starts_with(';') {
+            continue;
+        }
+
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let Some(slash_pos) = line.find(" /") else {
+            return Err(DictError::Parse {
+                line: line_num,
+                message: format!("missing ` /` separator: {line:?}"),
+            });
+        };
+
+        let midashi_raw = &line[..slash_pos];
+        let cands_raw = &line[slash_pos + 2..];
+
+        let (midashi, okuri) = split_midashi_okuri(midashi_raw);
+        let candidates = parse_candidates(cands_raw, line_num)?;
+
+        map.entry(midashi.to_string())
+            .or_default()
+            .entry(okuri.map(|s| s.to_string()))
+            .or_default()
+            .extend(candidates);
+    }
+
+    Ok(map)
+}
+
 // ── Serialisation ─────────────────────────────────────────────────────────────
 
-fn serialize_skk_dict(map: &EntryMap) -> String {
+/// Serializes a UserDict (IndexMap) to UTF-8 SKK format, preserving IndexMap
+/// order (oldest first) so that recency is correctly restored on next load.
+fn serialize_user_dict(map: &UserEntryMap) -> String {
     let mut okuri_ari: Vec<String> = Vec::new();
     let mut okuri_nasi: Vec<String> = Vec::new();
 
@@ -291,9 +377,8 @@ fn serialize_skk_dict(map: &EntryMap) -> String {
         }
     }
 
-    okuri_ari.sort();
-    okuri_nasi.sort();
-
+    // Do NOT sort: preserve IndexMap order (oldest-first) so that complete()
+    // returns most-recently-used headwords first on the next load.
     format!(
         ";; y2skk user dictionary\n\
          ;;; okuri-ari entries.\n\
@@ -349,7 +434,7 @@ mod tests {
     fn test_user_dict_learn() {
         let mut udict = UserDict {
             path: PathBuf::from("/tmp/y2skk_test.dict"),
-            entries: HashMap::new(),
+            entries: IndexMap::new(),
             dirty: false,
         };
 
@@ -374,9 +459,9 @@ mod tests {
 
     #[test]
     fn test_serialize_roundtrip() {
-        let entries = parse_skk_dict(SAMPLE).unwrap();
-        let serialized = serialize_skk_dict(&entries);
-        let reparsed = parse_skk_dict(&serialized).unwrap();
+        let entries = parse_skk_dict_ordered(SAMPLE).unwrap();
+        let serialized = serialize_user_dict(&entries);
+        let reparsed = parse_skk_dict_ordered(&serialized).unwrap();
 
         // Check key entries survived the roundtrip
         assert!(reparsed.get("あ").unwrap().get(&Some("k".into())).is_some());

@@ -187,6 +187,9 @@ impl DictionaryProvider for SharedDict {
     fn priority(&self) -> i32 {
         self.0.priority()
     }
+    fn complete(&self, prefix: &str) -> Vec<String> {
+        self.0.complete(prefix)
+    }
 }
 
 /// Wraps the shared writable user dict behind Arc<Mutex<>>.
@@ -203,5 +206,8 @@ impl DictionaryProvider for SharedUserDict {
     }
     fn priority(&self) -> i32 {
         i32::MAX
+    }
+    fn complete(&self, prefix: &str) -> Vec<String> {
+        self.0.lock().map(|ud| ud.complete(prefix)).unwrap_or_default()
     }
 }

@@ -14,6 +14,13 @@ pub trait DictionaryProvider: Send + Sync {
     fn priority(&self) -> i32 {
         0
     }
+
+    /// Returns all okuri-nashi headwords that start with `prefix`,
+    /// excluding `prefix` itself.  Order is implementation-defined.
+    /// The default implementation returns an empty vec.
+    fn complete(&self, _prefix: &str) -> Vec<String> {
+        vec![]
+    }
 }
 
 /// Asynchronous dictionary provider (for future script-based dictionaries).

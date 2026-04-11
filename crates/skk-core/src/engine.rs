@@ -100,6 +100,19 @@ pub struct RegisterFrame {
     pub is_abbrev: bool,
 }
 
+// ── Completion state ─────────────────────────────────────────────────────────
+
+/// Tab-completion state, active only while in `SkkPhase::Midashi`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletionState {
+    /// Original prefix that started this cycling session; stays fixed across Tabs.
+    cycle_prefix: String,
+    /// Index of the *next* completion to offer after the current preview is accepted.
+    next_index: usize,
+    /// Full headword currently shown as ghost text in the preedit.
+    preview: String,
+}
+
 // ── Engine ───────────────────────────────────────────────────────────────────
 
 pub struct SkkEngine {
@@ -116,6 +129,8 @@ pub struct SkkEngine {
     /// True when the current midashi/conversion was entered via abbrev mode.
     /// Used by `cancel_register` to restore abbrev mode instead of ▽ midashi mode.
     midashi_is_abbrev: bool,
+    /// Active completion ghost text, only meaningful when phase == Midashi.
+    completion: Option<CompletionState>,
 }
 
 impl SkkEngine {
@@ -129,6 +144,7 @@ impl SkkEngine {
             register_stack: Vec::new(),
             midashi_display_mode: KanaMode::Hiragana,
             midashi_is_abbrev: false,
+            completion: None,
         }
     }
 
@@ -716,6 +732,7 @@ impl SkkEngine {
     ) -> Vec<EngineAction> {
         // Escape cancels midashi
         if event.key == Key::Escape {
+            self.completion = None;
             self.phase = SkkPhase::Hiragana;
             self.kana_state.clear();
             return vec![EngineAction::ClearPreedit];
@@ -728,12 +745,16 @@ impl SkkEngine {
                 // Keep kana_state in sync with roman_buf so subsequent input
                 // is processed from the correct intermediate state.
                 self.kana_state = roman_buf.clone();
+                // Ghost persists while editing roman_buf — no completion change.
             } else if !kana_buf.is_empty() {
-                // Remove the last kana character
+                // Remove the last kana character and recompute completion for the
+                // shorter prefix.  This also resets the cycling state.
                 kana_buf.pop();
                 self.kana_state.clear();
+                self.update_completion(&kana_buf);
             } else {
                 // Empty midashi — cancel
+                self.completion = None;
                 self.phase = SkkPhase::Hiragana;
                 self.kana_state.clear();
                 return vec![EngineAction::ClearPreedit];
@@ -748,6 +769,7 @@ impl SkkEngine {
             if roman_buf == "n" {
                 kana_buf.push('ん');
             }
+            self.completion = None;
             self.phase = self.kana_phase_from_display_mode();
             self.kana_state.clear();
             if kana_buf.is_empty() {
@@ -760,7 +782,7 @@ impl SkkEngine {
             ];
         }
 
-        // Space — trigger conversion
+        // Space — trigger conversion (ignores any ghost text; converts actual kana_buf)
         if event.key == Key::Space {
             // Flush any pending roman buffer before lookup.
             // "n" is a special case: it should become "ん" at end of reading.
@@ -768,12 +790,45 @@ impl SkkEngine {
             if roman_buf == "n" {
                 kana_buf.push('ん');
             }
+            self.completion = None;
             self.kana_state.clear();
             if kana_buf.is_empty() {
                 self.phase = SkkPhase::Hiragana;
                 return vec![EngineAction::ClearPreedit];
             }
             return self.start_conversion(kana_buf, None);
+        }
+
+        // Tab — accept current ghost text and advance the completion cycle.
+        if event.key == Key::Tab {
+            if roman_buf.is_empty() {
+                match self.completion.take() {
+                    Some(state) => {
+                        // Accept the currently previewed headword.
+                        let accepted = state.preview;
+                        // Find the next completion from the same cycle prefix.
+                        let next = self.find_completion(&state.cycle_prefix, state.next_index);
+                        self.completion = next.map(|(preview, next_index)| CompletionState {
+                            cycle_prefix: state.cycle_prefix,
+                            next_index,
+                            preview,
+                        });
+                        self.kana_state.clear();
+                        self.phase = SkkPhase::Midashi {
+                            kana_buf: accepted,
+                            roman_buf: String::new(),
+                        };
+                    }
+                    None => {
+                        // No completion available: do nothing.
+                        self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
+                    }
+                }
+            } else {
+                // roman_buf non-empty: ignore Tab.
+                self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
+            }
+            return vec![self.preedit_action()];
         }
 
         // Ctrl+q: commit accumulated hiragana midashi as half-width katakana, then
@@ -784,6 +839,7 @@ impl SkkEngine {
                 KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
                 KanaMode::Hiragana  => SkkPhase::Hiragana,
             };
+            self.completion = None;
             self.phase = return_phase;
             self.kana_state.clear();
             if kana_buf.is_empty() {
@@ -800,6 +856,7 @@ impl SkkEngine {
         // '>', '<', '?' trigger prefix conversion: append '>' to the midashi and
         // convert immediately (looks up "reading>" in the dictionary).
         if matches!(ch, '>' | '<' | '?') {
+            self.completion = None;
             if !roman_buf.is_empty() {
                 kana_buf.push_str(&roman_buf);
             }
@@ -818,6 +875,7 @@ impl SkkEngine {
         // - if there is a pending kana state (e.g. "w" in "KawA"), that is the prefix;
         // - otherwise the uppercase letter itself (lowercased) is the prefix.
         if ch.is_ascii_uppercase() && !kana_buf.is_empty() {
+            self.completion = None;
             let okuri_prefix = if let Some(first) = self.kana_state.chars().next() {
                 first
             } else {
@@ -845,7 +903,17 @@ impl SkkEngine {
                     self.kana_state = next_state.clone();
                     roman_buf.clear();
                     roman_buf.push_str(&next_state);
+                    if next_state.is_empty() {
+                        // A complete kana was emitted and roman_buf is now empty:
+                        // recompute completion ghost for the new kana_buf.
+                        self.update_completion(&kana_buf);
+                    } else {
+                        // roman_buf is still building; hide ghost until it resolves.
+                        self.completion = None;
+                    }
                 } else {
+                    // No kana output yet; roman_buf is accumulating.
+                    self.completion = None;
                     self.kana_state = next_state;
                 }
                 self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
@@ -894,6 +962,7 @@ impl SkkEngine {
                             KanaMode::Hiragana => hiragana_to_katakana(&kana_buf),
                             _                  => kana_buf.clone(), // kana_buf is hiragana internally
                         };
+                        self.completion = None;
                         self.phase = match self.midashi_display_mode {
                             KanaMode::Katakana  => SkkPhase::Katakana,
                             KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
@@ -974,6 +1043,7 @@ impl SkkEngine {
         midashi: String,
         okuri: Option<(String, String)>,
     ) -> Vec<EngineAction> {
+        self.completion = None;
         let (okuri_key, _okuri_kana) = match &okuri {
             Some((k, v)) => (Some(k.as_str()), Some(v.as_str())),
             None => (None, None),
@@ -1035,11 +1105,13 @@ impl SkkEngine {
     ) -> Vec<EngineAction> {
         // Escape → always cancel conversion and return to midashi.
         if event.key == Key::Escape {
+            let midashi_str = midashi.clone();
             self.phase = SkkPhase::Midashi {
                 kana_buf: midashi,
                 roman_buf: String::new(),
             };
             self.kana_state.clear();
+            self.update_completion(&midashi_str);
             return vec![EngineAction::HideCandidates, self.preedit_action()];
         }
 
@@ -1047,11 +1119,13 @@ impl SkkEngine {
         if event.printable_char().map_or(false, |c| self.keybindings.cancel.contains(&c)) {
             if index == 0 {
                 // At the first candidate → back to midashi (cancel conversion).
+                let midashi_str = midashi.clone();
                 self.phase = SkkPhase::Midashi {
                     kana_buf: midashi,
                     roman_buf: String::new(),
                 };
                 self.kana_state.clear();
+                self.update_completion(&midashi_str);
                 return vec![EngineAction::HideCandidates, self.preedit_action()];
             }
 
@@ -1347,11 +1421,13 @@ impl SkkEngine {
 
         if self.register_stack.is_empty() {
             // Return to the mode that triggered the conversion.
-            self.phase = if frame.is_abbrev {
-                SkkPhase::Abbrev { buf: frame.midashi }
+            if frame.is_abbrev {
+                self.phase = SkkPhase::Abbrev { buf: frame.midashi };
             } else {
-                SkkPhase::Midashi { kana_buf: frame.midashi, roman_buf: String::new() }
-            };
+                let midashi_str = frame.midashi.clone();
+                self.phase = SkkPhase::Midashi { kana_buf: frame.midashi, roman_buf: String::new() };
+                self.update_completion(&midashi_str);
+            }
             vec![EngineAction::HideCandidates, self.preedit_action()]
         } else {
             // Return to the outer registration frame.
@@ -1396,6 +1472,40 @@ impl SkkEngine {
         result
     }
 
+    // ── Completion helpers ────────────────────────────────────────────────────
+
+    /// Returns `(preview_headword, next_index)` for the completion at `start_index`
+    /// in the merged deduped list of all dict completions for `prefix`.
+    /// Order: user dict recency order first, then system dicts in lex order.
+    /// Does NOT sort the merged list — preserves dict iteration order.
+    fn find_completion(&self, prefix: &str, start_index: usize) -> Option<(String, usize)> {
+        let mut seen = std::collections::HashSet::new();
+        let all: Vec<String> = self.dict
+            .iter()
+            .flat_map(|d| d.complete(prefix))
+            .filter(|w| seen.insert(w.clone()))
+            .collect();
+        all.into_iter()
+            .enumerate()
+            .nth(start_index)
+            .map(|(idx, word)| (word, idx + 1))
+    }
+
+    /// Recomputes completion from scratch for the given `kana_buf` (index 0).
+    /// Called after kana input or backspace resets the midashi buffer.
+    fn update_completion(&mut self, kana_buf: &str) {
+        if kana_buf.is_empty() {
+            self.completion = None;
+            return;
+        }
+        self.completion = self.find_completion(kana_buf, 0)
+            .map(|(preview, next_index)| CompletionState {
+                cycle_prefix: kana_buf.to_string(),
+                next_index,
+                preview,
+            });
+    }
+
     // ── Preedit helpers ───────────────────────────────────────────────────────
 
     fn preedit_action(&self) -> EngineAction {
@@ -1403,6 +1513,65 @@ impl SkkEngine {
     }
 
     fn build_preedit(&self) -> Preedit {
+        // Ghost text: only when in Midashi with an empty roman_buf and active completion.
+        // The ghost suffix is appended after the actual kana_buf; the cursor is placed
+        // between kana_buf and the ghost so the UI can visually distinguish them.
+        if let SkkPhase::Midashi { kana_buf, roman_buf } = &self.phase {
+            if roman_buf.is_empty() {
+                if let Some(state) = &self.completion {
+                    let display = match self.midashi_display_mode {
+                        KanaMode::Katakana  => hiragana_to_katakana(kana_buf),
+                        KanaMode::HalfWidth => hiragana_to_halfwidth(kana_buf),
+                        KanaMode::Hiragana  => kana_buf.clone(),
+                    };
+                    // The ghost can only be shown as a suffix when preview starts with
+                    // kana_buf.  After Tab cycling the next completion may start from
+                    // cycle_prefix (shorter), so it may not extend kana_buf — in that
+                    // case skip the ghost and fall through to the default preedit.
+                    if !state.preview.starts_with(kana_buf.as_str()) {
+                        // Ghost not applicable for current kana_buf; use default preedit.
+                        let inner = self.build_inner_preedit();
+                        if let Some(frame) = self.register_stack.last() {
+                            let depth = self.register_stack.len();
+                            let open  = "[".repeat(depth);
+                            let close = "]".repeat(depth);
+                            let midashi_disp = format!("{}{}",
+                                frame.midashi, frame.okuri_kana.as_deref().unwrap_or(""));
+                            let before = &frame.committed[..frame.cursor];
+                            let after  = &frame.committed[frame.cursor..];
+                            let prefix = format!("{}辞書登録{} {}: ", open, close, midashi_disp);
+                            let text   = format!("{}{}{}{}", prefix, before, inner, after);
+                            let cursor = prefix.len() + before.len() + inner.len();
+                            return Preedit { text, cursor };
+                        }
+                        return Preedit { text: inner.clone(), cursor: inner.len() };
+                    }
+                    // "▽" is U+25BD = 3 UTF-8 bytes.
+                    let ghost_suffix = &state.preview[kana_buf.len()..];
+                    let cursor_pos = 3 + display.len();
+                    let inner = format!("▽{display}{ghost_suffix}");
+
+                    if let Some(frame) = self.register_stack.last() {
+                        let depth = self.register_stack.len();
+                        let open  = "[".repeat(depth);
+                        let close = "]".repeat(depth);
+                        let midashi_disp = format!(
+                            "{}{}",
+                            frame.midashi,
+                            frame.okuri_kana.as_deref().unwrap_or("")
+                        );
+                        let before = &frame.committed[..frame.cursor];
+                        let after  = &frame.committed[frame.cursor..];
+                        let prefix = format!("{}辞書登録{} {}: ", open, close, midashi_disp);
+                        let text   = format!("{}{}{}{}", prefix, before, inner, after);
+                        let cursor = prefix.len() + before.len() + cursor_pos;
+                        return Preedit { text, cursor };
+                    }
+                    return Preedit { text: inner, cursor: cursor_pos };
+                }
+            }
+        }
+
         let inner = self.build_inner_preedit();
 
         if let Some(frame) = self.register_stack.last() {
@@ -2061,5 +2230,144 @@ mod tests {
         // uppercase trigger when in kana mode... Let's just verify via a direct state check.
         // The engine is back in Hiragana.
         assert!(matches!(eng.phase, SkkPhase::Hiragana));
+    }
+
+    // ── Completion tests ──────────────────────────────────────────────────────
+
+    /// A dict that provides fixed completions for prefix search, in addition to
+    /// a configurable candidate list for exact lookup.
+    struct CompletionDict {
+        candidates: Vec<Candidate>,
+        completions: Vec<String>,
+    }
+
+    impl DictionaryProvider for CompletionDict {
+        fn lookup(&self, _midashi: &str, _okuri: Option<&str>) -> Option<DictEntry> {
+            if self.candidates.is_empty() {
+                None
+            } else {
+                Some(DictEntry {
+                    midashi: String::new(),
+                    okuri: None,
+                    candidates: self.candidates.clone(),
+                })
+            }
+        }
+        fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> { Ok(()) }
+        fn complete(&self, prefix: &str) -> Vec<String> {
+            let mut results: Vec<String> = self.completions.iter()
+                .filter(|w| w.starts_with(prefix) && w.as_str() != prefix)
+                .cloned()
+                .collect();
+            results.sort();
+            results
+        }
+    }
+
+    fn engine_with_completions(completions: Vec<&str>) -> SkkEngine {
+        let mut eng = engine();
+        eng.add_dict(Box::new(CompletionDict {
+            candidates: vec![],
+            completions: completions.into_iter().map(String::from).collect(),
+        }));
+        eng
+    }
+
+    #[test]
+    fn test_completion_ghost_shown() {
+        // Enter midashi "か" → completion "からだ" should appear as ghost text.
+        let mut eng = engine_with_completions(vec!["からだ", "かわ"]);
+        eng.process_key(&press('K')); // uppercase → enter midashi
+        eng.process_key(&press('a')); // kana_buf = "か"
+
+        let preedit = eng.build_preedit();
+        // text should include ghost suffix "らだ" after "▽か"
+        assert!(preedit.text.contains("からだ"), "ghost text should contain completion: {:?}", preedit.text);
+    }
+
+    #[test]
+    fn test_completion_cursor_position() {
+        // Cursor should be placed after "▽か", not at end of ghost text.
+        let mut eng = engine_with_completions(vec!["からだ"]);
+        eng.process_key(&press('K'));
+        eng.process_key(&press('a')); // kana_buf = "か"
+
+        let preedit = eng.build_preedit();
+        // "▽か" = 3 + 3 = 6 bytes
+        assert_eq!(preedit.cursor, 6, "cursor should be after ▽か, got {:?}", preedit);
+    }
+
+    #[test]
+    fn test_tab_accepts_completion() {
+        let mut eng = engine_with_completions(vec!["からだ"]);
+        eng.process_key(&press('K'));
+        eng.process_key(&press('a')); // kana_buf = "か", ghost = "からだ"
+
+        eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty()));
+
+        assert!(matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "からだ"),
+            "Tab should accept ghost: {:?}", eng.phase);
+    }
+
+    #[test]
+    fn test_tab_cycles_completions() {
+        // Two completions for "か": "からだ" and "かわ" (sorted: "からだ" < "かわ")
+        let mut eng = engine_with_completions(vec!["からだ", "かわ"]);
+        eng.process_key(&press('K'));
+        eng.process_key(&press('a')); // ghost = "からだ" (first sorted)
+
+        // First Tab: accept "からだ"; next ghost "かわ" doesn't extend "からだ",
+        // so it is stored in completion state but not visible in preedit.
+        eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty()));
+        assert!(matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "からだ"),
+            "kana_buf should be 'からだ' after first tab");
+        assert!(eng.completion.is_some(), "completion state should hold next cycle entry");
+
+        // Second Tab: accept "かわ" (next cycle entry replaces kana_buf entirely)
+        eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty()));
+        assert!(matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "かわ"),
+            "kana_buf should be 'かわ' after second tab");
+    }
+
+    #[test]
+    fn test_tab_exhausted() {
+        // Only one completion; after accepting it, no more ghost.
+        let mut eng = engine_with_completions(vec!["からだ"]);
+        eng.process_key(&press('K'));
+        eng.process_key(&press('a'));
+
+        eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty())); // accept "からだ"
+        assert!(eng.completion.is_none(), "no more completions after cycling through all");
+    }
+
+    #[test]
+    fn test_backspace_after_tab_resets_completion() {
+        // After Tab accepts "からだ", BackSpace → kana_buf="からだ".pop()="から",
+        // completion resets to search from "から".
+        let mut eng = engine_with_completions(vec!["からだ", "からす"]);
+        eng.process_key(&press('K'));
+        eng.process_key(&press('a')); // kana_buf="か", ghost="からだ"
+
+        eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty())); // accept, kana_buf="からだ"
+        eng.process_key(&KeyEvent::press(Key::BackSpace, Modifiers::empty())); // pop → kana_buf="から"
+
+        assert!(matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "から"),
+            "kana_buf should be 'から' after backspace: {:?}", eng.phase);
+        // Ghost should now show a completion starting with "から"
+        let preedit = eng.build_preedit();
+        assert!(preedit.text.starts_with("▽から"), "preedit should start with ▽から: {:?}", preedit.text);
+    }
+
+    #[test]
+    fn test_no_ghost_with_roman_buf() {
+        // While roman_buf is non-empty (e.g. mid-sequence "k"), ghost should not appear.
+        let mut eng = engine_with_completions(vec!["からだ"]);
+        eng.process_key(&press('K'));
+        eng.process_key(&press('a')); // kana_buf="か", ghost shown
+        eng.process_key(&press('k')); // start "k" sequence → roman_buf="k"
+
+        let preedit = eng.build_preedit();
+        // Should show "▽かk", no ghost suffix
+        assert_eq!(preedit.text, "▽かk", "no ghost when roman_buf non-empty: {:?}", preedit.text);
     }
 }
