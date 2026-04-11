@@ -979,10 +979,14 @@ impl SkkEngine {
             None => (None, None),
         };
 
-        let candidates: Vec<Candidate> = self.dict.iter()
-            .filter_map(|d| d.lookup(&midashi, okuri_key))
-            .flat_map(|e| e.candidates)
-            .collect();
+        let candidates: Vec<Candidate> = {
+            let mut seen = std::collections::HashSet::new();
+            self.dict.iter()
+                .filter_map(|d| d.lookup(&midashi, okuri_key))
+                .flat_map(|e| e.candidates)
+                .filter(|c| seen.insert(c.word.clone()))
+                .collect()
+        };
 
         if candidates.is_empty() {
             // No candidates → enter (possibly nested) registration mode.
