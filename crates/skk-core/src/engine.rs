@@ -1700,9 +1700,10 @@ impl SkkEngine {
             SkkPhase::Selecting { midashi: _, okuri, okuri_key: _, candidates, index } => {
                 let cand = &candidates[*index];
                 let ok = okuri.as_deref().unwrap_or("");
+                let trigger = self.conversion_trigger.as_deref().unwrap_or("");
                 match &cand.annotation {
-                    Some(ann) => format!("▼{}{};{}", cand.word, ok, ann),
-                    None => format!("▼{}{}", cand.word, ok),
+                    Some(ann) => format!("▼{}{}{};{}", cand.word, ok, trigger, ann),
+                    None => format!("▼{}{}{}", cand.word, ok, trigger),
                 }
             }
         }
