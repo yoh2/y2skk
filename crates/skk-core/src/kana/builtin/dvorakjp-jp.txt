@@ -23,6 +23,7 @@ k	u		く
 k	e		け
 k	o		こ
 k	y	ky
+k	h	ky
 ky	a		きゃ
 ky	i		きぃ
 ky	u		きゅ
@@ -44,6 +45,7 @@ ch	u		ちゅ
 ch	e		ちぇ
 ch	o		ちょ
 c	y	cy
+c	n	cy
 cy	a		ちゃ
 cy	i		ちぃ
 cy	u		ちゅ
@@ -59,6 +61,7 @@ g	u		ぐ
 g	e		げ
 g	o		ご
 g	y	gy
+g	n	gy
 gy	a		ぎゃ
 gy	i		ぎぃ
 gy	u		ぎゅ
@@ -101,11 +104,16 @@ z	.		…
 z	[		『
 z	]		』
 z	/		・
-z	h		←
+z	h	zy
 z	j		↓
 z	k		↑
 z	l		→
 z	z	z	っ
+zy	a		じゃ
+zy	i		じぃ
+zy	u		じゅ
+zy	e		じぇ
+zy	o		じょ
 
 # た行
 	t	t
@@ -120,6 +128,7 @@ ts	a		つぁ
 ts	e		つぇ
 ts	o		つぉ
 t	y	ty
+t	n	ty
 ty	a		ちゃ
 ty	i		ちぃ
 ty	u		ちゅ
@@ -141,6 +150,7 @@ d	u		づ
 d	e		で
 d	o		ど
 d	y	dy
+d	n	dy
 dy	a		ぢゃ
 dy	i		ぢぃ
 dy	u		ぢゅ
@@ -181,6 +191,7 @@ h	u		ふ
 h	e		へ
 h	o		ほ
 h	y	hy
+h	n	hy
 hy	a		ひゃ
 hy	i		ひぃ
 hy	u		ひゅ
@@ -196,6 +207,7 @@ b	u		ぶ
 b	e		べ
 b	o		ぼ
 b	y	by
+b	n	by
 by	a		びゃ
 by	i		びぃ
 by	u		びゅ
@@ -211,6 +223,7 @@ p	u		ぷ
 p	e		ぺ
 p	o		ぽ
 p	y	py
+p	h	py
 py	a		ぴゃ
 py	i		ぴぃ
 py	u		ぴゅ
@@ -226,6 +239,7 @@ m	u		む
 m	e		め
 m	o		も
 m	y	my
+m	n	my
 my	a		みゃ
 my	i		みぃ
 my	u		みゅ
@@ -247,6 +261,7 @@ r	u		る
 r	e		れ
 r	o		ろ
 r	y	ry
+r	h	ry
 ry	a		りゃ
 ry	i		りぃ
 ry	u		りゅ
@@ -274,6 +289,7 @@ f	u		ふ
 f	e		ふぇ
 f	o		ふぉ
 f	y	fy
+f	n	fy
 fy	a		ふぁ
 fy	i		ふぃ
 fy	u		ふゅ
@@ -289,6 +305,7 @@ j	u		じゅ
 j	e		じぇ
 j	o		じょ
 j	y	jy
+j	h	jy
 jy	a		じゃ
 jy	i		じぃ
 jy	u		じゅ
@@ -300,6 +317,7 @@ j	j	j	っ
 	v	v
 v	u		ゔ
 v	y	vy
+v	h	vy
 vy	a		ゔぁ
 vy	i		ゔぃ
 vy	u		ゔゅ
@@ -320,6 +338,7 @@ x	e		ぇ
 x	o		ぉ
 x	n		ん
 x	y	xy
+x	h	xy
 xy	a		ゃ
 xy	u		ゅ
 xy	o		ょ
@@ -339,6 +358,421 @@ xw	a		ゎ
 	]		」
 	-		ー
 	/		・
+
+# ────────────────────────────────────���────────────────────────
+# DvorakJP contraction shortcuts
+#
+# After a consonant state, a special second key gives a common
+# two-mora combination:
+#   :  →  consonant_a + い   (e.g. k: = かい)   * JP: ':' on US
+#   ,  →  consonant_o + う   (e.g. k, = こう)
+#   .  →  consonant_e + い   (e.g. k. = けい)
+#   ;  →  consonant_a + ん   (e.g. k; = かん)
+#   q  →  consonant_o + ん   (e.g. kq = こん)
+#   j  →  consonant_e + ん   (e.g. kj = けん)
+#   k  →  consonant_u + ん   (e.g. ck = くん)
+#   x  →  consonant_i + ん   (e.g. kx = きん)
+#
+# Omitted slots where they conflict with existing entries:
+#   k+k (くん): conflicts with double-consonant っ
+#   j+j (じぇん): conflicts with double-consonant っ
+#   n+; (なん): conflicts with ん
+#   z+, (ぞう): conflicts with ‥
+#   z+. (ぜい): conflicts with …
+#   z+j (ぜん): conflicts with ↓
+#   z+k (ずん): conflicts with ↑
+# ─────────────────────────────────────────────────────────────
+
+# か行 contractions (k+k omitted: conflicts with っ)
+k	:		かい
+k	,		こう
+k	.		けい
+k	;		かん
+k	q		こん
+k	j		けん
+k	x		きん
+
+# か行 (c alias) contractions
+c	:		かい
+c	,		こう
+c	.		けい
+c	;		かん
+c	q		こん
+c	j		けん
+c	k		くん
+c	x		きん
+
+# ky / cy contractions
+ky	:		きゃい
+ky	,		きょう
+ky	.		きぇい
+ky	;		きゃん
+ky	q		きょん
+ky	j		きぇん
+ky	k		きゅん
+ky	x		きぃん
+
+cy	:		きゃい
+cy	,		きょう
+cy	.		きぇい
+cy	;		きゃん
+cy	q		きょん
+cy	j		きぇん
+cy	k		きゅん
+cy	x		きぃん
+
+# ch contractions
+ch	:		ちゃい
+ch	,		ちょう
+ch	.		ちぇい
+ch	;		ちゃん
+ch	q		ちょん
+ch	j		ちぇん
+ch	k		ちゅん
+ch	x		ちん
+
+# が行 contractions
+g	:		がい
+g	,		ごう
+g	.		げい
+g	;		がん
+g	q		ごん
+g	j		げん
+g	k		ぐん
+g	x		ぎん
+
+# gy contractions
+gy	:		ぎゃい
+gy	,		ぎょう
+gy	.		ぎぇい
+gy	;		ぎゃん
+gy	q		ぎょん
+gy	j		ぎぇん
+gy	k		ぎゅん
+gy	x		ぎぃん
+
+# さ行 contractions
+s	:		さい
+s	,		そう
+s	.		せい
+s	;		さん
+s	q		そん
+s	j		せん
+s	k		すん
+s	x		しん
+
+# sh contractions
+sh	:		しゃい
+sh	,		しょう
+sh	.		しぇい
+sh	;		しゃん
+sh	q		しょん
+sh	j		しぇん
+sh	k		しゅん
+sh	x		しん
+
+# sy contractions
+sy	:		しゃい
+sy	,		しょう
+sy	.		しぇい
+sy	;		しゃん
+sy	q		しょん
+sy	j		しぇん
+sy	k		しゅん
+sy	x		しぃん
+
+# ざ行 contractions (z+, z+. z+j z+k omitted: conflict with symbol mappings)
+z	:		ざい
+z	;		ざん
+z	q		ぞん
+z	x		じん
+
+# zy contractions
+zy	:		じゃい
+zy	,		じょう
+zy	.		じぇい
+zy	;		じゃん
+zy	q		じょん
+zy	j		じぇん
+zy	k		じゅん
+zy	x		じぃん
+
+# た行 contractions
+t	:		たい
+t	,		とう
+t	.		てい
+t	;		たん
+t	q		とん
+t	j		てん
+t	k		つん
+t	x		ちん
+
+# ty contractions
+ty	:		ちゃい
+ty	,		ちょう
+ty	.		ちぇい
+ty	;		ちゃん
+ty	q		ちょん
+ty	j		ちぇん
+ty	k		ちゅん
+ty	x		ちぃん
+
+# ts contractions
+ts	:		つぁい
+ts	,		つぉう
+ts	.		つぇい
+ts	;		つぁん
+ts	q		つぉん
+ts	j		つぇん
+ts	k		つん
+ts	x		つぃん
+
+# th contractions
+th	:		てゃい
+th	,		てょう
+th	.		てぇい
+th	;		てゃん
+th	q		てょん
+th	j		てぇん
+th	k		てゅん
+th	x		てぃん
+
+# だ行 contractions
+d	:		だい
+d	,		どう
+d	.		でい
+d	;		だん
+d	q		どん
+d	j		でん
+d	k		づん
+d	x		ぢん
+
+# dy contractions
+dy	:		ぢゃい
+dy	,		ぢょう
+dy	.		ぢぇい
+dy	;		ぢゃん
+dy	q		ぢょん
+dy	j		ぢぇん
+dy	k		ぢゅん
+dy	x		ぢぃん
+
+# dh contractions
+dh	:		でゃい
+dh	,		でょう
+dh	.		でぇい
+dh	;		でゃん
+dh	q		でょん
+dh	j		でぇん
+dh	k		でゅん
+dh	x		でぃん
+
+# な行 contractions (n+; omitted: conflicts with ん)
+n	:		ない
+n	,		のう
+n	.		ねい
+n	q		のん
+n	j		ねん
+n	k		ぬん
+n	x		にん
+
+# ny contractions
+ny	:		にゃい
+ny	,		にょう
+ny	.		にぇい
+ny	;		にゃん
+ny	q		にょん
+ny	j		にぇん
+ny	k		にゅん
+ny	x		にぃん
+
+# は行 contractions
+h	:		はい
+h	,		ほう
+h	.		へい
+h	;		はん
+h	q		ほん
+h	j		へん
+h	k		ふん
+h	x		ひん
+
+# hy contractions
+hy	:		ひゃい
+hy	,		ひょう
+hy	.		ひぇい
+hy	;		ひゃん
+hy	q		ひょん
+hy	j		ひぇん
+hy	k		ひゅん
+hy	x		ひぃん
+
+# ふ行 contractions
+f	:		ふぁい
+f	,		ふぉう
+f	.		ふぇい
+f	;		ふぁん
+f	q		ふぉん
+f	j		ふぇん
+f	k		ふん
+f	x		ふぃん
+
+# fy contractions
+fy	:		ふぁい
+fy	,		ふぉう
+fy	.		ふぇい
+fy	;		ふぁん
+fy	q		ふぉん
+fy	j		ふぇん
+fy	k		ふゅん
+fy	x		ふぃん
+
+# ば行 contractions
+b	:		ばい
+b	,		ぼう
+b	.		べい
+b	;		ばん
+b	q		ぼん
+b	j		べん
+b	k		ぶん
+b	x		びん
+
+# by contractions
+by	:		びゃい
+by	,		びょう
+by	.		びぇい
+by	;		びゃん
+by	q		びょん
+by	j		びぇん
+by	k		びゅん
+by	x		びぃん
+
+# ぱ行 contractions
+p	:		ぱい
+p	,		ぽう
+p	.		ぺい
+p	;		ぱん
+p	q		ぽん
+p	j		ぺん
+p	k		ぷん
+p	x		ぴん
+
+# py contractions
+py	:		ぴゃい
+py	,		ぴょう
+py	.		ぴぇい
+py	;		ぴゃん
+py	q		ぴょん
+py	j		ぴぇん
+py	k		ぴゅん
+py	x		ぴぃん
+
+# ま行 contractions
+m	:		まい
+m	,		もう
+m	.		めい
+m	;		まん
+m	q		もん
+m	j		めん
+m	k		むん
+m	x		みん
+
+# my contractions
+my	:		みゃい
+my	,		みょう
+my	.		みぇい
+my	;		みゃん
+my	q		みょん
+my	j		みぇん
+my	k		みゅん
+my	x		みぃん
+
+# や行 contractions (yi does not exist; x slot omitted)
+y	:		やい
+y	,		よう
+y	.		いぇい
+y	;		やん
+y	q		よん
+y	j		いぇん
+y	k		ゆん
+
+# ら行 contractions
+r	:		らい
+r	,		ろう
+r	.		れい
+r	;		らん
+r	q		ろん
+r	j		れん
+r	k		るん
+r	x		りん
+
+# ry contractions
+ry	:		りゃい
+ry	,		りょう
+ry	.		りぇい
+ry	;		りゃん
+ry	q		りょん
+ry	j		りぇん
+ry	k		りゅん
+ry	x		りぃん
+
+# わ行 contractions
+w	:		わい
+w	,		をう
+w	.		うぇい
+w	;		わん
+w	q		をん
+w	j		うぇん
+w	k		うん
+w	x		うぃん
+
+# wh contractions
+wh	:		うぁい
+wh	,		うぉう
+wh	.		うぇい
+wh	;		うぁん
+wh	q		うぉん
+wh	j		うぇん
+wh	k		うゅん
+wh	x		うぃん
+
+# じ行 contractions (j+j omitted: conflicts with っ)
+j	:		じゃい
+j	,		じょう
+j	.		じぇい
+j	;		じゃん
+j	q		じょん
+j	k		じゅん
+j	x		じん
+
+# jy contractions
+jy	:		じゃい
+jy	,		じょう
+jy	.		じぇい
+jy	;		じゃん
+jy	q		じょん
+jy	j		じぇん
+jy	k		じゅん
+jy	x		じぃん
+
+# vu contractions
+v	:		ゔぁい
+v	,		ゔぉう
+v	.		ゔぇい
+v	;		ゔぁん
+v	q		ゔぉん
+v	j		ゔぇん
+v	k		ゔん
+v	x		ゔぃん
+
+# vy contractions
+vy	:		ゔぁい
+vy	,		ゔぉう
+vy	.		ゔぇい
+vy	;		ゔぁん
+vy	q		ゔぉん
+vy	j		ゔぇん
+vy	k		ゔゅん
+vy	x		ゔぃん
 
 [trans.katakana]
 
