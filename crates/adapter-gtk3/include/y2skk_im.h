@@ -38,8 +38,10 @@ typedef struct Y2skkCallbacks {
 
     /* Notify the shim that a candidate list is available.
      * words    — NULL-terminated array of UTF-8 candidate strings
-     * focused  — index of the focused candidate */
-    void (*show_candidates)(void *ctx, const char **words, uint32_t focused);
+     * focused  — index of the focused candidate
+     * sel_keys — selection key characters (e.g. "asdfjkl;"), one per candidate */
+    void (*show_candidates)(void *ctx, const char **words, uint32_t focused,
+                            const char *sel_keys);
 
     /* Notify the shim that the candidate list should be hidden. */
     void (*hide_candidates)(void *ctx);

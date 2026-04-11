@@ -55,7 +55,7 @@ pub struct Y2skkCallbacks {
     pub commit: unsafe extern "C" fn(*mut c_void, *const c_char),
     pub update_preedit: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint),
     pub clear_preedit: unsafe extern "C" fn(*mut c_void),
-    pub show_candidates: unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint),
+    pub show_candidates: unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
 }
 
@@ -176,7 +176,8 @@ pub unsafe extern "C" fn y2skk_process_key(
                     .map(|s| s.as_ptr())
                     .chain(std::iter::once(std::ptr::null()))
                     .collect();
-                (cbs.show_candidates)(ctx, ptrs.as_ptr(), action.focused);
+                let keys_cs = CString::new(action.text.as_str()).unwrap_or_default();
+                (cbs.show_candidates)(ctx, ptrs.as_ptr(), action.focused, keys_cs.as_ptr());
             }
             k if k == ACTION_HIDE_CANDIDATES => {
                 consumed = true;
