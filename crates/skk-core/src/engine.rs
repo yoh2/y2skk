@@ -1033,10 +1033,18 @@ impl SkkEngine {
         candidates: Vec<Candidate>,
         mut index: usize,
     ) -> Vec<EngineAction> {
-        // Escape / cancel key
-        if event.key == Key::Escape
-            || event.printable_char().map_or(false, |c| self.keybindings.cancel.contains(&c))
-        {
+        // Escape → always cancel conversion and return to midashi.
+        if event.key == Key::Escape {
+            self.phase = SkkPhase::Midashi {
+                kana_buf: midashi,
+                roman_buf: String::new(),
+            };
+            self.kana_state.clear();
+            return vec![EngineAction::HideCandidates, self.preedit_action()];
+        }
+
+        // Cancel key (e.g. 'x') → go back one candidate, or return to midashi at index 0.
+        if event.printable_char().map_or(false, |c| self.keybindings.cancel.contains(&c)) {
             if index == 0 {
                 // At the first candidate → back to midashi (cancel conversion).
                 self.phase = SkkPhase::Midashi {
