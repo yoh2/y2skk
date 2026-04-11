@@ -38,6 +38,11 @@ pub struct InputConfig {
     pub default_mode: String,
     /// Key combinations that toggle IME on/off (default: ["shift+space"])
     pub toggle_keys: Vec<String>,
+    /// Characters that trigger immediate conversion in ▽ mode.
+    /// Each entry must be a single character (e.g. [",", ".", "を"]).
+    /// After the candidate is committed, the trigger character is also output.
+    /// Default: [",", ".", "を"].  Set to [] to disable.
+    pub conversion_trigger_chars: Vec<String>,
 }
 
 impl Default for InputConfig {
@@ -47,6 +52,7 @@ impl Default for InputConfig {
             kana_table: None,
             default_mode: "ascii".into(),
             toggle_keys: vec!["shift+space".into()],
+            conversion_trigger_chars: vec![",".into(), ".".into(), "を".into()],
         }
     }
 }

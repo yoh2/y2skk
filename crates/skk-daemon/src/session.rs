@@ -145,9 +145,21 @@ fn load_dicts(config: &Config) -> (Vec<Arc<dyn DictionaryProvider>>, Arc<Mutex<U
 }
 
 fn keybindings_from_config(config: &Config) -> SkkKeybindings {
+    let conversion_trigger_chars: Vec<char> = config
+        .input
+        .conversion_trigger_chars
+        .iter()
+        .filter_map(|s| {
+            let mut chars = s.chars();
+            let c = chars.next()?;
+            if chars.next().is_none() { Some(c) } else { None }
+        })
+        .collect();
+
     SkkKeybindings {
         inline_count: config.candidates.inline_count,
         selection_keys: config.candidates.selection_keys.chars().collect(),
+        conversion_trigger_chars,
         ..SkkKeybindings::default()
     }
 }

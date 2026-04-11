@@ -20,6 +20,12 @@ pub struct SkkKeybindings {
     pub inline_count: usize,
     /// Keys that select candidates in listing mode, left-to-right (default: `"asdfjkl;"`).
     pub selection_keys: Vec<char>,
+    /// Characters that, when typed in ▽ (midashi) mode, trigger conversion immediately.
+    /// After the candidate is committed, the trigger character itself is also output.
+    /// ASCII chars (e.g. ',' '.') are matched against direct key input; non-ASCII chars
+    /// (e.g. 'を') are matched against kana output from the romanisation table.
+    /// Default: `[',', '.', 'を']`.  Set to `[]` to disable.
+    pub conversion_trigger_chars: Vec<char>,
 }
 
 impl Default for SkkKeybindings {
@@ -32,6 +38,7 @@ impl Default for SkkKeybindings {
             cancel: vec!['x'],
             inline_count: 3,
             selection_keys: "asdfjkl;".chars().collect(),
+            conversion_trigger_chars: vec![',', '.', 'を'],
         }
     }
 }

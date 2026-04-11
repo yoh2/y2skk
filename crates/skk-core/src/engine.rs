@@ -131,6 +131,10 @@ pub struct SkkEngine {
     midashi_is_abbrev: bool,
     /// Active completion ghost text, only meaningful when phase == Midashi.
     completion: Option<CompletionState>,
+    /// When conversion was started by a trigger character (e.g. ',' '.' 'を'),
+    /// this holds the string to append after the committed candidate.
+    /// Cleared on conversion cancel or when registration mode is entered.
+    conversion_trigger: Option<String>,
 }
 
 impl SkkEngine {
@@ -145,6 +149,7 @@ impl SkkEngine {
             midashi_display_mode: KanaMode::Hiragana,
             midashi_is_abbrev: false,
             completion: None,
+            conversion_trigger: None,
         }
     }
 
@@ -853,6 +858,41 @@ impl SkkEngine {
             return vec![EngineAction::Passthrough];
         };
 
+        // ASCII conversion trigger chars (e.g. ',' '.'):
+        // When the kana state is empty and the typed character is an ASCII trigger,
+        // start conversion immediately and remember the char to append after commit.
+        if ch.is_ascii()
+            && self.kana_state.is_empty()
+            && !self.keybindings.conversion_trigger_chars.is_empty()
+            && self.keybindings.conversion_trigger_chars.contains(&ch)
+        {
+            // Flush a pending 'n' to 'ん' before converting.
+            if roman_buf == "n" {
+                kana_buf.push('ん');
+            }
+            self.completion = None;
+            self.kana_state.clear();
+            // Resolve the trigger char through the kana table so the output matches
+            // the user's layout (e.g. '.' → "。", ',' → "、", or custom mappings).
+            // Fall back to the raw char if the table has no single-step mapping.
+            let trigger_output =
+                match self.kana_table.transition("", ch, KanaMode::Hiragana) {
+                    TransitionResult::Ok { output, next_state }
+                        if !output.is_empty() && next_state.is_empty() =>
+                    {
+                        output
+                    }
+                    _ => ch.to_string(),
+                };
+            if kana_buf.is_empty() {
+                // Nothing to convert: just output the trigger char and exit ▽ mode.
+                self.phase = self.kana_phase_from_display_mode();
+                return vec![EngineAction::Commit(trigger_output), EngineAction::ClearPreedit];
+            }
+            self.conversion_trigger = Some(trigger_output);
+            return self.start_conversion(kana_buf, None);
+        }
+
         // '>', '<', '?' trigger prefix conversion: append '>' to the midashi and
         // convert immediately (looks up "reading>" in the dictionary).
         if matches!(ch, '>' | '<' | '?') {
@@ -904,8 +944,30 @@ impl SkkEngine {
                     roman_buf.clear();
                     roman_buf.push_str(&next_state);
                     if next_state.is_empty() {
-                        // A complete kana was emitted and roman_buf is now empty:
-                        // recompute completion ghost for the new kana_buf.
+                        // A complete kana was emitted and roman_buf is now empty.
+                        // Check for non-ASCII kana conversion triggers (e.g. 'を').
+                        if let Some(last_ch) = kana_buf.chars().next_back() {
+                            if !last_ch.is_ascii()
+                                && !self.keybindings.conversion_trigger_chars.is_empty()
+                                && self.keybindings.conversion_trigger_chars.contains(&last_ch)
+                            {
+                                let char_len = last_ch.len_utf8();
+                                kana_buf.truncate(kana_buf.len() - char_len);
+                                self.completion = None;
+                                self.kana_state.clear();
+                                if kana_buf.is_empty() {
+                                    // Nothing to convert: output the trigger char and exit ▽.
+                                    self.phase = self.kana_phase_from_display_mode();
+                                    return vec![
+                                        EngineAction::Commit(last_ch.to_string()),
+                                        EngineAction::ClearPreedit,
+                                    ];
+                                }
+                                self.conversion_trigger = Some(last_ch.to_string());
+                                return self.start_conversion(kana_buf, None);
+                            }
+                        }
+                        // Recompute completion ghost for the new kana_buf.
                         self.update_completion(&kana_buf);
                     } else {
                         // roman_buf is still building; hide ghost until it resolves.
@@ -1111,6 +1173,7 @@ impl SkkEngine {
                 roman_buf: String::new(),
             };
             self.kana_state.clear();
+            self.conversion_trigger = None;
             self.update_completion(&midashi_str);
             return vec![EngineAction::HideCandidates, self.preedit_action()];
         }
@@ -1125,6 +1188,7 @@ impl SkkEngine {
                     roman_buf: String::new(),
                 };
                 self.kana_state.clear();
+                self.conversion_trigger = None;
                 self.update_completion(&midashi_str);
                 return vec![EngineAction::HideCandidates, self.preedit_action()];
             }
@@ -1304,11 +1368,17 @@ impl SkkEngine {
             KanaMode::Hiragana  => SkkPhase::Hiragana,
         };
         self.kana_state.clear();
-        vec![
+        let mut actions = vec![
             EngineAction::HideCandidates,
             EngineAction::Commit(commit),
             EngineAction::ClearPreedit,
-        ]
+        ];
+        // If conversion was started by a trigger char (e.g. ',' '.' 'を'),
+        // append it after the committed word.
+        if let Some(trigger) = self.conversion_trigger.take() {
+            actions.push(EngineAction::Commit(trigger));
+        }
+        actions
     }
 
     // ── Registration cursor editing ───────────────────────────────────────────
@@ -1372,6 +1442,7 @@ impl SkkEngine {
         });
         self.phase = SkkPhase::Hiragana;
         self.kana_state.clear();
+        self.conversion_trigger = None;
         vec![EngineAction::HideCandidates, self.preedit_action()]
     }
 
@@ -2369,5 +2440,114 @@ mod tests {
         let preedit = eng.build_preedit();
         // Should show "▽かk", no ghost suffix
         assert_eq!(preedit.text, "▽かk", "no ghost when roman_buf non-empty: {:?}", preedit.text);
+    }
+
+    // ── Conversion trigger tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_conversion_trigger_period() {
+        // Typing '.' in ▽ mode triggers conversion; after commit, '.' is appended.
+        let mut eng = engine_with_dict(vec!["学校"]);
+
+        // Enter ▽ mode and type "がっこう"
+        eng.process_key(&press('G'));
+        for ch in "akkou".chars() {
+            eng.process_key(&press(ch));
+        }
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }), "should be in Midashi");
+
+        // Press '.' → should trigger conversion and enter Selecting mode
+        let actions = eng.process_key(&press('.'));
+        // '.' starts conversion: we should now be in Selecting mode
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }), "should enter Selecting after '.'");
+        // No commit yet (still selecting)
+        assert!(!actions.iter().any(|a| matches!(a, EngineAction::Commit(_))), "no commit before selection");
+
+        // Confirm with Ctrl+j → commits "学校" then "。" (kana table output for '.')
+        let actions = eng.process_key(&ctrl('j'));
+        let commits: Vec<&str> = actions.iter().filter_map(|a| {
+            if let EngineAction::Commit(s) = a { Some(s.as_str()) } else { None }
+        }).collect();
+        assert_eq!(commits, vec!["学校", "。"], "should commit candidate then kana-table output for '.'");
+        assert!(matches!(eng.phase(), SkkPhase::Hiragana), "should return to Hiragana");
+    }
+
+    #[test]
+    fn test_conversion_trigger_wo() {
+        // Typing 'wo' (→ 'を') in ▽ mode triggers conversion; after commit, 'を' is appended.
+        let mut eng = engine_with_dict(vec!["学校"]);
+
+        // Enter ▽ mode: 'G' + "akkou" → ▽がっこう
+        eng.process_key(&press('G'));
+        for ch in "akkou".chars() {
+            eng.process_key(&press(ch));
+        }
+
+        // Type 'wo' → 'を' fires kana trigger
+        eng.process_key(&press('w'));
+        eng.process_key(&press('o'));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }), "should enter Selecting after 'wo'");
+
+        // Confirm with Ctrl+j
+        let actions = eng.process_key(&ctrl('j'));
+        let commits: Vec<&str> = actions.iter().filter_map(|a| {
+            if let EngineAction::Commit(s) = a { Some(s.as_str()) } else { None }
+        }).collect();
+        assert_eq!(commits, vec!["学校", "を"], "should commit candidate then 'を'");
+    }
+
+    #[test]
+    fn test_conversion_trigger_empty_kana_buf() {
+        // Trigger char with empty kana_buf in ▽ mode should output the char and exit ▽.
+        let mut eng = engine_with_dict(vec!["学校"]);
+
+        // 'B' enters Midashi with roman_buf="b" (incomplete sequence), kana_buf still empty.
+        eng.process_key(&press('B'));
+        // BackSpace removes roman_buf → Midashi: kana_buf="", roman_buf=""
+        eng.process_key(&KeyEvent::press(Key::BackSpace, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { ref kana_buf, ref roman_buf }
+            if kana_buf.is_empty() && roman_buf.is_empty()), "▽ with empty bufs");
+
+        // Now press '.' → kana_buf is empty, so just output "。" (kana output) and exit ▽
+        let actions = eng.process_key(&press('.'));
+        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "。")),
+            "should commit kana output for '.' directly when kana_buf is empty");
+        assert!(matches!(eng.phase(), SkkPhase::Hiragana), "should exit ▽ mode");
+    }
+
+    #[test]
+    fn test_conversion_trigger_cancel_escape() {
+        // Escape in Selecting (after trigger) cancels; trigger char is NOT output.
+        let mut eng = engine_with_dict(vec!["学校"]);
+
+        eng.process_key(&press('G'));
+        for ch in "akkou".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&press('.')); // triggers conversion
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }));
+
+        // Escape → back to ▽ mode, no output
+        let actions = eng.process_key(&KeyEvent::press(Key::Escape, Modifiers::empty()));
+        assert!(!actions.iter().any(|a| matches!(a, EngineAction::Commit(_))), "no commit on Escape");
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }), "back to Midashi");
+    }
+
+    #[test]
+    fn test_conversion_trigger_disabled() {
+        // With empty conversion_trigger_chars, '.' in ▽ mode is ignored (not a trigger).
+        let table = builtin_table(KanaLayout::Romaji);
+        let mut eng = SkkEngine::new(table, SkkKeybindings {
+            conversion_trigger_chars: vec![],
+            ..SkkKeybindings::default()
+        });
+        eng.add_dict(Box::new(StubDict(vec![Candidate { word: "学校".into(), annotation: None }])));
+
+        eng.process_key(&press('G'));
+        for ch in "akkou".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&press('.')); // should NOT trigger conversion
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }), "should stay in Midashi when triggers disabled");
     }
 }
