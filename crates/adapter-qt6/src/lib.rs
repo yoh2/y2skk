@@ -209,6 +209,21 @@ fn qt_key_to_keysym(qt_key: u32, qt_mods: u32) -> u32 {
         0x01000015 => keysym::DOWN,
         0x01000016 => keysym::PAGE_UP,
         0x01000017 => keysym::PAGE_DOWN,
+        // Modifier / lock keys.  Qt uses the 0x0100____ prefix which
+        // coincidentally matches the X11 Unicode-keysym prefix, so passing
+        // these through unchanged would make the daemon decode e.g.
+        // Key_Shift (0x01000020) as the Unicode code point 0x20 (= SPACE).
+        // Map them to real X11 modifier keysyms instead.
+        0x01000020 => 0xFFE1, // Key_Shift      → XK_Shift_L
+        0x01000021 => 0xFFE3, // Key_Control    → XK_Control_L
+        0x01000022 => 0xFFE7, // Key_Meta       → XK_Meta_L
+        0x01000023 => 0xFFE9, // Key_Alt        → XK_Alt_L
+        0x01000024 => 0xFFE5, // Key_CapsLock   → XK_Caps_Lock
+        0x01000025 => 0xFF7F, // Key_NumLock    → XK_Num_Lock
+        0x01000026 => 0xFF14, // Key_ScrollLock → XK_Scroll_Lock
+        0x01000053 => 0xFFEB, // Key_Super_L    → XK_Super_L
+        0x01000054 => 0xFFEC, // Key_Super_R    → XK_Super_R
+        0x01001103 => 0xFE03, // Key_AltGr      → XK_ISO_Level3_Shift
         // F1–F12: Qt uses 0x01000030–0x0100003B
         f @ 0x01000030..=0x0100003B => keysym::F1_BASE + (f - 0x01000030),
         // Space
