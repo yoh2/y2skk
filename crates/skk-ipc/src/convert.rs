@@ -74,8 +74,18 @@ fn keysym_to_key(sym: u32) -> Key {
         f if (keysym::F1_BASE..keysym::F1_BASE + 15).contains(&f) => {
             Key::F((f - keysym::F1_BASE + 1) as u8)
         }
-        // Printable Unicode character
-        c if (0x20..=0x10FFFF).contains(&c) => {
+        // X11 Unicode keysyms: 0x01000000 | codepoint (used by GDK for composed chars)
+        c if c & 0xFF00_0000 == 0x0100_0000 => {
+            if let Some(ch) = char::from_u32(c & 0x00FF_FFFF) {
+                return Key::Char(ch);
+            }
+            Key::Other(c)
+        }
+        // Printable Unicode character (direct keysym = codepoint).
+        // Exclude 0xFF00–0xFFFF: these are X11 special keysyms (modifier keys,
+        // function keys, etc.) and must NOT be treated as Unicode characters.
+        // e.g. GDK_KEY_Shift_L = 0xFFE1, GDK_KEY_Shift_R = 0xFFE2.
+        c if (0x20..=0xFEFF).contains(&c) || (0x1_0000..=0x10_FFFF).contains(&c) => {
             if let Some(ch) = char::from_u32(c) {
                 return Key::Char(ch);
             }
