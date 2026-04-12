@@ -6,7 +6,7 @@
 > and some features listed below may be incomplete or missing.
 > Use at your own risk in production environments.
 
-A [SKK](https://skk-dev.github.io/skk/) Japanese input method for Linux, written in Rust.
+A SKK Japanese input method for Linux, written in Rust.
 
 y2skk runs as a daemon (`y2skk-daemon`) and exposes its functionality over D-Bus.
 Platform-specific adapters (GTK3, Qt6, XIM) plug in to the daemon so that a single
