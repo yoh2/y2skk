@@ -43,14 +43,22 @@ install(
     RENAME "im-y2skk.so"
 )
 
+# Whether to refresh the system GTK3 IM module cache after install.
+# Set to OFF when installing into a staging/prefix directory (e.g. during packaging).
+option(GTK3_UPDATE_IMMODULE_CACHE
+    "Run gtk-query-immodules-3.0 --update-cache after installing the IM module"
+    ON)
+
 # Refresh the GTK3 IM module cache after installing the file.
-install(CODE "
-    message(STATUS \"Updating GTK3 IM module cache...\")
-    execute_process(
-        COMMAND gtk-query-immodules-3.0 --update-cache
-        RESULT_VARIABLE _rc
-    )
-    if(NOT _rc EQUAL 0)
-        message(WARNING \"gtk-query-immodules-3.0 --update-cache failed (exit \${_rc})\")
-    endif()
-")
+if(GTK3_UPDATE_IMMODULE_CACHE)
+    install(CODE "
+        message(STATUS \"Updating GTK3 IM module cache...\")
+        execute_process(
+            COMMAND gtk-query-immodules-3.0 --update-cache
+            RESULT_VARIABLE _rc
+        )
+        if(NOT _rc EQUAL 0)
+            message(WARNING \"gtk-query-immodules-3.0 --update-cache failed (exit \${_rc})\")
+        endif()
+    ")
+endif()

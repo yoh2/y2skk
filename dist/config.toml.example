@@ -1,0 +1,69 @@
+# y2skk configuration file
+# Place this file at: ~/.config/y2skk/config.toml
+#
+# All settings are optional. Uncomment and edit the ones you want to change.
+# The values shown below are the defaults.
+
+[input]
+# Kana input layout.
+# Built-in options: romaji / azik / azik-jp / dvorakjp / dvorakjp-jp
+kana_layout = "romaji"
+
+# Default input mode on startup.
+# Options: ascii / hiragana / katakana / half-width-katakana / wide-ascii
+default_mode = "ascii"
+
+# Keys that toggle the IME between enabled (hiragana) and disabled (ASCII) mode.
+# Each entry is a combination of modifiers and a key name joined with "+".
+# Modifier names: shift / ctrl / alt / meta (or super)
+# Key names: space / return / tab / escape / or a single character
+toggle_keys = ["shift+space"]
+
+# Characters that immediately start conversion in ▽ mode.
+# When one of these characters is typed, the current reading is converted and
+# the trigger character is also committed.
+# Set to [] to disable.
+conversion_trigger_chars = [",", ".", "を"]
+
+[user-dict]
+# Path to the user dictionary file.
+# The file is created automatically if it does not exist.
+# Default: ~/.local/share/y2skk/user.dict
+# path = "~/.local/share/y2skk/user.dict"
+
+# System dictionaries (multiple entries allowed).
+# Higher priority values are searched first.
+# The user dictionary always has the highest priority.
+
+# Example: Gentoo — app-i18n/skk-jisyo
+# [[dict.sources]]
+# path = "/usr/share/skk/SKK-JISYO.L"
+# encoding = "euc-jp"   # utf-8 / euc-jp / euc-jisx0213
+# priority = 0
+
+# [[dict.sources]]
+# path = "/usr/share/skk/SKK-JISYO.jinmei"
+# encoding = "euc-jp"
+# priority = -1
+
+[indicator]
+# Show a small popup when the input mode changes.
+enabled = true
+
+# How long (in milliseconds) the indicator is shown before hiding automatically.
+# Set to 0 to keep it always visible.
+timeout_ms = 2000
+
+[candidates]
+# Number of candidates shown inline (one by one) before switching to list mode.
+inline_count = 3
+
+# Keys used to select a candidate in list mode.
+# The leftmost character selects the first candidate, the next selects the
+# second, and so on.
+selection_keys = "asdfjkl;"
+
+[daemon]
+# Log level: trace / debug / info / warn / error
+# The RUST_LOG environment variable takes precedence over this setting.
+log_level = "info"

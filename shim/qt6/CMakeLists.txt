@@ -101,6 +101,17 @@ execute_process(
     OUTPUT_VARIABLE _qt6_plugin_dir
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
+
+# Allow overriding the install directory (e.g. for packaging into a staging prefix).
+set(Y2SKK_QT6_PLUGIN_DIR "" CACHE PATH
+    "Override the Qt6 platforminputcontexts install directory (default: from qmake)")
+
+if(Y2SKK_QT6_PLUGIN_DIR)
+    set(_install_plugin_dir "${Y2SKK_QT6_PLUGIN_DIR}")
+else()
+    set(_install_plugin_dir "${_qt6_plugin_dir}/platforminputcontexts")
+endif()
+
 install(TARGETS y2skk-qt6-plugin
-    LIBRARY DESTINATION "${_qt6_plugin_dir}/platforminputcontexts"
+    LIBRARY DESTINATION "${_install_plugin_dir}"
 )
