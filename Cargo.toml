@@ -5,7 +5,6 @@ members = [
     "crates/skk-daemon",
     "crates/adapter-gtk3",
     "crates/adapter-qt6",
-    "crates/xim-server",
     "crates/y2skk-indicator",
     "crates/y2skk-settings",
 ]

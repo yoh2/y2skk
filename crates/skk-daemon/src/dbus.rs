@@ -71,7 +71,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let sessions = Arc::new(Mutex::new(SessionManager::new(&config)));
     let config = Arc::new(Mutex::new(config));
 
-    let interface = DaemonInterface::new(sessions, config);
+    let interface = DaemonInterface::new(sessions.clone(), config);
 
     let _conn = zbus::connection::Builder::session()?
         .name("org.y2skk.Daemon")?
@@ -81,8 +81,21 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     tracing::info!("y2skk-daemon started on session bus as org.y2skk.Daemon");
 
-    // Run until Ctrl-C or SIGTERM
-    tokio::signal::ctrl_c().await?;
-    tracing::info!("Shutting down");
+    // Start the integrated XIM server on a blocking thread.
+    let xim_handle = crate::xim::spawn(Arc::clone(&sessions));
+
+    // Run until Ctrl-C, SIGTERM, or the XIM server exits.
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Shutting down (signal)");
+        }
+        result = xim_handle => {
+            match result {
+                Ok(Ok(())) => tracing::info!("XIM server exited normally"),
+                Ok(Err(e)) => tracing::error!("XIM server error: {e:#}"),
+                Err(e) => tracing::error!("XIM server task panicked: {e}"),
+            }
+        }
+    }
     Ok(())
 }
