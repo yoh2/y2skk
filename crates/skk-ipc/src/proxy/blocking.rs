@@ -4,12 +4,22 @@
 //! context) that invoke the daemon from inside toolkit callbacks without a
 //! surrounding async runtime.
 
-use zbus::blocking::{Connection, Proxy};
+use std::time::Duration;
+
+use zbus::blocking::{Connection, Proxy, connection::Builder};
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::{IpcAction, SessionId};
 
 use super::{BUS_NAME, INTERFACE, OBJECT_PATH};
+
+/// Timeout applied to every D-Bus method call made through this proxy.
+///
+/// Keeps toolkit callbacks (GTK3/Qt6) from blocking indefinitely when the
+/// daemon is unreachable (e.g. during a graceful shutdown or before the first
+/// auto-start).  On timeout the call returns an error and the adapter falls
+/// back to passthrough behaviour.
+const METHOD_TIMEOUT: Duration = Duration::from_millis(2000);
 
 /// Blocking proxy for `org.y2skk.Daemon`.
 pub struct DaemonProxy {
@@ -20,7 +30,7 @@ impl DaemonProxy {
     /// Connects to the session bus.  The daemon itself is only contacted lazily
     /// on the first method call.
     pub fn connect() -> zbus::Result<Self> {
-        let conn = Connection::session()?;
+        let conn = Builder::session()?.method_timeout(METHOD_TIMEOUT).build()?;
         Ok(Self { conn })
     }
 

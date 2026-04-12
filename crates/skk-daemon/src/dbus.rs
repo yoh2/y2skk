@@ -83,5 +83,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     tokio::signal::ctrl_c().await?;
     tracing::info!("Shutting down (signal)");
-    Ok(())
+
+    // Force-exit here because the zbus background task keeps its message-dispatch
+    // loop running even after the signal is received, preventing the tokio runtime
+    // from completing its graceful shutdown.  The daemon holds no state that
+    // requires flushing at exit (user-dictionary writes happen at session
+    // destruction, not here), so a hard exit is safe.
+    std::process::exit(0);
 }
