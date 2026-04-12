@@ -1,0 +1,19 @@
+[package]
+name = "xim-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "y2skk-xim"
+path = "src/main.rs"
+
+[dependencies]
+skk-ipc.workspace = true
+zbus.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+xim = { version = "0.5.0", features = ["x11rb-server"] }
+x11rb = "0.13.2"

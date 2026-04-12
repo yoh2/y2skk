@@ -5,9 +5,10 @@
 //!
 //! - [`blocking::DaemonProxy`] — synchronous, suitable for toolkit callbacks
 //!   that cannot await (GTK3 IM module, Qt6 `filterEvent`).
-//! - An async variant will be added when the XIM server (tokio-based) needs it.
+//! - [`nonblocking::DaemonProxy`] — async, used by the tokio-based XIM server.
 
 pub mod blocking;
+pub mod nonblocking;
 
 /// Well-known D-Bus bus name of the y2skk daemon.
 pub const BUS_NAME: &str = "org.y2skk.Daemon";
