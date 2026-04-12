@@ -2,6 +2,8 @@
 
 This guide covers building and installing y2skk on Linux.
 
+:warning: This installation method is likely to fail.
+
 ---
 
 ## 1. Requirements

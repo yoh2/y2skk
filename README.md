@@ -72,6 +72,8 @@ Download from [skk-dev/dict](https://github.com/skk-dev/dict), or install via yo
 
 ## Quick Start
 
+:warning: This installation method is likely to fail.
+
 ### 1. Build and install
 
 ```sh
