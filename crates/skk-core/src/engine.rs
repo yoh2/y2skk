@@ -66,7 +66,12 @@ pub enum SkkPhase {
     /// Midashi (headword) being typed; `buf` accumulates kana
     Midashi { kana_buf: String, roman_buf: String },
     /// Okurigana being typed
-    Okuri { midashi: String, okuri_prefix: char, roman_buf: String },
+    Okuri {
+        midashi: String,
+        okuri_prefix: char,
+        /// Kana already produced mid-okurigana (e.g. "っ" before the final consonant).
+        kana_buf: String,
+    },
     /// Candidate selection
     Selecting {
         midashi: String,
@@ -370,8 +375,8 @@ impl SkkEngine {
             SkkPhase::Midashi { kana_buf, roman_buf } => {
                 self.handle_midashi(event, kana_buf.clone(), roman_buf.clone())
             }
-            SkkPhase::Okuri { midashi, okuri_prefix, roman_buf } => {
-                self.handle_okuri(event, midashi.clone(), *okuri_prefix, roman_buf.clone())
+            SkkPhase::Okuri { midashi, okuri_prefix, kana_buf } => {
+                self.handle_okuri(event, midashi.clone(), *okuri_prefix, kana_buf.clone())
             }
             SkkPhase::Selecting { midashi, okuri, okuri_key, candidates, index } => {
                 self.handle_selecting(
@@ -934,15 +939,44 @@ impl SkkEngine {
         // - otherwise the uppercase letter itself (lowercased) is the prefix.
         if ch.is_ascii_uppercase() && !kana_buf.is_empty() {
             self.completion = None;
+            let lower = ch.to_ascii_lowercase();
+
+            // Handle the double-consonant + uppercase case (e.g. "SasSu" for "察す"):
+            // When there is a pending kana state (e.g. "s") and the uppercase letter's
+            // lowercase form continues that state to produce an intermediate kana output
+            // (e.g. "s"+"s" → "っ" with next_state="s"), the intermediate kana belongs
+            // to the midashi, not the okurigana.  Only flush when next_state is non-empty
+            // (i.e. the okurigana consonant is still pending); a complete kana output
+            // (next_state empty, e.g. "SassU" where "s"+"u"→"す") falls through so that
+            // the existing logic feeds it through handle_okuri as the okurigana.
+            if !self.kana_state.is_empty() {
+                let state_before = self.kana_state.clone();
+                if let TransitionResult::Ok { output, next_state } =
+                    self.kana_table.transition(&state_before, lower, KanaMode::Hiragana)
+                {
+                    if !output.is_empty() && !next_state.is_empty() {
+                        kana_buf.push_str(&output);
+                        self.kana_state = next_state;
+                        let okuri_prefix = self.kana_state.chars().next().unwrap_or(lower);
+                        self.phase = SkkPhase::Okuri {
+                            midashi: kana_buf,
+                            okuri_prefix,
+                            kana_buf: String::new(),
+                        };
+                        return vec![self.preedit_action()];
+                    }
+                }
+            }
+
             let okuri_prefix = if let Some(first) = self.kana_state.chars().next() {
                 first
             } else {
-                ch.to_ascii_lowercase()
+                lower
             };
             self.phase = SkkPhase::Okuri {
                 midashi: kana_buf,
                 okuri_prefix,
-                roman_buf: String::new(),
+                kana_buf: String::new(),
             };
             return self.handle_okuri(event, self.phase.clone_midashi(), okuri_prefix, String::new());
         }
@@ -1064,7 +1098,7 @@ impl SkkEngine {
         event: &KeyEvent,
         midashi: String,
         okuri_prefix: char,
-        mut roman_buf: String,
+        mut kana_buf: String,
     ) -> Vec<EngineAction> {
         if event.key == Key::Escape {
             self.phase = SkkPhase::Hiragana;
@@ -1077,39 +1111,43 @@ impl SkkEngine {
         };
 
         let lower = ch.to_ascii_lowercase();
-        roman_buf.push(lower);
 
         let result = self.kana_table.transition(&self.kana_state.clone(), lower, KanaMode::Hiragana);
         match result {
             TransitionResult::Ok { output, next_state } => {
                 self.kana_state = next_state;
                 if !output.is_empty() {
-                    // Okurigana is complete; start conversion
-                    let okuri_key = self.kana_table.okuri_key(okuri_prefix).to_string();
-                    self.phase = SkkPhase::Hiragana;
-                    self.kana_state.clear();
-                    return self.start_conversion(midashi, Some((okuri_key, output)));
+                    kana_buf.push_str(&output);
+                    if self.kana_state.is_empty() {
+                        // Okurigana is complete; start conversion.
+                        let okuri_key = self.kana_table.okuri_key(okuri_prefix).to_string();
+                        self.phase = SkkPhase::Hiragana;
+                        return self.start_conversion(midashi, Some((okuri_key, kana_buf)));
+                    }
+                    // Mid-okurigana kana produced (e.g. "っ" from "tt") but more input
+                    // expected (next_state is non-empty). Accumulate and continue.
                 }
-                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, roman_buf };
+                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, kana_buf };
                 vec![self.preedit_action()]
             }
             TransitionResult::OkRetry { output, retry: _ } => {
                 // Wildcard matched (e.g. "n" + consonant → "ん") while typing okurigana.
-                // Treat the wildcard output as the complete okurigana and start conversion;
+                // Treat the output as the complete okurigana and start conversion;
                 // the retry character is dropped since we cannot re-dispatch here.
                 self.kana_state.clear();
                 if !output.is_empty() {
                     let okuri_key = self.kana_table.okuri_key(okuri_prefix).to_string();
+                    kana_buf.push_str(&output);
                     self.phase = SkkPhase::Hiragana;
-                    return self.start_conversion(midashi, Some((okuri_key, output)));
+                    return self.start_conversion(midashi, Some((okuri_key, kana_buf)));
                 }
-                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, roman_buf };
+                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, kana_buf };
                 vec![self.preedit_action()]
             }
             TransitionResult::NoMatch { flush: _, retry: _ } => {
                 // Feed failed; treat remaining buffer as mistype and clear state.
                 self.kana_state.clear();
-                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, roman_buf };
+                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, kana_buf };
                 vec![self.preedit_action()]
             }
         }
@@ -1712,8 +1750,8 @@ impl SkkEngine {
                 };
                 format!("▽{display}{roman_buf}")
             }
-            SkkPhase::Okuri { midashi, okuri_prefix, roman_buf } => {
-                format!("▽{midashi}*{okuri_prefix}{roman_buf}")
+            SkkPhase::Okuri { midashi, kana_buf, .. } => {
+                format!("▽{midashi}*{kana_buf}{}", self.kana_state)
             }
             SkkPhase::Selecting { midashi: _, okuri, okuri_key: _, candidates, index } => {
                 let cand = &candidates[*index];
