@@ -34,43 +34,60 @@ distribution's package manager.
 
 ## 2. Build and install
 
-### Standard install
+Three install modes are available.
+
+### User-local install (default, no sudo required)
 
 ```sh
 cargo xtask install
 ```
 
-The daemon and systemd service install to `~/.local/`; the GTK3 and Qt6 adapters
-install to the system directories reported by `pkg-config` / `qmake`.
-**Sudo is required** for the adapter steps — you will be prompted automatically.
+All components install under `~/.local/`.
+The GTK3 and Qt6 adapters require additional environment variables (printed at the end of install).
 
 | Component | Installed path |
 |-----------|---------------|
 | `y2skk-daemon` | `~/.local/bin/y2skk-daemon` |
+| GTK3 IM module | `~/.local/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
+| Qt6 IM plugin | `~/.local/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
+| systemd service | `~/.config/systemd/user/y2skk-daemon.service` |
+
+Also updates the GTK3 user module cache (`~/.config/gtk-3.0/gtk.immodules`).
+
+### System-wide install (sudo required for adapters)
+
+```sh
+cargo xtask install --system
+```
+
+Daemon installs to `/usr/local/bin/`; adapters install to the system directories
+reported by `pkg-config` / `qmake`. Sudo is invoked automatically for those steps.
+No extra environment variables are needed after this.
+
+| Component | Installed path |
+|-----------|---------------|
+| `y2skk-daemon` | `/usr/local/bin/y2skk-daemon` |
 | GTK3 IM module | `<pkg-config libdir>/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `<qmake QT_INSTALL_PLUGINS>/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd service | `~/.config/systemd/user/y2skk-daemon.service` |
 
-Also refreshes the system GTK3 IM module cache via `gtk-query-immodules-3.0 --update-cache`.
-
 ### Install specific components only
 
 ```sh
-cargo xtask install --daemon   # daemon + systemd service only
-cargo xtask install --gtk3     # GTK3 IM module only (sudo for system install)
-cargo xtask install --qt6      # Qt6 plugin only (sudo for system install)
+cargo xtask install --daemon          # daemon + systemd service only
+cargo xtask install --gtk3            # GTK3 IM module only (user-local)
+cargo xtask install --system --gtk3   # GTK3 to system path (sudo)
+cargo xtask install --qt6             # Qt6 plugin only (user-local)
 ```
 
 ### Packaging
 
-Use `--prefix` to install all components into a staging directory without sudo.
-The IM module cache update is skipped automatically in this mode.
+Use `--prefix` to install all components into a staging directory.
+No sudo is used, and the IM module cache update is skipped.
 
 ```sh
 cargo xtask install --prefix /path/to/staging/usr
 ```
-
-This installs:
 
 | Component | Installed path |
 |-----------|---------------|
@@ -85,21 +102,30 @@ The systemd service file is **not** installed in packaging mode.
 ## 3. Environment variables
 
 Set the following in your shell profile or session startup script
-(`~/.bash_profile`, `~/.profile`, or the equivalent for your desktop environment):
-
-```sh
-# XIM clients (xterm, Chromium, legacy X11 apps)
-export XMODIFIERS=@im=y2skk
-
-# GTK3 applications
-export GTK_IM_MODULE=y2skk
-
-# Qt6 applications
-export QT_IM_MODULE=y2skk
-```
+(`~/.bash_profile`, `~/.profile`, or the equivalent for your desktop environment).
 
 For **KDE Plasma**, place these in `~/.config/plasma-workspace/env/y2skk.sh`
 (executed automatically at login). Log out and back in to apply.
+
+### System-wide install
+
+```sh
+export XMODIFIERS=@im=y2skk    # XIM clients (xterm, Chromium, legacy X11 apps)
+export GTK_IM_MODULE=y2skk     # GTK3 applications
+export QT_IM_MODULE=y2skk      # Qt6 applications
+```
+
+### User-local install (default)
+
+The same variables as above, plus these two for the user-local adapter paths:
+
+```sh
+export XMODIFIERS=@im=y2skk
+export GTK_IM_MODULE=y2skk
+export QT_IM_MODULE=y2skk
+export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules"
+export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH"
+```
 
 ---
 
@@ -167,12 +193,11 @@ Type `a` to get `あ`, then `Space` to start conversion.
 ## 7. Uninstall
 
 ```sh
-cargo xtask uninstall
+cargo xtask uninstall           # user-local (default)
+cargo xtask uninstall --system  # system-wide install
 ```
 
-This removes all files installed by `cargo xtask install`.
-
-For a custom prefix:
+For a packaging prefix:
 
 ```sh
 cargo xtask uninstall --prefix /path/to/staging/usr
@@ -196,14 +221,24 @@ Common causes:
 
 ### GTK3 apps do not use y2skk
 
-1. Verify the environment variable is set: `echo $GTK_IM_MODULE`
-2. Verify the system IM module cache contains y2skk: `grep y2skk /etc/gtk-3.0/gtk.immodules`
-3. Re-run the cache update as root if needed: `sudo gtk-query-immodules-3.0 --update-cache`
+1. Verify `GTK_IM_MODULE=y2skk` is set: `echo $GTK_IM_MODULE`
+2. **User-local install**: verify `GTK_IM_MODULE_FILE` points to the user cache and the cache contains y2skk:
+   ```sh
+   echo $GTK_IM_MODULE_FILE
+   grep y2skk "$GTK_IM_MODULE_FILE"
+   ```
+   Re-run the cache update if needed:
+   ```sh
+   cargo xtask install --gtk3
+   ```
+3. **System install**: verify the system cache: `grep y2skk /etc/gtk-3.0/gtk.immodules`
+   Re-run as root: `sudo gtk-query-immodules-3.0 --update-cache`
 
 ### Qt6 apps do not use y2skk
 
 1. Verify `QT_IM_MODULE=y2skk` is set.
-2. Verify the plugin file exists in the system Qt6 plugin directory:
+2. **User-local install**: verify `QT_PLUGIN_PATH` includes `~/.local/lib/qt6/plugins`.
+3. **System install**: verify the plugin file exists:
    ```sh
    find "$(qmake6 -query QT_INSTALL_PLUGINS)" -name 'libqy2skk*.so' 2>/dev/null
    ```

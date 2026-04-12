@@ -89,7 +89,12 @@ For **KDE Plasma**, create `~/.config/plasma-workspace/env/y2skk.sh`:
 export XMODIFIERS=@im=y2skk      # XIM clients (xterm, chromium, …)
 export GTK_IM_MODULE=y2skk       # GTK3 applications
 export QT_IM_MODULE=y2skk        # Qt6 applications
+# Additional variables for the default user-local adapter install:
+export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules"
+export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH"
 ```
+
+> With `cargo xtask install --system` the last two lines are not needed.
 
 Log out and back in (or run `source` on the file) to apply.
 

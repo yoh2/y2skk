@@ -87,7 +87,12 @@ cargo xtask install
 export XMODIFIERS=@im=y2skk      # XIM クライアント（xterm、Chromium 等）
 export GTK_IM_MODULE=y2skk       # GTK3 アプリケーション
 export QT_IM_MODULE=y2skk        # Qt6 アプリケーション
+# デフォルト（~/.local/）インストール時はさらに以下も必要:
+export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules"
+export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH"
 ```
+
+> `cargo xtask install --system` でシステムインストールした場合、最後の 2 行は不要です。
 
 ログアウト・ログインし直すか、ファイルを `source` して反映させてください。
 
