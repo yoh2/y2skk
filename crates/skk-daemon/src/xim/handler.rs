@@ -19,6 +19,7 @@ use skk_ipc::{
 
 use crate::session::SessionManager;
 
+use super::candidates::CandidateWindow;
 use super::key::KeyMap;
 use super::preedit::{PreeditWindow, SpotHint};
 
@@ -32,6 +33,7 @@ pub struct Handler {
     sessions: Arc<Mutex<SessionManager>>,
     keymap: KeyMap,
     preedit: PreeditWindow,
+    candidates: CandidateWindow,
 }
 
 impl Handler {
@@ -39,11 +41,13 @@ impl Handler {
         sessions: Arc<Mutex<SessionManager>>,
         keymap: KeyMap,
         preedit: PreeditWindow,
+        candidates: CandidateWindow,
     ) -> Self {
         Self {
             sessions,
             keymap,
             preedit,
+            candidates,
         }
     }
 }
@@ -220,12 +224,20 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
                 }
                 k if k == ACTION_SHOW_CANDIDATES => {
                     consumed = true;
-                    // Phase 3: candidate popup.
-                    debug!(session_id = sid, "ShowCandidates (not yet implemented)");
+                    if let Err(e) = self.candidates.show(
+                        &action.candidates,
+                        &action.text, // selection keys
+                        action.focused,
+                        spot.as_ref(),
+                    ) {
+                        warn!(session_id = sid, "candidate show failed: {e}");
+                    }
                 }
                 k if k == ACTION_HIDE_CANDIDATES => {
                     consumed = true;
-                    debug!(session_id = sid, "HideCandidates (not yet implemented)");
+                    if let Err(e) = self.candidates.hide() {
+                        warn!(session_id = sid, "candidate hide failed: {e}");
+                    }
                 }
                 k if k == ACTION_UPDATE_STATUS => {
                     // Phase 3: indicator update.

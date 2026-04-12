@@ -18,7 +18,7 @@ use x11rb::COPY_DEPTH_FROM_PARENT;
 
 /// Font candidates in preference order.  The first one that opens
 /// successfully wins.
-const FONT_CANDIDATES: &[&str] = &[
+pub const FONT_CANDIDATES: &[&str] = &[
     "-misc-fixed-medium-r-normal-ja-18-120-100-100-c-180-iso10646-1",
     "-misc-fixed-medium-r-normal-ja-13-120-75-75-c-120-iso10646-1",
     "-misc-fixed-medium-r-normal--14-130-75-75-c-70-iso10646-1",

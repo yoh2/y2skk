@@ -82,7 +82,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     tracing::info!("y2skk-daemon started on session bus as org.y2skk.Daemon");
 
     // Start the integrated XIM server on a blocking thread.
-    let xim_handle = crate::xim::spawn(Arc::clone(&sessions));
+    let (xim_shutdown, xim_handle) = crate::xim::spawn(Arc::clone(&sessions));
 
     // Run until Ctrl-C, SIGTERM, or the XIM server exits.
     tokio::select! {
@@ -97,5 +97,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             }
         }
     }
+
+    // Signal the XIM event loop to exit (no-op if it already finished).
+    xim_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
