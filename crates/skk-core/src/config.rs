@@ -26,6 +26,10 @@ pub struct SkkKeybindings {
     /// (e.g. 'を') are matched against kana output from the romanisation table.
     /// Default: `[',', '.', 'を']`.  Set to `[]` to disable.
     pub conversion_trigger_chars: Vec<char>,
+    /// Keys that toggle the IME between enabled (Hiragana) and disabled (ASCII) mode.
+    /// Each entry is a `(Key, Modifiers)` pair.  Default: `[(Key::Space, Modifiers::SHIFT)]`.
+    /// This does not take effect during word-registration mode.
+    pub toggle_keys: Vec<(crate::key::Key, crate::key::Modifiers)>,
 }
 
 impl Default for SkkKeybindings {
@@ -39,6 +43,7 @@ impl Default for SkkKeybindings {
             inline_count: 3,
             selection_keys: "asdfjkl;".chars().collect(),
             conversion_trigger_chars: vec![',', '.', 'を'],
+            toggle_keys: vec![(crate::key::Key::Space, crate::key::Modifiers::SHIFT)],
         }
     }
 }

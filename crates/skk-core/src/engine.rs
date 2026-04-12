@@ -337,6 +337,24 @@ impl SkkEngine {
             }
         }
 
+        // Toggle keys switch between Ascii (IME off) and Hiragana (IME on).
+        // Only active outside registration mode (register_stack is already empty here
+        // for any key that reached this point without an early return above).
+        if self.register_stack.is_empty() {
+            let is_toggle = self.keybindings.toggle_keys.iter()
+                .any(|(k, m)| event.key == *k && event.modifiers == *m);
+            if is_toggle {
+                match self.phase {
+                    SkkPhase::Ascii => self.phase = SkkPhase::Hiragana,
+                    _ => {
+                        self.phase = SkkPhase::Ascii;
+                        self.kana_state.clear();
+                    }
+                }
+                return vec![EngineAction::ClearPreedit];
+            }
+        }
+
         let raw_actions = match &self.phase.clone() {
             SkkPhase::Ascii => self.handle_ascii(event),
             SkkPhase::Hiragana | SkkPhase::Katakana | SkkPhase::HalfWidthKatakana => {

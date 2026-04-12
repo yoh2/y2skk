@@ -7,6 +7,7 @@ use skk_core::dict::traits::DictionaryProvider;
 use skk_core::engine::{EngineAction, SkkEngine, SkkPhase};
 use skk_core::kana::builtin::builtin_table;
 use skk_core::kana::table::KanaLayout;
+use skk_core::key::{Key, Modifiers};
 use skk_ipc::{IpcAction, SessionId};
 
 use crate::config::Config;
@@ -178,12 +179,57 @@ fn keybindings_from_config(config: &Config) -> SkkKeybindings {
         })
         .collect();
 
+    let toggle_keys: Vec<(Key, Modifiers)> = config
+        .input
+        .toggle_keys
+        .iter()
+        .filter_map(|s| parse_toggle_key(s))
+        .collect();
+
     SkkKeybindings {
         inline_count: config.candidates.inline_count,
         selection_keys: config.candidates.selection_keys.chars().collect(),
         conversion_trigger_chars,
+        toggle_keys,
         ..SkkKeybindings::default()
     }
+}
+
+/// Parses a toggle key string like `"shift+space"` or `"ctrl+space"` into a
+/// `(Key, Modifiers)` pair.  Returns `None` if the string is not recognised.
+///
+/// Modifier names (case-insensitive, order-independent): `shift`, `ctrl`/`control`,
+/// `alt`, `meta`/`super`.
+/// Key names: `space`, `return`/`enter`, `tab`, `escape`/`esc`,
+/// or a single printable character.
+fn parse_toggle_key(s: &str) -> Option<(Key, Modifiers)> {
+    let parts: Vec<&str> = s.split('+').collect();
+    let key_str = parts.last()?;
+    let key = match key_str.to_lowercase().as_str() {
+        "space"         => Key::Space,
+        "return"|"enter"=> Key::Return,
+        "tab"           => Key::Tab,
+        "escape"|"esc"  => Key::Escape,
+        s if s.chars().count() == 1 => Key::Char(s.chars().next()?),
+        _ => {
+            tracing::warn!("toggle_keys: unrecognised key name {:?}, skipping", key_str);
+            return None;
+        }
+    };
+    let mut mods = Modifiers::empty();
+    for mod_str in &parts[..parts.len() - 1] {
+        match mod_str.to_lowercase().as_str() {
+            "shift"            => mods |= Modifiers::SHIFT,
+            "ctrl"|"control"   => mods |= Modifiers::CTRL,
+            "alt"              => mods |= Modifiers::ALT,
+            "meta"|"super"     => mods |= Modifiers::META,
+            other => {
+                tracing::warn!("toggle_keys: unrecognised modifier {:?} in {:?}, skipping", other, s);
+                return None;
+            }
+        }
+    }
+    Some((key, mods))
 }
 
 fn parse_default_mode(name: &str) -> SkkPhase {
