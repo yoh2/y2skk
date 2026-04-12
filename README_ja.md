@@ -50,20 +50,21 @@ GTK3 / Qt6 / XIM それぞれのアダプターがデーモンに接続する設
 
 ### ビルド時
 
-| 依存パッケージ | 用途 | Gentoo パッケージ |
-|--------------|------|-----------------|
-| Rust + Cargo | 全コンポーネントのビルド | `dev-lang/rust` |
-| cmake ≥ 3.21 | Qt6 プラグインのビルド | `dev-build/cmake` |
-| GTK3 開発ヘッダ | GTK3 IM モジュールのビルド | `x11-libs/gtk+:3` |
-| Qt6 + プライベートヘッダ | Qt6 プラグインのビルド | `dev-qt/qtbase:6` |
-| pkg-config | ビルドシステムが使用 | `dev-util/pkgconfig` |
+| 依存パッケージ | 用途 |
+|--------------|------|
+| Rust + Cargo | 全コンポーネントのビルド |
+| cmake ≥ 3.21 | Qt6 プラグインのビルド |
+| GTK3 開発ヘッダ | GTK3 IM モジュールのビルド |
+| Qt6 + プライベートヘッダ | Qt6 プラグインのビルド |
+| pkg-config | ビルドシステムが使用 |
+
+各パッケージはディストリビューションのパッケージマネージャーでインストールしてください。
+GTK3 / Qt6 パッケージはそれぞれのアダプターをビルドする場合のみ必要です。
 
 ### 辞書
 
 y2skk を使うには SKK 辞書が最低 1 つ必要です。
-
-- Gentoo: `app-i18n/skk-jisyo` — `SKK-JISYO.L` 等が `/usr/share/skk/` にインストールされます
-- または [skk-dev/dict](https://github.com/skk-dev/dict) から入手
+[skk-dev/dict](https://github.com/skk-dev/dict) から入手するか、ディストリビューションのパッケージマネージャーでインストールしてください。
 
 ---
 

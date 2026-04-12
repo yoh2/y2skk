@@ -35,7 +35,7 @@ conversion_trigger_chars = [",", ".", "を"]
 # Higher priority values are searched first.
 # The user dictionary always has the highest priority.
 
-# Example: Gentoo — app-i18n/skk-jisyo
+# Example: system-installed SKK dictionary
 # [[dict.sources]]
 # path = "/usr/share/skk/SKK-JISYO.L"
 # encoding = "euc-jp"   # utf-8 / euc-jp / euc-jisx0213

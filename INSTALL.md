@@ -1,7 +1,6 @@
 # Installing y2skk
 
 This guide covers building and installing y2skk on Linux.
-The instructions use Gentoo package names; adapt them to your distribution as needed.
 
 ---
 
@@ -9,30 +8,27 @@ The instructions use Gentoo package names; adapt them to your distribution as ne
 
 ### Rust toolchain
 
-Install Rust via [rustup](https://rustup.rs/) or your distribution's package:
-
-```sh
-# Gentoo
-emerge dev-lang/rust
-```
+Install Rust via [rustup](https://rustup.rs/) or your distribution's package manager.
 
 ### System packages
 
-```sh
-# Gentoo — install all at once
-emerge dev-build/cmake dev-util/pkgconfig x11-libs/gtk+:3 dev-qt/qtbase:6
+You need the following tools and libraries, available from your distribution's package manager:
 
-# The GTK3 and Qt6 packages are only required if you want those adapters.
-# The daemon itself and the XIM server have no additional system dependencies.
-```
+| Package | Required for |
+|---------|-------------|
+| `cmake` ≥ 3.21 | Qt6 plugin build |
+| `pkg-config` | Build system |
+| GTK3 development headers | GTK3 IM module |
+| Qt6 development headers (including private headers) | Qt6 IM plugin |
+
+The GTK3 and Qt6 packages are only required if you want those adapters.
+The daemon itself and the XIM server have no additional system dependencies beyond Rust.
 
 ### SKK dictionary
 
-```sh
-# Gentoo
-emerge app-i18n/skk-jisyo
-# Installs SKK-JISYO.L and others under /usr/share/skk/
-```
+y2skk requires at least one SKK dictionary.
+Download from [skk-dev/dict](https://github.com/skk-dev/dict), or install via your
+distribution's package manager.
 
 ---
 
@@ -65,33 +61,31 @@ cargo xtask install --gtk3     # GTK3 IM module only (sudo for system install)
 cargo xtask install --qt6      # Qt6 plugin only (sudo for system install)
 ```
 
-### Packaging (ebuild, etc.)
+### Packaging
 
 Use `--prefix` to install all components into a staging directory without sudo.
 The IM module cache update is skipped automatically in this mode.
 
 ```sh
-cargo xtask install --prefix "${D}/usr"
+cargo xtask install --prefix /path/to/staging/usr
 ```
 
 This installs:
 
 | Component | Installed path |
 |-----------|---------------|
-| `y2skk-daemon` | `${D}/usr/bin/y2skk-daemon` |
-| GTK3 IM module | `${D}/usr/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
-| Qt6 IM plugin | `${D}/usr/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
+| `y2skk-daemon` | `<prefix>/bin/y2skk-daemon` |
+| GTK3 IM module | `<prefix>/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
+| Qt6 IM plugin | `<prefix>/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 
-The systemd service file is **not** installed in packaging mode (it should be
-handled by the ebuild separately).
+The systemd service file is **not** installed in packaging mode.
 
 ---
 
 ## 3. Environment variables
 
-### KDE Plasma
-
-Create `~/.config/plasma-workspace/env/y2skk.sh` (executed automatically at login):
+Set the following in your shell profile or session startup script
+(`~/.bash_profile`, `~/.profile`, or the equivalent for your desktop environment):
 
 ```sh
 # XIM clients (xterm, Chromium, legacy X11 apps)
@@ -104,15 +98,8 @@ export GTK_IM_MODULE=y2skk
 export QT_IM_MODULE=y2skk
 ```
 
-Log out and back in to apply, or run:
-
-```sh
-source ~/.config/plasma-workspace/env/y2skk.sh
-```
-
-### Other desktop environments
-
-Add the same exports to `~/.bash_profile`, `~/.profile`, or the equivalent for your shell / session manager.
+For **KDE Plasma**, place these in `~/.config/plasma-workspace/env/y2skk.sh`
+(executed automatically at login). Log out and back in to apply.
 
 ---
 
@@ -126,7 +113,7 @@ cp dist/config.toml.example ~/.config/y2skk/config.toml
 $EDITOR ~/.config/y2skk/config.toml
 ```
 
-Uncomment and set the dictionary path. Example for Gentoo:
+Uncomment and set the dictionary path, for example:
 
 ```toml
 [[dict.sources]]
@@ -183,12 +170,12 @@ Type `a` to get `あ`, then `Space` to start conversion.
 cargo xtask uninstall
 ```
 
-This removes all files installed by `cargo xtask install` (using the default prefix `~/.local`).
+This removes all files installed by `cargo xtask install`.
 
 For a custom prefix:
 
 ```sh
-cargo xtask uninstall --prefix /usr/local
+cargo xtask uninstall --prefix /path/to/staging/usr
 ```
 
 ---
@@ -218,7 +205,7 @@ Common causes:
 1. Verify `QT_IM_MODULE=y2skk` is set.
 2. Verify the plugin file exists in the system Qt6 plugin directory:
    ```sh
-   find $(qmake6 -query QT_INSTALL_PLUGINS) -name 'libqy2skk*.so' 2>/dev/null
+   find "$(qmake6 -query QT_INSTALL_PLUGINS)" -name 'libqy2skk*.so' 2>/dev/null
    ```
 
 ### Reload configuration

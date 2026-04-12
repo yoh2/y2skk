@@ -52,20 +52,21 @@ dictionary and session state are shared across all applications.
 
 ### Build
 
-| Dependency | Purpose | Gentoo package |
-|------------|---------|---------------|
-| Rust + Cargo | Build all components | `dev-lang/rust` |
-| cmake ≥ 3.21 | Build the Qt6 plugin | `dev-build/cmake` |
-| GTK3 dev headers | Build the GTK3 IM module | `x11-libs/gtk+:3` |
-| Qt6 + private headers | Build the Qt6 plugin | `dev-qt/qtbase:6` |
-| pkg-config | Used by the build system | `dev-util/pkgconfig` |
+| Dependency | Purpose |
+|------------|---------|
+| Rust + Cargo | Build all components |
+| cmake ≥ 3.21 | Build the Qt6 plugin |
+| GTK3 dev headers | Build the GTK3 IM module |
+| Qt6 + private headers | Build the Qt6 plugin |
+| pkg-config | Used by the build system |
+
+Install these via your distribution's package manager.
+The GTK3 and Qt6 packages are only required if you want those adapters.
 
 ### Dictionary
 
 y2skk requires at least one SKK dictionary.
-
-- Gentoo: `app-i18n/skk-jisyo` — installs `SKK-JISYO.L` and others under `/usr/share/skk/`
-- Or download from [skk-dev/dict](https://github.com/skk-dev/dict)
+Download from [skk-dev/dict](https://github.com/skk-dev/dict), or install via your distribution's package manager.
 
 ---
 
