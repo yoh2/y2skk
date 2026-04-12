@@ -3,7 +3,7 @@
 //! Run via `cargo xtask <subcommand> [options]`.
 //!
 //! Subcommands:
-//!   install   [--system | --prefix <path>] [--daemon] [--gtk3] [--qt6]
+//!   install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--qt6]
 //!   uninstall [--system | --prefix <path>]
 //!
 //! Install modes (mutually exclusive):
@@ -13,7 +13,7 @@
 //!                    the adapter steps. Daemon goes to /usr/local/bin/.
 //!   --prefix <path>  Packaging mode: all components under this prefix.
 //!                    No sudo. IM module cache update is skipped.
-//!                    Systemd service is NOT installed.
+//!                    Systemd services are NOT installed.
 
 use std::env;
 use std::ffi::OsString;
@@ -63,6 +63,7 @@ impl Mode {
 struct Opts {
     mode: Mode,
     daemon: bool,
+    xim: bool,
     gtk3: bool,
     qt6: bool,
 }
@@ -72,6 +73,7 @@ impl Opts {
         let mut system = false;
         let mut prefix: Option<PathBuf> = None;
         let mut daemon = false;
+        let mut xim = false;
         let mut gtk3 = false;
         let mut qt6 = false;
         let mut component_flag = false;
@@ -85,6 +87,7 @@ impl Opts {
                     prefix = Some(PathBuf::from(val));
                 }
                 "--daemon" => { daemon = true; component_flag = true; }
+                "--xim"    => { xim    = true; component_flag = true; }
                 "--gtk3"   => { gtk3   = true; component_flag = true; }
                 "--qt6"    => { qt6    = true; component_flag = true; }
                 other => die(&format!("Unknown option: {other}")),
@@ -97,6 +100,7 @@ impl Opts {
 
         if !component_flag {
             daemon = true;
+            xim    = true;
             gtk3   = true;
             qt6    = true;
         }
@@ -109,7 +113,7 @@ impl Opts {
             Mode::UserLocal
         };
 
-        Self { mode, daemon, gtk3, qt6 }
+        Self { mode, daemon, xim, gtk3, qt6 }
     }
 }
 
@@ -124,19 +128,20 @@ fn main() {
             eprintln!("y2skk build helper");
             eprintln!();
             eprintln!("USAGE:");
-            eprintln!("  cargo xtask install   [--system | --prefix <path>] [--daemon] [--gtk3] [--qt6]");
+            eprintln!("  cargo xtask install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--qt6]");
             eprintln!("  cargo xtask uninstall [--system | --prefix <path>]");
             eprintln!();
             eprintln!("INSTALL MODES (mutually exclusive):");
             eprintln!("  (default)        Install everything to ~/.local/ (no sudo required).");
             eprintln!("                   GTK3/Qt6 adapters need extra environment variables.");
             eprintln!("  --system         Install to system paths (sudo required for adapters).");
-            eprintln!("                   Daemon installs to /usr/local/bin/.");
+            eprintln!("                   Daemon and XIM server install to /usr/local/bin/.");
             eprintln!("  --prefix <path>  Packaging mode: install all components under <path>.");
-            eprintln!("                   No sudo. IM cache update skipped. No systemd service.");
+            eprintln!("                   No sudo. IM cache update skipped. No systemd services.");
             eprintln!();
             eprintln!("COMPONENT FLAGS (default: all):");
             eprintln!("  --daemon         Daemon (+ systemd service) only");
+            eprintln!("  --xim            XIM server (+ systemd service) only");
             eprintln!("  --gtk3           GTK3 IM module only");
             eprintln!("  --qt6            Qt6 IM plugin only");
             std::process::exit(1);
@@ -152,6 +157,9 @@ fn cmd_install(opts: Opts) {
     if opts.daemon {
         install_daemon(&ws, &opts.mode);
     }
+    if opts.xim {
+        install_xim(&ws, &opts.mode);
+    }
     if opts.gtk3 {
         install_gtk3(&ws, &opts.mode);
     }
@@ -159,9 +167,16 @@ fn cmd_install(opts: Opts) {
         install_qt6(&ws, &opts.mode);
     }
 
-    // Systemd user service: always to ~/.config/systemd/user/, skipped for packaging.
-    if opts.daemon && !opts.mode.is_packaging() {
-        install_systemd_service(&ws, &opts.mode.daemon_prefix());
+    // Systemd user services and D-Bus activation: skipped for packaging.
+    if !opts.mode.is_packaging() {
+        let prefix = opts.mode.daemon_prefix();
+        if opts.daemon {
+            install_daemon_service(&ws, &prefix);
+            install_dbus_activation(&ws, &prefix);
+        }
+        if opts.xim {
+            install_xim_service(&ws, &prefix);
+        }
     }
 
     println!();
@@ -169,10 +184,15 @@ fn cmd_install(opts: Opts) {
 
     match &opts.mode {
         Mode::UserLocal => {
-            if opts.daemon {
+            if opts.daemon || opts.xim {
                 println!();
-                println!("To start the daemon:");
-                println!("  systemctl --user enable --now y2skk-daemon");
+                println!("To start:");
+                if opts.daemon {
+                    println!("  systemctl --user enable --now y2skk-daemon");
+                }
+                if opts.xim {
+                    println!("  systemctl --user enable --now y2skk-xim");
+                }
             }
             // Remind the user which extra env vars are needed for user-local adapters.
             let need_gtk3_env = opts.gtk3 && pkg_config_exists("gtk+-3.0");
@@ -189,10 +209,15 @@ fn cmd_install(opts: Opts) {
             }
         }
         Mode::System => {
-            if opts.daemon {
+            if opts.daemon || opts.xim {
                 println!();
-                println!("To start the daemon:");
-                println!("  systemctl --user enable --now y2skk-daemon");
+                println!("To start:");
+                if opts.daemon {
+                    println!("  systemctl --user enable --now y2skk-daemon");
+                }
+                if opts.xim {
+                    println!("  systemctl --user enable --now y2skk-xim");
+                }
             }
         }
         Mode::Packaging(_) => {}
@@ -210,6 +235,21 @@ fn install_daemon(ws: &Path, mode: &Mode) {
 
     let src  = ws.join("target/release/y2skk-daemon");
     let dest = mode.daemon_prefix().join("bin/y2skk-daemon");
+    let use_sudo = matches!(mode, Mode::System);
+    install_file(&src, &dest, use_sudo);
+}
+
+// ── XIM server ────────────────────────────────────────────────────────────────
+
+fn install_xim(ws: &Path, mode: &Mode) {
+    println!("==> Building y2skk-xim (release)...");
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    run(Command::new(&cargo)
+        .args(["build", "--release", "-p", "xim-server"])
+        .current_dir(ws));
+
+    let src  = ws.join("target/release/y2skk-xim");
+    let dest = mode.daemon_prefix().join("bin/y2skk-xim");
     let use_sudo = matches!(mode, Mode::System);
     install_file(&src, &dest, use_sudo);
 }
@@ -393,30 +433,71 @@ fn install_qt6_cmake(ws: &Path, plugin_dir: Option<&Path>, use_sudo: bool) {
     }
 }
 
-// ── systemd service ────────────────────────────────────────────────────────────
+// ── systemd services ───────────────────────────────────────────────────────────
 
-fn install_systemd_service(ws: &Path, daemon_prefix: &Path) {
+fn install_daemon_service(ws: &Path, prefix: &Path) {
     let src = ws.join("dist/systemd/y2skk-daemon.service");
-    let daemon_path = daemon_prefix.join("bin/y2skk-daemon");
+    let bin_path = prefix.join("bin/y2skk-daemon");
 
-    // Replace the placeholder ExecStart path with the actual installed path.
     let content = fs::read_to_string(&src)
         .unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
     let content = content.replace(
         "%h/.cargo/bin/y2skk-daemon",
-        daemon_path.to_str().unwrap(),
+        bin_path.to_str().unwrap(),
     );
 
+    install_systemd_unit("y2skk-daemon.service", &content);
+}
+
+fn install_xim_service(ws: &Path, prefix: &Path) {
+    let src = ws.join("dist/systemd/y2skk-xim.service");
+    let bin_path = prefix.join("bin/y2skk-xim");
+
+    let content = fs::read_to_string(&src)
+        .unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
+    let content = content.replace(
+        "%h/.cargo/bin/y2skk-xim",
+        bin_path.to_str().unwrap(),
+    );
+
+    install_systemd_unit("y2skk-xim.service", &content);
+}
+
+fn install_systemd_unit(filename: &str, content: &str) {
     let dest_dir = home_dir().join(".config/systemd/user");
-    let dest     = dest_dir.join("y2skk-daemon.service");
+    let dest     = dest_dir.join(filename);
 
     println!("==> Installing systemd user service -> {}", dest.display());
     fs::create_dir_all(&dest_dir)
         .unwrap_or_else(|e| die(&format!("create {}: {e}", dest_dir.display())));
     fs::write(&dest, content)
-        .unwrap_or_else(|e| die(&format!("write service: {e}")));
+        .unwrap_or_else(|e| die(&format!("write {filename}: {e}")));
 
     let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+}
+
+// ── D-Bus activation ──────────────────────────────────────────────────────────
+
+fn install_dbus_activation(ws: &Path, prefix: &Path) {
+    let src = ws.join("dist/dbus/org.y2skk.Daemon.service");
+    let bin_path = prefix.join("bin/y2skk-daemon");
+
+    let content = fs::read_to_string(&src)
+        .unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
+    // Replace the placeholder binary path with the actual installed path.
+    let content = content.replace(
+        "%h/.local/bin/y2skk-daemon",
+        bin_path.to_str().unwrap(),
+    );
+
+    let dest_dir = home_dir().join(".local/share/dbus-1/services");
+    let dest     = dest_dir.join("org.y2skk.Daemon.service");
+
+    println!("==> Installing D-Bus activation file -> {}", dest.display());
+    fs::create_dir_all(&dest_dir)
+        .unwrap_or_else(|e| die(&format!("create {}: {e}", dest_dir.display())));
+    fs::write(&dest, content)
+        .unwrap_or_else(|e| die(&format!("write D-Bus activation: {e}")));
 }
 
 // ── uninstall ─────────────────────────────────────────────────────────────────
@@ -475,12 +556,34 @@ fn cmd_uninstall(opts: Opts) {
         removed = true;
     }
 
-    // Systemd service (always user-local).
-    let service = home_dir().join(".config/systemd/user/y2skk-daemon.service");
-    if service.exists() {
-        println!("  Removing systemd service: {}", service.display());
-        fs::remove_file(&service).ok();
+    // XIM server binary.
+    let xim_path = opts.mode.daemon_prefix().join("bin/y2skk-xim");
+    if xim_path.exists() {
+        println!("  Removing XIM server: {}", xim_path.display());
+        fs::remove_file(&xim_path).unwrap_or_else(|e| eprintln!("  Warning: {e}"));
+        removed = true;
+    }
+
+    // Systemd services (always user-local).
+    let mut need_reload = false;
+    for name in &["y2skk-daemon.service", "y2skk-xim.service"] {
+        let service = home_dir().join(".config/systemd/user").join(name);
+        if service.exists() {
+            println!("  Removing systemd service: {}", service.display());
+            fs::remove_file(&service).ok();
+            need_reload = true;
+            removed = true;
+        }
+    }
+    if need_reload {
         let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+    }
+
+    // D-Bus activation file (always user-local).
+    let dbus_act = home_dir().join(".local/share/dbus-1/services/org.y2skk.Daemon.service");
+    if dbus_act.exists() {
+        println!("  Removing D-Bus activation file: {}", dbus_act.display());
+        fs::remove_file(&dbus_act).ok();
         removed = true;
     }
 

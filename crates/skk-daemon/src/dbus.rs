@@ -81,24 +81,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     tracing::info!("y2skk-daemon started on session bus as org.y2skk.Daemon");
 
-    // Start the integrated XIM server on a blocking thread.
-    let (xim_shutdown, xim_handle) = crate::xim::spawn(Arc::clone(&sessions));
-
-    // Run until Ctrl-C, SIGTERM, or the XIM server exits.
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("Shutting down (signal)");
-        }
-        result = xim_handle => {
-            match result {
-                Ok(Ok(())) => tracing::info!("XIM server exited normally"),
-                Ok(Err(e)) => tracing::error!("XIM server error: {e:#}"),
-                Err(e) => tracing::error!("XIM server task panicked: {e}"),
-            }
-        }
-    }
-
-    // Signal the XIM event loop to exit (no-op if it already finished).
-    xim_shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+    tokio::signal::ctrl_c().await?;
+    tracing::info!("Shutting down (signal)");
     Ok(())
 }

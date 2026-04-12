@@ -1,0 +1,19 @@
+[Unit]
+Description=y2skk XIM input method server
+Documentation=https://github.com/yoh2/y2skk
+After=graphical-session.target y2skk-daemon.service
+PartOf=graphical-session.target
+Wants=y2skk-daemon.service
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/y2skk-xim
+Restart=on-failure
+RestartSec=3
+
+# Harden the service a bit: no new privileges, private /tmp.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=graphical-session.target

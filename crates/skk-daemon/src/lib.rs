@@ -1,4 +1,3 @@
 pub mod config;
-pub mod session;
 pub mod dbus;
-pub mod xim;
+pub mod session;

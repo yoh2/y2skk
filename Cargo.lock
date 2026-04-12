@@ -924,8 +924,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "x11rb",
- "xim",
  "zbus",
 ]
 
@@ -1480,6 +1478,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5dcee45f89572d5a65180af3a84e7ddb24f5ea690a6d3aa9de231281544dd7b7"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "xim-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "skk-ipc",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+ "x11rb",
+ "xim",
+ "zbus",
 ]
 
 [[package]]

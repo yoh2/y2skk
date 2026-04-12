@@ -5,8 +5,6 @@
 //! resulting `IpcAction`s are dispatched back through the XIM protocol
 //! (commit, preedit, forward).
 
-use std::collections::HashMap;
-
 use tracing::{debug, error, info, warn};
 use x11rb::protocol::xproto::KeyPressEvent;
 use xim::{InputStyle, Server, ServerError, ServerHandler, UserInputContext};
@@ -17,7 +15,9 @@ use skk_ipc::{
     ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
 };
 
+use crate::candidates::CandidateWindow;
 use crate::key::KeyMap;
+use crate::preedit::{PreeditWindow, SpotHint};
 
 /// Per-IC data stored inside the xim crate's `UserInputContext`.
 pub struct IcData {
@@ -28,17 +28,18 @@ pub struct IcData {
 pub struct Handler {
     proxy: DaemonProxy,
     keymap: KeyMap,
-    /// Maps session_id back so we can clean up on error paths.
-    sessions: HashMap<SessionId, ()>,
+    preedit: PreeditWindow,
+    candidates: CandidateWindow,
 }
 
 impl Handler {
-    pub fn new(proxy: DaemonProxy, keymap: KeyMap) -> Self {
-        Self {
-            proxy,
-            keymap,
-            sessions: HashMap::new(),
-        }
+    pub fn new(
+        proxy: DaemonProxy,
+        keymap: KeyMap,
+        preedit: PreeditWindow,
+        candidates: CandidateWindow,
+    ) -> Self {
+        Self { proxy, keymap, preedit, candidates }
     }
 }
 
@@ -56,7 +57,6 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
             .create_session("xim")
             .map_err(|e| ServerError::Internal(format!("D-Bus create_session: {e}")))?;
         info!(session_id, "created daemon session for new IC");
-        self.sessions.insert(session_id, ());
         Ok(IcData { session_id })
     }
 
@@ -101,7 +101,6 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
     ) -> Result<(), ServerError> {
         let sid = user_ic.user_data.session_id;
         info!(session_id = sid, "IC destroyed, releasing daemon session");
-        self.sessions.remove(&sid);
         if let Err(e) = self.proxy.destroy_session(sid) {
             warn!(session_id = sid, "D-Bus destroy_session failed: {e}");
         }
@@ -147,7 +146,6 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         _user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> Result<(), ServerError> {
         // Accept whatever the client sends (spot location, area, etc.).
-        // Phase 2 will read spot location for over-the-spot preedit.
         Ok(())
     }
 
@@ -177,7 +175,21 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
             }
         };
 
-        // Dispatch actions — mirrors adapter-gtk3 lines 140–194.
+        // Build spot hint from the IC's preedit_spot and focus/client window.
+        let spot = {
+            let spot = user_ic.ic.preedit_spot();
+            let focus_win = user_ic
+                .ic
+                .app_focus_win()
+                .or(user_ic.ic.app_win())
+                .map(|w| w.get());
+            focus_win.map(|fw| SpotHint {
+                x: spot.x,
+                y: spot.y,
+                focus_win: fw,
+            })
+        };
+
         let mut consumed = false;
         let mut force_passthrough = false;
 
@@ -188,33 +200,44 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
                 }
                 k if k == ACTION_COMMIT => {
                     consumed = true;
+                    // Hide preedit before committing.
+                    if let Err(e) = self.preedit.hide() {
+                        warn!(session_id = sid, "preedit hide failed: {e}");
+                    }
                     if let Err(e) = server.commit(&user_ic.ic, &action.text) {
                         warn!(session_id = sid, "XIM commit failed: {e}");
                     }
                 }
                 k if k == ACTION_UPDATE_PREEDIT => {
                     consumed = true;
-                    if let Err(e) = server.preedit_draw(&mut user_ic.ic, &action.text) {
-                        warn!(session_id = sid, "XIM preedit_draw failed: {e}");
+                    if let Err(e) = self.preedit.update(&action.text, spot.as_ref()) {
+                        warn!(session_id = sid, "preedit update failed: {e}");
                     }
                 }
                 k if k == ACTION_CLEAR_PREEDIT => {
                     consumed = true;
-                    if let Err(e) = server.preedit_draw(&mut user_ic.ic, "") {
-                        warn!(session_id = sid, "XIM preedit clear failed: {e}");
+                    if let Err(e) = self.preedit.hide() {
+                        warn!(session_id = sid, "preedit hide failed: {e}");
                     }
                 }
                 k if k == ACTION_SHOW_CANDIDATES => {
                     consumed = true;
-                    // Phase 3: candidate popup.
-                    debug!(session_id = sid, "ShowCandidates (not yet implemented)");
+                    if let Err(e) = self.candidates.show(
+                        &action.candidates,
+                        &action.text, // selection keys
+                        action.focused,
+                        spot.as_ref(),
+                    ) {
+                        warn!(session_id = sid, "candidate show failed: {e}");
+                    }
                 }
                 k if k == ACTION_HIDE_CANDIDATES => {
                     consumed = true;
-                    debug!(session_id = sid, "HideCandidates (not yet implemented)");
+                    if let Err(e) = self.candidates.hide() {
+                        warn!(session_id = sid, "candidate hide failed: {e}");
+                    }
                 }
                 k if k == ACTION_UPDATE_STATUS => {
-                    // Phase 3: indicator update.
                     debug!(session_id = sid, status = action.text, "UpdateStatus");
                 }
                 _ => {}

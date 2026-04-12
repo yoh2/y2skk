@@ -3,8 +3,10 @@
 //! Bootstraps tracing and hands control to [`server::run`] which owns the
 //! blocking X11 event loop.
 
+mod candidates;
 mod handler;
 mod key;
+mod preedit;
 mod server;
 
 use anyhow::Result;

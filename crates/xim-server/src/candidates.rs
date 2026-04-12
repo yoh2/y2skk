@@ -16,7 +16,7 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::RustConnection;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
-use super::preedit::{SpotHint, FONT_CANDIDATES};
+use crate::preedit::{SpotHint, FONT_CANDIDATES};
 
 /// Normal row: light yellow background, black text.
 const BG_COLOR: u32 = 0xFFFF_E0;

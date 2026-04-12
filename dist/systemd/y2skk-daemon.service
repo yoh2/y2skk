@@ -1,13 +1,11 @@
 [Unit]
 Description=y2skk SKK input method daemon
 Documentation=https://github.com/yoh2/y2skk
-# Start after the D-Bus session bus is available.
 After=dbus.socket
 Requires=dbus.socket
 
 [Service]
-Type=dbus
-BusName=org.y2skk.Daemon
+Type=simple
 ExecStart=%h/.cargo/bin/y2skk-daemon
 Restart=on-failure
 RestartSec=3

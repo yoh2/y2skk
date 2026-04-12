@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.y2skk.Daemon
+Exec=%h/.local/bin/y2skk-daemon
+SystemdService=y2skk-daemon.service
