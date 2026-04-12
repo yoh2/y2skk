@@ -46,11 +46,11 @@ ch	e		ちぇ
 ch	o		ちょ
 c	y	cy
 c	n	cy
-cy	a		ちゃ
-cy	i		ちぃ
-cy	u		ちゅ
-cy	e		ちぇ
-cy	o		ちょ
+cy	a		きゃ
+cy	i		きぃ
+cy	u		きゅ
+cy	e		きぇ
+cy	o		きょ
 c	c	c	っ
 
 # が行
