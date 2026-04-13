@@ -6,7 +6,7 @@
 
 [input]
 # Kana input layout.
-# Built-in options: romaji / azik / azik-jp / dvorakjp / dvorakjp-jp
+# Built-in options: romaji / azik-us / azik-jp / dvorakjp-us / dvorakjp-jp
 kana_layout = "romaji"
 
 # Default input mode on startup.
@@ -38,7 +38,7 @@ conversion_trigger_chars = [",", ".", "を"]
 # Example: system-installed SKK dictionary
 # [[dict.sources]]
 # path = "/usr/share/skk/SKK-JISYO.L"
-# encoding = "euc-jp"   # utf-8 / euc-jp / euc-jisx0213
+# encoding = "euc-jp"   # utf-8 / euc-jp
 # priority = 0
 
 # [[dict.sources]]
