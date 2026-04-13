@@ -13,7 +13,7 @@ use x11rb::rust_connection::RustConnection;
 use xim::x11rb::X11rbServer;
 use xim::XimConnections;
 
-use skk_ipc::proxy::blocking::DaemonProxy;
+use skk_ipc::proxy::reconnect::ReconnectingClient;
 
 use crate::candidates::CandidateWindow;
 use crate::handler::{Handler, IcData};
@@ -40,8 +40,8 @@ pub fn run() -> Result<()> {
         KeyMap::new(conn.as_ref(), conn.setup()).context("failed to fetch keyboard mapping")?;
     info!("keyboard mapping loaded");
 
-    // Connect to skk-daemon via D-Bus (blocking).
-    let proxy = DaemonProxy::connect().context("failed to connect to skk-daemon")?;
+    // Connect to skk-daemon via D-Bus (blocking, with auto-reconnect).
+    let proxy = ReconnectingClient::new().context("failed to connect to skk-daemon")?;
     info!("connected to skk-daemon");
 
     // Create preedit and candidate windows.

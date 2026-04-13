@@ -39,7 +39,7 @@ pub unsafe extern "C" fn im_module_create(context_id: *const c_char) -> *mut c_v
     _y2skk_im_module_create(context_id)
 }
 
-use skk_ipc::proxy::blocking::DaemonProxy;
+use skk_ipc::proxy::reconnect::ReconnectingClient;
 use skk_ipc::{
     ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
     ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
@@ -58,12 +58,12 @@ pub struct Y2skkCallbacks {
     pub update_status: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint),
 }
 
-// ── Global D-Bus proxy ────────────────────────────────────────────────────────
+// ── Global reconnecting client ────────────────────────────────────────────────
 
-static PROXY: OnceLock<DaemonProxy> = OnceLock::new();
+static CLIENT: OnceLock<ReconnectingClient> = OnceLock::new();
 
-fn proxy() -> Option<&'static DaemonProxy> {
-    PROXY.get()
+fn client() -> Option<&'static ReconnectingClient> {
+    CLIENT.get()
 }
 
 // ── Exported Rust functions (called from C shim) ──────────────────────────────
@@ -71,9 +71,9 @@ fn proxy() -> Option<&'static DaemonProxy> {
 /// Called once when the GTK module is loaded. Establishes the D-Bus connection.
 #[no_mangle]
 pub extern "C" fn y2skk_init() -> c_int {
-    match DaemonProxy::connect() {
-        Ok(p) => {
-            let _ = PROXY.set(p);
+    match ReconnectingClient::new() {
+        Ok(c) => {
+            let _ = CLIENT.set(c);
             0
         }
         Err(e) => {
@@ -89,7 +89,7 @@ pub extern "C" fn y2skk_fini() {
     // OnceLock cannot be cleared, but the connection will be dropped with the process.
 }
 
-/// Allocates a new IME session and returns its ID (0 on failure).
+/// Allocates a new IME session and returns a local handle (0 on failure).
 #[no_mangle]
 pub extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
     let label = if app_id.is_null() {
@@ -98,10 +98,10 @@ pub extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
         unsafe { CStr::from_ptr(app_id).to_string_lossy().into_owned() }
     };
 
-    match proxy().and_then(|p| p.create_session(&label).ok()) {
-        Some(id) => id,
+    match client() {
+        Some(c) => c.create_handle(&label),
         None => {
-            eprintln!("y2skk: create_session failed");
+            eprintln!("y2skk: create_session called before init");
             0
         }
     }
@@ -109,9 +109,9 @@ pub extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
 
 /// Releases an IME session.
 #[no_mangle]
-pub extern "C" fn y2skk_destroy_session(session_id: c_uint) {
-    if let Some(p) = proxy() {
-        let _ = p.destroy_session(session_id);
+pub extern "C" fn y2skk_destroy_session(handle: c_uint) {
+    if let Some(c) = client() {
+        c.destroy_handle(handle);
     }
 }
 
@@ -119,22 +119,19 @@ pub extern "C" fn y2skk_destroy_session(session_id: c_uint) {
 /// Returns 1 if the key was consumed by the IME, 0 for passthrough.
 #[no_mangle]
 pub unsafe extern "C" fn y2skk_process_key(
-    session_id: c_uint,
+    handle: c_uint,
     keyval: c_uint,
     modifiers: c_uint,
     is_press: c_int,
     ctx: *mut c_void,
     cbs: *const Y2skkCallbacks,
 ) -> c_int {
-    let Some(p) = proxy() else { return 0 };
+    let Some(c) = client() else { return 0 };
     let cbs = &*cbs;
 
-    let actions = match p.process_key(session_id, keyval, modifiers, is_press != 0) {
+    let actions = match c.process_key(handle, keyval, modifiers, is_press != 0) {
         Ok(a) => a,
-        Err(e) => {
-            eprintln!("y2skk: process_key D-Bus error: {e}");
-            return 0;
-        }
+        Err(_) => return 0,
     };
 
     let mut consumed = false;

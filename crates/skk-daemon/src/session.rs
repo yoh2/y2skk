@@ -8,7 +8,7 @@ use skk_core::engine::{EngineAction, SkkEngine, SkkPhase};
 use skk_core::kana::builtin::builtin_table;
 use skk_core::kana::table::KanaLayout;
 use skk_core::key::{Key, Modifiers};
-use skk_ipc::{IpcAction, SessionId};
+use skk_ipc::{IpcAction, SessionId, ACTION_SESSION_INVALID};
 
 use crate::config::Config;
 
@@ -93,7 +93,13 @@ impl SessionManager {
     ) -> Vec<IpcAction> {
         let Some(engine) = self.sessions.get_mut(&session_id) else {
             tracing::warn!("process_key: unknown session {session_id}");
-            return vec![IpcAction::passthrough()];
+            return vec![IpcAction {
+                kind: ACTION_SESSION_INVALID,
+                text: String::new(),
+                cursor: 0,
+                candidates: vec![],
+                focused: 0,
+            }];
         };
 
         let event = skk_ipc::convert::key_event_from_raw(key_sym, modifiers, is_press);

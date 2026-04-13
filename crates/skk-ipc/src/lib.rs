@@ -19,6 +19,9 @@ pub const ACTION_CLEAR_PREEDIT: u8 = 3;
 pub const ACTION_SHOW_CANDIDATES: u8 = 4;
 pub const ACTION_HIDE_CANDIDATES: u8 = 5;
 pub const ACTION_UPDATE_STATUS: u8 = 6;
+/// Returned by the daemon when the session ID is not recognised (e.g. after a
+/// daemon restart).  Adapters should re-create the session and retry the key.
+pub const ACTION_SESSION_INVALID: u8 = 7;
 
 // ── IpcAction ─────────────────────────────────────────────────────────────────
 

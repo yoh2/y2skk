@@ -9,9 +9,9 @@ use tracing::{debug, error, info, warn};
 use x11rb::protocol::xproto::KeyPressEvent;
 use xim::{InputStyle, Server, ServerError, ServerHandler, UserInputContext};
 
-use skk_ipc::proxy::blocking::DaemonProxy;
+use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
 use skk_ipc::{
-    SessionId, ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
+    ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
     ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
 };
 
@@ -21,12 +21,13 @@ use crate::preedit::{PreeditWindow, SpotHint};
 
 /// Per-IC data stored inside the xim crate's `UserInputContext`.
 pub struct IcData {
-    pub session_id: SessionId,
+    /// Local handle into [`Handler::client`]; maps to a daemon session internally.
+    pub handle: LocalHandle,
 }
 
 /// XIM server handler that bridges XIM events to skk-daemon via D-Bus.
 pub struct Handler {
-    proxy: DaemonProxy,
+    client: ReconnectingClient,
     keymap: KeyMap,
     preedit: PreeditWindow,
     candidates: CandidateWindow,
@@ -34,12 +35,12 @@ pub struct Handler {
 
 impl Handler {
     pub fn new(
-        proxy: DaemonProxy,
+        client: ReconnectingClient,
         keymap: KeyMap,
         preedit: PreeditWindow,
         candidates: CandidateWindow,
     ) -> Self {
-        Self { proxy, keymap, preedit, candidates }
+        Self { client, keymap, preedit, candidates }
     }
 }
 
@@ -52,12 +53,9 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         _server: &mut S,
         _style: InputStyle,
     ) -> Result<Self::InputContextData, ServerError> {
-        let session_id = self
-            .proxy
-            .create_session("xim")
-            .map_err(|e| ServerError::Internal(format!("D-Bus create_session: {e}")))?;
-        info!(session_id, "created daemon session for new IC");
-        Ok(IcData { session_id })
+        let handle = self.client.create_handle("xim");
+        info!(handle, "created local handle for new IC");
+        Ok(IcData { handle })
     }
 
     fn input_styles(&self) -> Self::InputStyleArray {
@@ -87,7 +85,7 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> Result<(), ServerError> {
         debug!(
-            session_id = user_ic.user_data.session_id,
+            handle = user_ic.user_data.handle,
             "IC created, setting event mask"
         );
         // Forward KeyPress (bit 0) events to the handler.
@@ -99,11 +97,9 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         _server: &mut S,
         user_ic: UserInputContext<Self::InputContextData>,
     ) -> Result<(), ServerError> {
-        let sid = user_ic.user_data.session_id;
-        info!(session_id = sid, "IC destroyed, releasing daemon session");
-        if let Err(e) = self.proxy.destroy_session(sid) {
-            warn!(session_id = sid, "D-Bus destroy_session failed: {e}");
-        }
+        let sid = user_ic.user_data.handle;
+        info!(handle = sid, "IC destroyed, releasing daemon session");
+        self.client.destroy_handle(sid);
         Ok(())
     }
 
@@ -122,7 +118,7 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> Result<(), ServerError> {
         debug!(
-            session_id = user_ic.user_data.session_id,
+            handle = user_ic.user_data.handle,
             "IC gained focus"
         );
         Ok(())
@@ -134,7 +130,7 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> Result<(), ServerError> {
         debug!(
-            session_id = user_ic.user_data.session_id,
+            handle = user_ic.user_data.handle,
             "IC lost focus"
         );
         Ok(())
@@ -155,7 +151,7 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         user_ic: &mut UserInputContext<Self::InputContextData>,
         xev: &S::XEvent,
     ) -> Result<bool, ServerError> {
-        let sid = user_ic.user_data.session_id;
+        let sid = user_ic.user_data.handle;
 
         // response_type 2 = KeyPress, 3 = KeyRelease.
         let is_press = xev.response_type & !0x80 == 2;
@@ -167,10 +163,10 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
             return Ok(false);
         }
 
-        let actions = match self.proxy.process_key(sid, keysym, modifiers, is_press) {
+        let actions = match self.client.process_key(sid, keysym, modifiers, is_press) {
             Ok(a) => a,
             Err(e) => {
-                error!(session_id = sid, "D-Bus process_key error: {e}");
+                error!(handle = sid, "process_key error: {:?}", e);
                 return Ok(false);
             }
         };
@@ -202,22 +198,22 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
                     consumed = true;
                     // Hide preedit before committing.
                     if let Err(e) = self.preedit.hide() {
-                        warn!(session_id = sid, "preedit hide failed: {e}");
+                        warn!(handle = sid, "preedit hide failed: {e}");
                     }
                     if let Err(e) = server.commit(&user_ic.ic, &action.text) {
-                        warn!(session_id = sid, "XIM commit failed: {e}");
+                        warn!(handle = sid, "XIM commit failed: {e}");
                     }
                 }
                 k if k == ACTION_UPDATE_PREEDIT => {
                     consumed = true;
                     if let Err(e) = self.preedit.update(&action.text, spot.as_ref()) {
-                        warn!(session_id = sid, "preedit update failed: {e}");
+                        warn!(handle = sid, "preedit update failed: {e}");
                     }
                 }
                 k if k == ACTION_CLEAR_PREEDIT => {
                     consumed = true;
                     if let Err(e) = self.preedit.hide() {
-                        warn!(session_id = sid, "preedit hide failed: {e}");
+                        warn!(handle = sid, "preedit hide failed: {e}");
                     }
                 }
                 k if k == ACTION_SHOW_CANDIDATES => {
@@ -228,17 +224,17 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
                         action.focused,
                         spot.as_ref(),
                     ) {
-                        warn!(session_id = sid, "candidate show failed: {e}");
+                        warn!(handle = sid, "candidate show failed: {e}");
                     }
                 }
                 k if k == ACTION_HIDE_CANDIDATES => {
                     consumed = true;
                     if let Err(e) = self.candidates.hide() {
-                        warn!(session_id = sid, "candidate hide failed: {e}");
+                        warn!(handle = sid, "candidate hide failed: {e}");
                     }
                 }
                 k if k == ACTION_UPDATE_STATUS => {
-                    debug!(session_id = sid, status = action.text, "UpdateStatus");
+                    debug!(handle = sid, status = action.text, "UpdateStatus");
                 }
                 _ => {}
             }

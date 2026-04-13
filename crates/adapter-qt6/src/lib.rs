@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::sync::OnceLock;
 
-use skk_ipc::proxy::blocking::DaemonProxy;
+use skk_ipc::proxy::reconnect::ReconnectingClient;
 use skk_ipc::{
     ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
     ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
@@ -23,19 +23,19 @@ pub struct Y2skkCallbacks {
 
 // ── Global D-Bus proxy ────────────────────────────────────────────────────────
 
-static PROXY: OnceLock<DaemonProxy> = OnceLock::new();
+static CLIENT: OnceLock<ReconnectingClient> = OnceLock::new();
 
-fn proxy() -> Option<&'static DaemonProxy> {
-    PROXY.get()
+fn client() -> Option<&'static ReconnectingClient> {
+    CLIENT.get()
 }
 
 // ── Exported functions (called from C++ shim) ─────────────────────────────────
 
 #[no_mangle]
 pub extern "C" fn y2skk_init() -> c_int {
-    match DaemonProxy::connect() {
-        Ok(p) => {
-            let _ = PROXY.set(p);
+    match ReconnectingClient::new() {
+        Ok(c) => {
+            let _ = CLIENT.set(c);
             0
         }
         Err(e) => {
@@ -55,19 +55,19 @@ pub extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
     } else {
         unsafe { CStr::from_ptr(app_id).to_string_lossy().into_owned() }
     };
-    match proxy().and_then(|p| p.create_session(&label).ok()) {
-        Some(id) => id,
+    match client() {
+        Some(c) => c.create_handle(&label),
         None => {
-            eprintln!("y2skk-qt6: create_session failed");
+            eprintln!("y2skk-qt6: create_session called before init");
             0
         }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn y2skk_destroy_session(session_id: c_uint) {
-    if let Some(p) = proxy() {
-        let _ = p.destroy_session(session_id);
+pub extern "C" fn y2skk_destroy_session(handle: c_uint) {
+    if let Some(c) = client() {
+        c.destroy_handle(handle);
     }
 }
 
@@ -78,14 +78,14 @@ pub extern "C" fn y2skk_destroy_session(session_id: c_uint) {
 ///   0x02000000 = Shift, 0x04000000 = Ctrl, 0x08000000 = Alt, 0x10000000 = Meta
 #[no_mangle]
 pub unsafe extern "C" fn y2skk_process_key(
-    session_id: c_uint,
+    handle: c_uint,
     key_sym: c_uint,
     modifiers: c_uint,
     is_press: c_int,
     ctx: *mut c_void,
     cbs: *const Y2skkCallbacks,
 ) -> c_int {
-    let Some(p) = proxy() else { return 0 };
+    let Some(c) = client() else { return 0 };
     let cbs = &*cbs;
 
     // Convert Qt modifiers to X11 modifier bitmask expected by skk-ipc.
@@ -94,12 +94,9 @@ pub unsafe extern "C" fn y2skk_process_key(
     // Modifiers are needed to determine case: Qt::Key is always uppercase for letters.
     let keysym = qt_key_to_keysym(key_sym, modifiers);
 
-    let actions = match p.process_key(session_id, keysym, x11_mods, is_press != 0) {
+    let actions = match c.process_key(handle, keysym, x11_mods, is_press != 0) {
         Ok(a) => a,
-        Err(e) => {
-            eprintln!("y2skk-qt6: process_key D-Bus error: {e}");
-            return 0;
-        }
+        Err(_) => return 0,
     };
 
     let mut consumed = false;

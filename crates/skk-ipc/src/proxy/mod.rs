@@ -9,6 +9,7 @@
 
 pub mod blocking;
 pub mod nonblocking;
+pub mod reconnect;
 
 /// Well-known D-Bus bus name of the y2skk daemon.
 pub const BUS_NAME: &str = "org.y2skk.Daemon";
