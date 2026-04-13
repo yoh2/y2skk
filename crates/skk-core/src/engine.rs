@@ -460,8 +460,12 @@ impl SkkEngine {
         }
 
         // Escape clears any pending roman buffer and passes through to the application.
+        // With vi_escape enabled, also switch to Ascii mode.
         if event.key == Key::Escape {
             self.kana_state.clear();
+            if self.keybindings.vi_escape {
+                self.phase = SkkPhase::Ascii;
+            }
             return vec![EngineAction::ClearPreedit, EngineAction::Passthrough];
         }
 
@@ -607,6 +611,13 @@ impl SkkEngine {
                 }
                 _ => {}
             }
+        }
+        // With vi_escape enabled, Esc switches to Ascii mode.
+        if event.key == Key::Escape {
+            if self.keybindings.vi_escape {
+                self.phase = SkkPhase::Ascii;
+            }
+            return vec![EngineAction::ClearPreedit, EngineAction::Passthrough];
         }
         if let Some(ch) = event.printable_char() {
             if let Some(wide) = to_wide_ascii(ch) {
@@ -2869,5 +2880,102 @@ mod tests {
         }
         eng.process_key(&return_key());
         assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+    }
+
+    // ── vi_escape tests ───────────────────────────────────────────────────────
+
+    fn vi_escape_engine() -> SkkEngine {
+        let table = builtin_table(KanaLayout::Romaji);
+        SkkEngine::new(table, SkkKeybindings { vi_escape: true, ..SkkKeybindings::default() })
+    }
+
+    fn esc() -> KeyEvent {
+        KeyEvent::press(Key::Escape, Modifiers::empty())
+    }
+
+    #[test]
+    fn test_vi_escape_from_hiragana() {
+        let mut eng = vi_escape_engine();
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+        let actions = eng.process_key(&esc());
+        assert_eq!(eng.phase(), &SkkPhase::Ascii);
+        assert!(actions.contains(&EngineAction::Passthrough));
+    }
+
+    #[test]
+    fn test_vi_escape_from_katakana() {
+        let mut eng = vi_escape_engine();
+        eng.process_key(&press('q')); // → Katakana
+        assert_eq!(eng.phase(), &SkkPhase::Katakana);
+        eng.process_key(&esc());
+        assert_eq!(eng.phase(), &SkkPhase::Ascii);
+    }
+
+    #[test]
+    fn test_vi_escape_from_half_width_katakana() {
+        let mut eng = vi_escape_engine();
+        eng.process_key(&ctrl('q')); // → HalfWidthKatakana
+        assert_eq!(eng.phase(), &SkkPhase::HalfWidthKatakana);
+        eng.process_key(&esc());
+        assert_eq!(eng.phase(), &SkkPhase::Ascii);
+    }
+
+    #[test]
+    fn test_vi_escape_from_wide_ascii() {
+        let mut eng = vi_escape_engine();
+        eng.process_key(&press('L')); // → WideAscii
+        assert_eq!(eng.phase(), &SkkPhase::WideAscii);
+        let actions = eng.process_key(&esc());
+        assert_eq!(eng.phase(), &SkkPhase::Ascii);
+        assert!(actions.contains(&EngineAction::Passthrough));
+    }
+
+    #[test]
+    fn test_vi_escape_from_ascii() {
+        let mut eng = vi_escape_engine();
+        eng.process_key(&press('l')); // → Ascii
+        assert_eq!(eng.phase(), &SkkPhase::Ascii);
+        let actions = eng.process_key(&esc());
+        assert_eq!(eng.phase(), &SkkPhase::Ascii); // stays Ascii
+        assert!(actions.contains(&EngineAction::Passthrough));
+    }
+
+    #[test]
+    fn test_vi_escape_disabled_keeps_hiragana() {
+        let mut eng = engine(); // vi_escape = false (default)
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+        let actions = eng.process_key(&esc());
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana); // phase unchanged
+        assert!(actions.contains(&EngineAction::Passthrough));
+    }
+
+    #[test]
+    fn test_vi_escape_preserves_midashi_cancel() {
+        // Even with vi_escape=true, Esc in ▽ (Midashi) mode cancels composition
+        // and returns to Hiragana — it does NOT switch to Ascii.
+        let mut eng = vi_escape_engine();
+        eng.process_key(&press('A')); // start midashi
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }));
+        eng.process_key(&esc());
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+    }
+
+    #[test]
+    fn test_vi_escape_preserves_selecting_cancel() {
+        // Esc in ▼ (Selecting) mode returns to Midashi — not Ascii.
+        let table = builtin_table(KanaLayout::Romaji);
+        let mut eng = SkkEngine::new(
+            table,
+            SkkKeybindings { vi_escape: true, ..SkkKeybindings::default() },
+        );
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate { word: "亜".into(), annotation: None },
+        ])));
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }));
+        eng.process_key(&esc());
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }));
     }
 }

@@ -43,6 +43,11 @@ pub struct InputConfig {
     /// After the candidate is committed, the trigger character is also output.
     /// Default: [",", ".", "を"].  Set to [] to disable.
     pub conversion_trigger_chars: Vec<String>,
+    /// vi-compatible behaviour: when true, Esc in a normal input phase
+    /// (Hiragana / Katakana / HalfWidthKatakana / WideAscii / Ascii)
+    /// switches the IME to Ascii mode.  Conversion phases (▽/▼ etc.) keep
+    /// their normal cancel semantics.  Default: false.
+    pub vi_escape: bool,
 }
 
 impl Default for InputConfig {
@@ -53,6 +58,7 @@ impl Default for InputConfig {
             default_mode: "ascii".into(),
             toggle_keys: vec!["shift+space".into()],
             conversion_trigger_chars: vec![",".into(), ".".into(), "を".into()],
+            vi_escape: false,
         }
     }
 }

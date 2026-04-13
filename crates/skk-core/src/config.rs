@@ -30,6 +30,11 @@ pub struct SkkKeybindings {
     /// Each entry is a `(Key, Modifiers)` pair.  Default: `[(Key::Space, Modifiers::SHIFT)]`.
     /// This does not take effect during word-registration mode.
     pub toggle_keys: Vec<(crate::key::Key, crate::key::Modifiers)>,
+    /// vi-compatible behaviour: when true, pressing Esc in a regular input phase
+    /// (Hiragana / Katakana / HalfWidthKatakana / WideAscii / Ascii) switches the
+    /// IME to Ascii mode.  Conversion phases (▽/▼ etc.) keep their normal cancel
+    /// semantics.  Default: `false`.
+    pub vi_escape: bool,
 }
 
 impl Default for SkkKeybindings {
@@ -44,6 +49,7 @@ impl Default for SkkKeybindings {
             selection_keys: "asdfjkl;".chars().collect(),
             conversion_trigger_chars: vec![',', '.', 'を'],
             toggle_keys: vec![(crate::key::Key::Space, crate::key::Modifiers::SHIFT)],
+            vi_escape: false,
         }
     }
 }

@@ -25,6 +25,13 @@ toggle_keys = ["shift+space"]
 # Set to [] to disable.
 conversion_trigger_chars = [",", ".", "を"]
 
+# vi-compatible behaviour: when enabled, pressing Esc in a normal input mode
+# (Hiragana, Katakana, Half-width Katakana, Wide-ASCII, or ASCII) switches the
+# IME to ASCII mode so that vi/vim normal-mode keys (hjkl etc.) are not
+# intercepted by the IME.  Conversion phases (▽/▼ and dictionary registration)
+# keep their existing Esc = cancel semantics.
+# vi_escape = false
+
 [user-dict]
 # Path to the user dictionary file.
 # The file is created automatically if it does not exist.

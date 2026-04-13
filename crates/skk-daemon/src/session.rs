@@ -196,6 +196,7 @@ fn keybindings_from_config(config: &Config) -> SkkKeybindings {
         selection_keys: config.candidates.selection_keys.chars().collect(),
         conversion_trigger_chars,
         toggle_keys,
+        vi_escape: config.input.vi_escape,
         ..SkkKeybindings::default()
     }
 }
