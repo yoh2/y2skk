@@ -66,6 +66,9 @@ struct Opts {
     xim: bool,
     gtk3: bool,
     qt6: bool,
+    /// Opt-in: run `systemctl --user try-restart` for installed services.
+    /// Always ignored in Packaging mode (must not touch user environment).
+    restart: bool,
 }
 
 impl Opts {
@@ -76,6 +79,7 @@ impl Opts {
         let mut xim = false;
         let mut gtk3 = false;
         let mut qt6 = false;
+        let mut restart = false;
         let mut component_flag = false;
 
         let mut iter = args.iter();
@@ -86,10 +90,11 @@ impl Opts {
                     let val = iter.next().unwrap_or_else(|| die("--prefix requires a path"));
                     prefix = Some(PathBuf::from(val));
                 }
-                "--daemon" => { daemon = true; component_flag = true; }
-                "--xim"    => { xim    = true; component_flag = true; }
-                "--gtk3"   => { gtk3   = true; component_flag = true; }
-                "--qt6"    => { qt6    = true; component_flag = true; }
+                "--daemon"  => { daemon = true; component_flag = true; }
+                "--xim"     => { xim    = true; component_flag = true; }
+                "--gtk3"    => { gtk3   = true; component_flag = true; }
+                "--qt6"     => { qt6    = true; component_flag = true; }
+                "--restart" => restart = true,
                 other => die(&format!("Unknown option: {other}")),
             }
         }
@@ -113,7 +118,7 @@ impl Opts {
             Mode::UserLocal
         };
 
-        Self { mode, daemon, xim, gtk3, qt6 }
+        Self { mode, daemon, xim, gtk3, qt6, restart }
     }
 }
 
@@ -144,6 +149,11 @@ fn main() {
             eprintln!("  --xim            XIM server (+ systemd service) only");
             eprintln!("  --gtk3           GTK3 IM module only");
             eprintln!("  --qt6            Qt6 IM plugin only");
+            eprintln!();
+            eprintln!("OTHER:");
+            eprintln!("  --restart        After install, run `systemctl --user try-restart`");
+            eprintln!("                   for installed services. Off by default. Ignored in");
+            eprintln!("                   --prefix (packaging) mode so user state is untouched.");
             std::process::exit(1);
         }
     }
@@ -179,49 +189,71 @@ fn cmd_install(opts: Opts) {
         }
     }
 
+    // Optional service restart (opt-in, never in packaging mode).
+    let did_restart = if opts.restart && !opts.mode.is_packaging() {
+        let mut any = false;
+        if opts.daemon { systemctl_try_restart("y2skk-daemon"); any = true; }
+        if opts.xim    { systemctl_try_restart("y2skk-xim");    any = true; }
+        any
+    } else {
+        false
+    };
+
     println!();
     println!("Installation complete.");
 
     match &opts.mode {
-        Mode::UserLocal => {
-            if opts.daemon || opts.xim {
+        Mode::UserLocal | Mode::System => {
+            if (opts.daemon || opts.xim) && !did_restart {
                 println!();
-                println!("To start:");
+                println!("First-time setup (enable & start the service):");
                 if opts.daemon {
                     println!("  systemctl --user enable --now y2skk-daemon");
                 }
                 if opts.xim {
                     println!("  systemctl --user enable --now y2skk-xim");
                 }
-            }
-            // Remind the user which extra env vars are needed for user-local adapters.
-            let need_gtk3_env = opts.gtk3 && pkg_config_exists("gtk+-3.0");
-            let need_qt6_env  = opts.qt6;
-            if need_gtk3_env || need_qt6_env {
                 println!();
-                println!("Add the following to your shell profile or session startup script:");
-                if need_gtk3_env {
-                    println!(r#"  export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules""#);
-                }
-                if need_qt6_env {
-                    println!(r#"  export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH""#);
+                println!("Already enabled?  Apply this update by restarting:");
+                let mut units = String::new();
+                if opts.daemon { units.push_str("y2skk-daemon "); }
+                if opts.xim    { units.push_str("y2skk-xim"); }
+                println!("  systemctl --user try-restart {}", units.trim_end());
+                println!("  (or re-run `cargo xtask install` with --restart)");
+            }
+            if matches!(opts.mode, Mode::UserLocal) {
+                // Remind the user which extra env vars are needed for user-local adapters.
+                let need_gtk3_env = opts.gtk3 && pkg_config_exists("gtk+-3.0");
+                let need_qt6_env  = opts.qt6;
+                if need_gtk3_env || need_qt6_env {
+                    println!();
+                    println!("Add the following to your shell profile or session startup script:");
+                    if need_gtk3_env {
+                        println!(r#"  export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules""#);
+                    }
+                    if need_qt6_env {
+                        println!(r#"  export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH""#);
+                    }
                 }
             }
         }
-        Mode::System => {
-            if opts.daemon || opts.xim {
+        Mode::Packaging(_) => {
+            if opts.restart {
                 println!();
-                println!("To start:");
-                if opts.daemon {
-                    println!("  systemctl --user enable --now y2skk-daemon");
-                }
-                if opts.xim {
-                    println!("  systemctl --user enable --now y2skk-xim");
-                }
+                println!("Note: --restart is ignored in packaging (--prefix) mode.");
             }
         }
-        Mode::Packaging(_) => {}
     }
+}
+
+/// Restart a user systemd unit if it is loaded and enabled.  No-op otherwise,
+/// so it is safe to call on first install where the unit was just created but
+/// the user has not yet `enable`d it.
+fn systemctl_try_restart(unit: &str) {
+    println!("==> systemctl --user try-restart {unit}");
+    let _ = Command::new("systemctl")
+        .args(["--user", "try-restart", unit])
+        .status();
 }
 
 // ── daemon ─────────────────────────────────────────────────────────────────────
@@ -621,22 +653,37 @@ fn parallelism() -> String {
         .to_string()
 }
 
-/// Copy `src` to `dest`, creating parent directories as needed.
-/// Uses `sudo install -D -m 755` when `use_sudo` is true.
+/// Copy `src` to `dest` atomically, creating parent directories as needed.
+/// Writes to a sibling temp file first, then renames over `dest` so a running
+/// binary keeps using its open inode and there is no "Text file busy" failure.
+/// Works the same when `dest` does not yet exist.
 fn install_file(src: &Path, dest: &Path, use_sudo: bool) {
     println!("    {} -> {}", src.display(), dest.display());
+    let dest_dir = dest.parent().unwrap();
+    let tmp_name = format!(
+        ".{}.xtask-tmp.{}",
+        dest.file_name().unwrap().to_string_lossy(),
+        std::process::id(),
+    );
+    let tmp = dest_dir.join(&tmp_name);
+
     if use_sudo {
+        // `install -D` creates parent dirs and sets mode in one shot.
         run_as_root(Command::new("install")
             .args(["-D", "-m", "755",
                    src.to_str().unwrap(),
-                   dest.to_str().unwrap()]));
+                   tmp.to_str().unwrap()]));
+        // Atomic replace.  `mv -f` succeeds whether or not `dest` exists.
+        run_as_root(Command::new("mv")
+            .args(["-f", tmp.to_str().unwrap(), dest.to_str().unwrap()]));
     } else {
-        let dest_dir = dest.parent().unwrap();
         fs::create_dir_all(dest_dir)
             .unwrap_or_else(|e| die(&format!("create {}: {e}", dest_dir.display())));
-        fs::copy(src, dest)
-            .unwrap_or_else(|e| die(&format!("copy to {}: {e}", dest.display())));
-        set_executable(dest);
+        fs::copy(src, &tmp)
+            .unwrap_or_else(|e| die(&format!("copy to {}: {e}", tmp.display())));
+        set_executable(&tmp);
+        fs::rename(&tmp, dest)
+            .unwrap_or_else(|e| die(&format!("rename to {}: {e}", dest.display())));
     }
 }
 
