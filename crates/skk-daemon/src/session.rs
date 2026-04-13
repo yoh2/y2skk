@@ -115,10 +115,9 @@ impl SessionManager {
             })
             .collect();
 
-        // Persist the user dict whenever a conversion is committed.
-        if ipc_actions.iter().any(|a| a.kind == skk_ipc::ACTION_COMMIT) {
-            self.flush_user_dict();
-        }
+        // Persist the user dict whenever it has been mutated (commit, purge, etc.).
+        // `save()` is a no-op when the dict is not dirty, so this is cheap.
+        self.flush_user_dict();
 
         ipc_actions
     }
@@ -283,6 +282,16 @@ impl DictionaryProvider for SharedUserDict {
         self.0.lock()
             .map_err(|_| skk_core::dict::DictError::ReadOnly)?
             .learn(entry)
+    }
+    fn purge(
+        &mut self,
+        midashi: &str,
+        okuri: Option<&str>,
+        word: &str,
+    ) -> Result<bool, skk_core::dict::DictError> {
+        self.0.lock()
+            .map_err(|_| skk_core::dict::DictError::ReadOnly)?
+            .purge(midashi, okuri, word)
     }
     fn priority(&self) -> i32 {
         i32::MAX

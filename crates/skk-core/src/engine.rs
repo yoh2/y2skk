@@ -83,6 +83,20 @@ pub enum SkkPhase {
         candidates: Vec<Candidate>,
         index: usize,
     },
+    /// Confirmation prompt for purging the focused candidate from the user dict.
+    /// Reachable from `Selecting` via uppercase `X`.  All `Selecting` fields are
+    /// preserved so the user can return to them via `no` + Enter.
+    PurgeConfirm {
+        midashi: String,
+        okuri: Option<String>,
+        okuri_key: Option<String>,
+        candidates: Vec<Candidate>,
+        index: usize,
+        /// User-typed yes/no buffer.
+        buf: String,
+        /// Kana mode to return to when purge is executed.
+        return_mode: KanaMode,
+    },
 }
 
 // ── Registration stack ────────────────────────────────────────────────────────
@@ -387,6 +401,9 @@ impl SkkEngine {
                     candidates.clone(),
                     *index,
                 )
+            }
+            SkkPhase::PurgeConfirm { buf, .. } => {
+                self.handle_purge_confirm(event, buf.clone())
             }
         };
 
@@ -1340,10 +1357,11 @@ impl SkkEngine {
 
         // Listing-mode selection: when index >= inline_count, selection keys pick a candidate
         // directly by offset from the current page start.
-        {
+        let in_listing = {
             let inline_count = self.keybindings.inline_count;
             let sel_len = self.keybindings.selection_keys.len();
-            if sel_len > 0 && index >= inline_count {
+            let listing = sel_len > 0 && index >= inline_count;
+            if listing {
                 if let Some(ch) = event.printable_char() {
                     if let Some(sel_idx) = self.keybindings.selection_keys.iter().position(|&k| k == ch) {
                         let cand_idx = index + sel_idx;
@@ -1355,6 +1373,25 @@ impl SkkEngine {
                     }
                 }
             }
+            listing
+        };
+
+        // Uppercase 'X' → enter purge-confirmation flow (ignored in listing mode).
+        if event.key == Key::Char('X') && !event.modifiers.contains(Modifiers::CTRL) {
+            if in_listing {
+                // Listing mode: spec says X must not trigger purge.  Consume the key.
+                return vec![];
+            }
+            self.phase = SkkPhase::PurgeConfirm {
+                midashi,
+                okuri,
+                okuri_key,
+                candidates,
+                index,
+                buf: String::new(),
+                return_mode: self.midashi_display_mode,
+            };
+            return vec![EngineAction::HideCandidates, self.preedit_action()];
         }
 
         // '>', '<', '?' → commit current candidate and enter suffix mode (new ▽ with '>' prefix)
@@ -1434,6 +1471,88 @@ impl SkkEngine {
         if let Some(trigger) = self.conversion_trigger.take() {
             actions.push(EngineAction::Commit(trigger));
         }
+        actions
+    }
+
+    // ── Purge confirmation ────────────────────────────────────────────────────
+
+    fn handle_purge_confirm(
+        &mut self,
+        event: &KeyEvent,
+        mut buf: String,
+    ) -> Vec<EngineAction> {
+        if event.key == Key::Return {
+            return match buf.as_str() {
+                "yes" => self.execute_purge(),
+                "no"  => self.cancel_purge(),
+                _     => vec![],
+            };
+        }
+        if event.key == Key::BackSpace {
+            buf.pop();
+            return self.update_purge_buf(buf);
+        }
+        // Only ASCII alphabetic input is appended; everything else is consumed.
+        if let Some(ch) = event.printable_char() {
+            if ch.is_ascii_alphabetic() && !event.modifiers.contains(Modifiers::CTRL) {
+                buf.push(ch);
+                return self.update_purge_buf(buf);
+            }
+        }
+        vec![]
+    }
+
+    fn update_purge_buf(&mut self, buf: String) -> Vec<EngineAction> {
+        if let SkkPhase::PurgeConfirm {
+            midashi, okuri, okuri_key, candidates, index, return_mode, ..
+        } = std::mem::replace(&mut self.phase, SkkPhase::Hiragana)
+        {
+            self.phase = SkkPhase::PurgeConfirm {
+                midashi, okuri, okuri_key, candidates, index, buf, return_mode,
+            };
+        }
+        vec![self.preedit_action()]
+    }
+
+    fn execute_purge(&mut self) -> Vec<EngineAction> {
+        let SkkPhase::PurgeConfirm {
+            midashi, okuri, candidates, index, return_mode, ..
+        } = std::mem::replace(&mut self.phase, SkkPhase::Hiragana)
+        else {
+            return vec![];
+        };
+
+        let okuri_key_for_dict = okuri.as_deref();
+        let word = candidates[index].word.clone();
+        for dict in self.dict.iter_mut() {
+            let _ = dict.purge(&midashi, okuri_key_for_dict, &word);
+        }
+
+        self.phase = match return_mode {
+            KanaMode::Katakana  => SkkPhase::Katakana,
+            KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
+            KanaMode::Hiragana  => SkkPhase::Hiragana,
+        };
+        self.kana_state.clear();
+        self.conversion_trigger = None;
+        vec![EngineAction::HideCandidates, EngineAction::ClearPreedit]
+    }
+
+    fn cancel_purge(&mut self) -> Vec<EngineAction> {
+        let SkkPhase::PurgeConfirm {
+            midashi, okuri, okuri_key, candidates, index, ..
+        } = std::mem::replace(&mut self.phase, SkkPhase::Hiragana)
+        else {
+            return vec![];
+        };
+        let mut actions = Vec::new();
+        if let Some(show) = self.listing_show_action(&candidates, index) {
+            actions.push(show);
+        }
+        self.phase = SkkPhase::Selecting {
+            midashi, okuri, okuri_key, candidates, index,
+        };
+        actions.push(self.preedit_action());
         actions
     }
 
@@ -1761,6 +1880,9 @@ impl SkkEngine {
                     Some(ann) => format!("▼{}{}{};{}", cand.word, ok, trigger, ann),
                     None => format!("▼{}{}{}", cand.word, ok, trigger),
                 }
+            }
+            SkkPhase::PurgeConfirm { buf, .. } => {
+                format!("really purge? (yes/no): {buf}")
             }
         }
     }
@@ -2606,5 +2728,146 @@ mod tests {
         }
         eng.process_key(&press('.')); // should NOT trigger conversion
         assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }), "should stay in Midashi when triggers disabled");
+    }
+
+    // ── Purge confirmation tests ──────────────────────────────────────────────
+
+    fn return_key() -> KeyEvent {
+        KeyEvent::press(Key::Return, Modifiers::empty())
+    }
+
+    /// Drives the engine into ▼ Selecting mode for "あい", with an entry already
+    /// learned in the user dictionary so `purge` can actually remove something.
+    /// Returns the engine; the user dict is at index 0 (highest priority).
+    fn engine_in_selecting_with_user_dict(words: &[&str]) -> SkkEngine {
+        use crate::dict::file::UserDict;
+        let mut eng = engine();
+        let mut user_dict = UserDict::empty(std::path::PathBuf::from(
+            "/tmp/y2skk_test_purge.dict",
+        ));
+        for w in words {
+            user_dict
+                .learn(DictEntry {
+                    midashi: "あい".into(),
+                    okuri: None,
+                    candidates: vec![Candidate::new(*w)],
+                })
+                .unwrap();
+        }
+        eng.add_dict(Box::new(user_dict));
+
+        // Drive into Selecting on midashi "あい".
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
+        eng
+    }
+
+    #[test]
+    fn test_purge_confirm_yes_removes_from_user_dict() {
+        let mut eng = engine_in_selecting_with_user_dict(&["阿"]);
+
+        // Press uppercase 'X' → enter PurgeConfirm.
+        eng.process_key(&press('X'));
+        assert!(matches!(eng.phase(), SkkPhase::PurgeConfirm { ref buf, .. } if buf.is_empty()));
+
+        // Type "yes" + Enter → execute purge.
+        for ch in "yes".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&return_key());
+
+        // Phase returns to Hiragana (return_mode was Hiragana).
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+
+        // The candidate "阿" must be gone from the user dict.
+        assert!(eng.dict[0].lookup("あい", None).is_none(),
+                "user dict entry should be purged");
+    }
+
+    #[test]
+    fn test_purge_confirm_no_restores_selecting() {
+        let mut eng = engine_in_selecting_with_user_dict(&["阿"]);
+
+        eng.process_key(&press('X'));
+        for ch in "no".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&return_key());
+
+        // Selecting is restored with the same index.
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
+        // User dict untouched.
+        assert!(eng.dict[0].lookup("あい", None).is_some(),
+                "user dict entry must remain");
+    }
+
+    #[test]
+    fn test_purge_confirm_other_word_holds_state() {
+        let mut eng = engine_in_selecting_with_user_dict(&["阿"]);
+        eng.process_key(&press('X'));
+        for ch in "maybe".chars() {
+            eng.process_key(&press(ch));
+        }
+        // Enter with neither "yes" nor "no" → no-op (still in PurgeConfirm).
+        eng.process_key(&return_key());
+        assert!(matches!(eng.phase(), SkkPhase::PurgeConfirm { ref buf, .. } if buf == "maybe"));
+    }
+
+    #[test]
+    fn test_purge_confirm_backspace_edits_buf() {
+        let mut eng = engine_in_selecting_with_user_dict(&["阿"]);
+        eng.process_key(&press('X'));
+        eng.process_key(&press('y'));
+        eng.process_key(&press('e'));
+        eng.process_key(&backspace());
+        assert!(matches!(eng.phase(), SkkPhase::PurgeConfirm { ref buf, .. } if buf == "y"));
+    }
+
+    #[test]
+    fn test_purge_ignored_in_listing_mode() {
+        let table = builtin_table(KanaLayout::Romaji);
+        let keybindings = SkkKeybindings {
+            inline_count: 1,
+            selection_keys: vec!['a', 's'],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(table, keybindings);
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("A"),
+            Candidate::new("B"),
+            Candidate::new("C"),
+        ])));
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=0 inline
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=1 listing
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }));
+
+        // 'X' in listing mode must NOT enter PurgeConfirm.
+        eng.process_key(&press('X'));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }),
+                "X must be ignored in listing mode");
+    }
+
+    #[test]
+    fn test_purge_when_word_not_in_user_dict() {
+        // Stub dict only — user dict is absent, so purge is silently a no-op,
+        // but the phase still returns to the kana mode.
+        let mut eng = engine_with_dict(vec!["亜"]);
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }));
+
+        eng.process_key(&press('X'));
+        for ch in "yes".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&return_key());
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
     }
 }

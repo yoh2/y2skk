@@ -199,6 +199,39 @@ impl DictionaryProvider for UserDict {
         Ok(())
     }
 
+    /// Removes the candidate whose word equals `word` from the user dict.
+    /// Cleans up empty okuri buckets and empty midashi entries so the on-disk
+    /// representation stays compact after `save()`.
+    fn purge(
+        &mut self,
+        midashi: &str,
+        okuri: Option<&str>,
+        word: &str,
+    ) -> Result<bool, DictError> {
+        let Some(okuri_map) = self.entries.get_mut(midashi) else {
+            return Ok(false);
+        };
+        let key = okuri.map(|s| s.to_string());
+        let Some(candidates) = okuri_map.get_mut(&key) else {
+            return Ok(false);
+        };
+
+        let before = candidates.len();
+        candidates.retain(|c| c.word != word);
+        let removed = candidates.len() != before;
+
+        if candidates.is_empty() {
+            okuri_map.remove(&key);
+        }
+        if okuri_map.is_empty() {
+            self.entries.shift_remove(midashi);
+        }
+        if removed {
+            self.dirty = true;
+        }
+        Ok(removed)
+    }
+
     fn priority(&self) -> i32 {
         // User dict has highest priority.
         i32::MAX

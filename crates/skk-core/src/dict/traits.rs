@@ -10,6 +10,19 @@ pub trait DictionaryProvider: Send + Sync {
     /// Records a confirmed conversion into the dictionary (learning).
     fn learn(&mut self, entry: DictEntry) -> Result<(), DictError>;
 
+    /// Removes a single candidate (matched by `word`) from the dictionary.
+    /// Returns `Ok(true)` if a candidate was removed, `Ok(false)` if no matching
+    /// entry exists.  Read-only dictionaries return `Ok(false)` without error
+    /// (the default implementation does so).
+    fn purge(
+        &mut self,
+        _midashi: &str,
+        _okuri: Option<&str>,
+        _word: &str,
+    ) -> Result<bool, DictError> {
+        Ok(false)
+    }
+
     /// Priority used when multiple providers are chained (higher = searched first).
     fn priority(&self) -> i32 {
         0
