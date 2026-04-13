@@ -333,20 +333,24 @@ fn install_gtk3_cmake(ws: &Path, module_dir: Option<&Path>, use_sudo: bool) {
     let build_dir = ws.join("target/xtask-build/gtk3");
     let src_dir   = ws.join("shim/gtk3");
 
-    let module_dir_str = module_dir.map(|p| p.to_str().unwrap().to_string())
-        .unwrap_or_default();
-    // Explicitly pass both CACHE variables so stale cmake cache entries are overridden.
+    // Explicitly pass GTK3_UPDATE_IMMODULE_CACHE so stale cmake cache entries are
+    // overridden.  Only pass GTK3_IM_MODULE_DIR when a non-default path is needed;
+    // passing an empty string would override the pkg-config-derived default with "".
     let update_cache = if use_sudo { "ON" } else { "OFF" };
+
+    let mut cmake_args: Vec<String> = vec![
+        "-S".into(), src_dir.to_str().unwrap().into(),
+        "-B".into(), build_dir.to_str().unwrap().into(),
+        "-DCMAKE_BUILD_TYPE=Release".into(),
+        format!("-DGTK3_UPDATE_IMMODULE_CACHE={update_cache}"),
+    ];
+    if let Some(dir) = module_dir {
+        cmake_args.push(format!("-DGTK3_IM_MODULE_DIR={}", dir.to_str().unwrap()));
+    }
 
     println!("    Configuring...");
     let ok = Command::new("cmake")
-        .args([
-            "-S", src_dir.to_str().unwrap(),
-            "-B", build_dir.to_str().unwrap(),
-            "-DCMAKE_BUILD_TYPE=Release",
-            &format!("-DGTK3_IM_MODULE_DIR={module_dir_str}"),
-            &format!("-DGTK3_UPDATE_IMMODULE_CACHE={update_cache}"),
-        ])
+        .args(&cmake_args)
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
