@@ -100,15 +100,11 @@ z	o		ぞ
 z	 		　
 z	-		〜
 # z+, and z+. are omitted: conflict with dvorakjp kana mappings
-#z	,		‥
-#z	.		…
 z	[		『
 z	]		』
 z	/		・
 z	h	zy
 # z+j and z+k are omitted: conflict with dvorakjp kana mappings
-#z	j		↓
-#z	k		↑
 z	l		→
 z	z	z	っ
 zy	a		じゃ
@@ -779,6 +775,35 @@ vy	q		ゔぉん
 vy	j		ゔぇん
 vy	k		ゔゅん
 vy	x		ゔぃん
+
+# 1-letter fullwidth symbols
+	`		‘
+	~		〜
+	!		！
+	@		＠
+# input `#` is not supported
+	$		＄
+	%		％
+	^		＾
+	&		＆
+	*		＊
+	(		（
+	)		）
+	[		［
+	{		｛
+	]		］
+	}		｝
+	/		／
+	?		？
+	=		＝
+	+		＋
+	|		｜
+	'		’
+	"		”
+	,		，
+	<		＜
+	.		．
+	>		＞
 
 [trans.katakana]
 
