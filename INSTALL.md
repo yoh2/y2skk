@@ -50,9 +50,10 @@ The GTK3 and Qt6 adapters require additional environment variables (printed at t
 | Component | Installed path |
 |-----------|---------------|
 | `y2skk-daemon` | `~/.local/bin/y2skk-daemon` |
+| `y2skk-xim` | `~/.local/bin/y2skk-xim` |
 | GTK3 IM module | `~/.local/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `~/.local/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
-| systemd service | `~/.config/systemd/user/y2skk-daemon.service` |
+| systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
 
 Also updates the GTK3 user module cache (`~/.config/gtk-3.0/gtk.immodules`).
 
@@ -69,14 +70,17 @@ No extra environment variables are needed after this.
 | Component | Installed path |
 |-----------|---------------|
 | `y2skk-daemon` | `/usr/local/bin/y2skk-daemon` |
+| `y2skk-xim` | `/usr/local/bin/y2skk-xim` |
 | GTK3 IM module | `<pkg-config libdir>/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `<qmake QT_INSTALL_PLUGINS>/platforminputcontexts/libqy2skk-qt6-plugin.so` |
-| systemd service | `~/.config/systemd/user/y2skk-daemon.service` |
+| systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
 
 ### Install specific components only
 
 ```sh
 cargo xtask install --daemon          # daemon + systemd service only
+cargo xtask install --xim             # XIM server + systemd service only (user-local)
+cargo xtask install --system --xim    # XIM server to system path (sudo)
 cargo xtask install --gtk3            # GTK3 IM module only (user-local)
 cargo xtask install --system --gtk3   # GTK3 to system path (sudo)
 cargo xtask install --qt6             # Qt6 plugin only (user-local)
@@ -94,6 +98,7 @@ cargo xtask install --prefix /path/to/staging/usr
 | Component | Installed path |
 |-----------|---------------|
 | `y2skk-daemon` | `<prefix>/bin/y2skk-daemon` |
+| `y2skk-xim` | `<prefix>/bin/y2skk-xim` |
 | GTK3 IM module | `<prefix>/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `<prefix>/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 
@@ -154,28 +159,33 @@ See [`dist/config.toml.example`](dist/config.toml.example) for all available opt
 
 ---
 
-## 5. Start the daemon
+## 5. Start the services
 
 ```sh
 systemctl --user enable --now y2skk-daemon
+systemctl --user enable --now y2skk-xim
 ```
+
+`y2skk-daemon` handles all input processing and dictionary lookups.
+`y2skk-xim` is the XIM server for legacy X11 clients (xterm, Chromium, etc.); it connects to the daemon via D-Bus.
 
 Check the status:
 
 ```sh
-systemctl --user status y2skk-daemon
+systemctl --user status y2skk-daemon y2skk-xim
 ```
 
 View live logs:
 
 ```sh
 journalctl --user -u y2skk-daemon -f
+journalctl --user -u y2skk-xim -f
 ```
 
 For more verbose output:
 
 ```sh
-RUST_LOG=debug systemctl --user restart y2skk-daemon
+RUST_LOG=debug systemctl --user restart y2skk-daemon y2skk-xim
 ```
 
 ---
@@ -243,6 +253,22 @@ Common causes:
 3. **System install**: verify the plugin file exists:
    ```sh
    find "$(qmake6 -query QT_INSTALL_PLUGINS)" -name 'libqy2skk*.so' 2>/dev/null
+   ```
+
+### XIM clients do not use y2skk
+
+1. Verify `XMODIFIERS=@im=y2skk` is set: `echo $XMODIFIERS`
+2. Verify `y2skk-xim` is running:
+   ```sh
+   systemctl --user status y2skk-xim
+   ```
+   If it is not running, enable and start it:
+   ```sh
+   systemctl --user enable --now y2skk-xim
+   ```
+3. Check the XIM server log for errors:
+   ```sh
+   journalctl --user -u y2skk-xim -n 50
    ```
 
 ### Reload configuration

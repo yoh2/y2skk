@@ -20,7 +20,7 @@ GTK3 / Qt6 / XIM それぞれのアダプターがデーモンに接続する設
 |---------------|------|
 | GTK3 アプリケーション | ✅ 動作確認済み |
 | Qt6 アプリケーション | ✅ 動作確認済み |
-| XIM クライアント（xterm 等） | ✅ 動作確認済み（デーモンに統合） |
+| XIM クライアント（xterm 等） | ✅ 動作確認済み（`y2skk-xim` 経由） |
 | KDE Plasma（X11） | ✅ 主要ターゲット |
 | Wayland / GTK4 | 🚧 未対応 |
 
@@ -38,7 +38,8 @@ GTK3 / Qt6 / XIM それぞれのアダプターがデーモンに接続する設
 - **モードインジケーター** — モード変更時にフローティングポップアップ表示（自動消去・タイムアウト設定可）
 - **コード入力** — `\XXXX`（JIS コード）、`\uXXXX`（Unicode コードポイント）
 - **Abbrev モード** — ローマ字で直接辞書検索（`/` キー）
-- **XIM サーバー** — デーモンに統合済み（別プロセス不要）
+- **vi 互換 Esc** — オプション機能。通常入力フェーズで Esc を押すと ASCII モードに切り替わる（設定変更可）
+- **XIM サーバー** — D-Bus 経由でデーモンに接続する独立バイナリ `y2skk-xim`
 
 ---
 
@@ -108,16 +109,18 @@ cp dist/config.toml.example ~/.config/y2skk/config.toml
 $EDITOR ~/.config/y2skk/config.toml
 ```
 
-### 4. デーモンの起動
+### 4. サービスの起動
 
 ```sh
 systemctl --user enable --now y2skk-daemon
+systemctl --user enable --now y2skk-xim
 ```
 
 ログの確認：
 
 ```sh
 journalctl --user -u y2skk-daemon -f
+journalctl --user -u y2skk-xim -f
 ```
 
 ---

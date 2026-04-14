@@ -22,7 +22,7 @@ dictionary and session state are shared across all applications.
 |-----------|--------|
 | GTK3 applications | ✅ Working |
 | Qt6 applications | ✅ Working |
-| XIM clients (xterm, etc.) | ✅ Working (integrated into daemon) |
+| XIM clients (xterm, etc.) | ✅ Working (via `y2skk-xim`) |
 | KDE Plasma (X11) | ✅ Primary target |
 | Wayland / GTK4 | 🚧 Not yet implemented |
 
@@ -40,7 +40,8 @@ dictionary and session state are shared across all applications.
 - **Mode indicator** — floating popup on mode change (auto-hide, configurable timeout)
 - **Code input** — `\XXXX` (JIS) and `\uXXXX` (Unicode) character input
 - **Abbrev mode** — ASCII romaji search (`/` key)
-- **XIM server** — built into the daemon, no separate binary needed
+- **vi-compatible Esc** — optional mode; pressing Esc in a normal input phase switches to ASCII mode (configurable)
+- **XIM server** — standalone `y2skk-xim` binary that connects to the daemon via D-Bus
 
 ---
 
@@ -110,16 +111,18 @@ cp dist/config.toml.example ~/.config/y2skk/config.toml
 $EDITOR ~/.config/y2skk/config.toml
 ```
 
-### 4. Start the daemon
+### 4. Start the services
 
 ```sh
 systemctl --user enable --now y2skk-daemon
+systemctl --user enable --now y2skk-xim
 ```
 
 Check the log:
 
 ```sh
 journalctl --user -u y2skk-daemon -f
+journalctl --user -u y2skk-xim -f
 ```
 
 ---
