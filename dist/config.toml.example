@@ -3,6 +3,10 @@
 #
 # All settings are optional. Uncomment and edit the ones you want to change.
 # The values shown below are the defaults.
+#
+# To validate this file without starting the daemon:
+#   y2skk-daemon --check-config
+#   y2skk-daemon --check-config --config /path/to/config.toml
 
 [input]
 # Kana input layout.

@@ -191,6 +191,30 @@ For more verbose output:
 RUST_LOG=debug systemctl --user restart y2skk-daemon y2skk-xim
 ```
 
+### Daemon command-line options
+
+| Option | Description |
+|--------|-------------|
+| `--config <PATH>` / `-c <PATH>` | Load config from `<PATH>` instead of the default XDG location |
+| `--check-config` | Validate the config file and exit without starting the daemon (exit code 0 = OK, 1 = error) |
+
+These options can be combined:
+
+```sh
+y2skk-daemon --check-config
+y2skk-daemon --check-config --config /tmp/my.toml
+```
+
+If you use a non-default config path with systemd, override `ExecStart` in a drop-in file:
+
+```sh
+systemctl --user edit y2skk-daemon
+# Add:
+# [Service]
+# ExecStart=
+# ExecStart=%h/.local/bin/y2skk-daemon --config /path/to/config.toml
+```
+
 ---
 
 ## 6. Quick test

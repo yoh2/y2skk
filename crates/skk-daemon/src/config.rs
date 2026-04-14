@@ -311,6 +311,114 @@ pub fn default_config_path() -> PathBuf {
         .join("config.toml")
 }
 
+// ── Validation ────────────────────────────────────────────────────────────────
+
+/// Error produced when the configuration contains invalid or unusable values.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigValidationError {
+    #[error("invalid default_mode {value:?} (expected: ascii / hiragana / katakana / half-width-katakana / wide-ascii)")]
+    InvalidDefaultMode { value: String },
+    #[error("invalid toggle key {value:?}: {reason}")]
+    InvalidToggleKey { value: String, reason: String },
+    #[error("conversion_trigger_chars entry {value:?} must be a single character")]
+    InvalidConversionTriggerChar { value: String },
+    #[error("kana table error: {0}")]
+    KanaTable(#[from] KanaTableResolveError),
+    #[error("dict source path does not exist: {path}")]
+    DictPathNotFound { path: PathBuf },
+    #[error("user dict parent directory does not exist: {path}")]
+    UserDictParentNotFound { path: PathBuf },
+}
+
+/// Parses `default_mode` strictly, returning `Err` for unrecognised values.
+pub fn parse_default_mode(name: &str) -> Result<skk_core::engine::SkkPhase, ConfigValidationError> {
+    use skk_core::engine::SkkPhase;
+    match name {
+        "hiragana" => Ok(SkkPhase::Hiragana),
+        "katakana" => Ok(SkkPhase::Katakana),
+        "half-width-katakana" | "halfwidth-katakana" => Ok(SkkPhase::HalfWidthKatakana),
+        "wide-ascii" | "wideascii" | "zenkaku" => Ok(SkkPhase::WideAscii),
+        "ascii" | "latin" => Ok(SkkPhase::Ascii),
+        other => Err(ConfigValidationError::InvalidDefaultMode { value: other.to_string() }),
+    }
+}
+
+/// Parses a toggle key string strictly, returning `Err` for unrecognised values.
+pub fn parse_toggle_key(s: &str) -> Result<(skk_core::key::Key, skk_core::key::Modifiers), ConfigValidationError> {
+    use skk_core::key::{Key, Modifiers};
+    let parts: Vec<&str> = s.split('+').collect();
+    let key_str = parts.last().ok_or_else(|| ConfigValidationError::InvalidToggleKey {
+        value: s.to_string(),
+        reason: "empty string".to_string(),
+    })?;
+    let key = match key_str.to_lowercase().as_str() {
+        "space"           => Key::Space,
+        "return" | "enter" => Key::Return,
+        "tab"             => Key::Tab,
+        "escape" | "esc"  => Key::Escape,
+        k if k.chars().count() == 1 => Key::Char(k.chars().next().unwrap()),
+        _ => return Err(ConfigValidationError::InvalidToggleKey {
+            value: s.to_string(),
+            reason: format!("unrecognised key name {:?}", key_str),
+        }),
+    };
+    let mut mods = Modifiers::empty();
+    for mod_str in &parts[..parts.len() - 1] {
+        match mod_str.to_lowercase().as_str() {
+            "shift"          => mods |= Modifiers::SHIFT,
+            "ctrl"|"control" => mods |= Modifiers::CTRL,
+            "alt"            => mods |= Modifiers::ALT,
+            "meta"|"super"   => mods |= Modifiers::META,
+            other => return Err(ConfigValidationError::InvalidToggleKey {
+                value: s.to_string(),
+                reason: format!("unrecognised modifier {:?}", other),
+            }),
+        }
+    }
+    Ok((key, mods))
+}
+
+/// Fully validates a loaded [`Config`], checking value correctness and path
+/// existence.  Returns the first error encountered, or `Ok(())` if the config
+/// is usable to start the daemon.
+pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
+    // 1. default_mode
+    parse_default_mode(&config.input.default_mode)?;
+
+    // 2. toggle_keys — all entries must parse
+    for key in &config.input.toggle_keys {
+        parse_toggle_key(key)?;
+    }
+
+    // 3. conversion_trigger_chars — each must be a single character
+    for entry in &config.input.conversion_trigger_chars {
+        let mut chars = entry.chars();
+        if chars.next().is_none() || chars.next().is_some() {
+            return Err(ConfigValidationError::InvalidConversionTriggerChar { value: entry.clone() });
+        }
+    }
+
+    // 4. kana table — existence + parse
+    load_kana_table(&config.input)?;
+
+    // 5. dict sources — each path must exist
+    for source in &config.dict.sources {
+        if !source.path.exists() {
+            return Err(ConfigValidationError::DictPathNotFound { path: source.path.clone() });
+        }
+    }
+
+    // 6. user dict — parent directory must exist (the file itself is created on demand)
+    let user_dict_path = config.user_dict.effective_path();
+    if let Some(parent) = user_dict_path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            return Err(ConfigValidationError::UserDictParentNotFound { path: parent.to_path_buf() });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,6 +532,84 @@ priority = 0
         };
         let result = load_kana_table(&input);
         assert!(matches!(result, Err(KanaTableResolveError::ExplicitPathNotFound { .. })));
+    }
+
+    // ── Validation tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_toml_syntax_error() {
+        let toml = "this is not valid = toml =[";
+        let err = toml::from_str::<Config>(toml);
+        assert!(err.is_err(), "expected TOML parse error");
+    }
+
+    #[test]
+    fn validate_invalid_default_mode() {
+        let result = parse_default_mode("bar");
+        assert!(matches!(result, Err(ConfigValidationError::InvalidDefaultMode { .. })));
+    }
+
+    #[test]
+    fn validate_valid_default_modes() {
+        for mode in &["ascii", "hiragana", "katakana", "half-width-katakana", "wide-ascii"] {
+            assert!(parse_default_mode(mode).is_ok(), "expected Ok for {mode}");
+        }
+    }
+
+    #[test]
+    fn validate_invalid_toggle_key_modifier() {
+        let result = parse_toggle_key("bogusmod+space");
+        assert!(matches!(result, Err(ConfigValidationError::InvalidToggleKey { .. })));
+    }
+
+    #[test]
+    fn validate_invalid_toggle_key_name() {
+        let result = parse_toggle_key("shift+boguskey");
+        assert!(matches!(result, Err(ConfigValidationError::InvalidToggleKey { .. })));
+    }
+
+    #[test]
+    fn validate_valid_toggle_key() {
+        assert!(parse_toggle_key("shift+space").is_ok());
+        assert!(parse_toggle_key("ctrl+a").is_ok());
+    }
+
+    #[test]
+    fn validate_invalid_conversion_trigger_char() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let table_path = manifest.join("../../dist/tables/romaji.txt");
+        let config = Config {
+            input: InputConfig {
+                kana_table: Some(table_path),
+                conversion_trigger_chars: vec!["ab".to_string()],
+                ..InputConfig::default()
+            },
+            ..Config::default()
+        };
+        let result = validate(&config);
+        assert!(matches!(result, Err(ConfigValidationError::InvalidConversionTriggerChar { .. })));
+    }
+
+    #[test]
+    fn validate_dict_path_not_found() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let table_path = manifest.join("../../dist/tables/romaji.txt");
+        let config = Config {
+            input: InputConfig {
+                kana_table: Some(table_path),
+                ..InputConfig::default()
+            },
+            dict: DictConfig {
+                sources: vec![crate::config::DictSource {
+                    path: PathBuf::from("/nonexistent/SKK-JISYO.L"),
+                    encoding: "utf-8".to_string(),
+                    priority: 0,
+                }],
+            },
+            ..Config::default()
+        };
+        let result = validate(&config);
+        assert!(matches!(result, Err(ConfigValidationError::DictPathNotFound { .. })));
     }
 
     // ── Helper: temporarily override an environment variable ─────────────────

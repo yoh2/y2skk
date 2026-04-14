@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -5,7 +6,7 @@ use zbus::interface;
 
 use skk_ipc::{IpcAction, SessionId};
 
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::session::SessionManager;
 
 // ── D-Bus interface ───────────────────────────────────────────────────────────
@@ -17,11 +18,17 @@ use crate::session::SessionManager;
 pub struct DaemonInterface {
     sessions: Arc<Mutex<SessionManager>>,
     config: Arc<Mutex<Config>>,
+    /// Path of the loaded config file, used for ReloadConfig.
+    config_path: PathBuf,
 }
 
 impl DaemonInterface {
-    pub fn new(sessions: Arc<Mutex<SessionManager>>, config: Arc<Mutex<Config>>) -> Self {
-        Self { sessions, config }
+    pub fn new(
+        sessions: Arc<Mutex<SessionManager>>,
+        config: Arc<Mutex<Config>>,
+        config_path: PathBuf,
+    ) -> Self {
+        Self { sessions, config, config_path }
     }
 }
 
@@ -57,21 +64,40 @@ impl DaemonInterface {
     }
 
     /// Reloads the configuration file from disk.
+    ///
+    /// If loading or validation fails the current configuration is kept and an
+    /// error is logged; the running daemon is not interrupted.
     async fn reload_config(&self) {
-        let new_config = Config::load_default();
-        *self.config.lock().await = new_config;
-        tracing::info!("Config reloaded");
+        match Config::load(&self.config_path) {
+            Ok(new_cfg) => {
+                if let Err(e) = config::validate(&new_cfg) {
+                    tracing::error!(
+                        "Config reload failed (validation): {}: {e}",
+                        self.config_path.display()
+                    );
+                    return;
+                }
+                *self.config.lock().await = new_cfg;
+                tracing::info!("Config reloaded from {}", self.config_path.display());
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Config reload failed (load): {}: {e}",
+                    self.config_path.display()
+                );
+            }
+        }
     }
 }
 
 // ── Daemon startup ────────────────────────────────────────────────────────────
 
 /// Starts the D-Bus service and runs until the process receives a shutdown signal.
-pub async fn run(config: Config) -> anyhow::Result<()> {
+pub async fn run(config: Config, config_path: PathBuf) -> anyhow::Result<()> {
     let sessions = Arc::new(Mutex::new(SessionManager::new(&config)?));
     let config = Arc::new(Mutex::new(config));
 
-    let interface = DaemonInterface::new(sessions.clone(), config);
+    let interface = DaemonInterface::new(sessions.clone(), config, config_path);
 
     let _conn = zbus::connection::Builder::session()?
         .name("org.y2skk.Daemon")?

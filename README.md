@@ -42,6 +42,7 @@ dictionary and session state are shared across all applications.
 - **Abbrev mode** — ASCII romaji search (`/` key)
 - **vi-compatible Esc** — optional mode; pressing Esc in a normal input phase switches to ASCII mode (configurable)
 - **XIM server** — standalone `y2skk-xim` binary that connects to the daemon via D-Bus
+- **Config validation** — `y2skk-daemon --check-config [--config <PATH>]` validates the config file and exits without starting the daemon
 
 ---
 
