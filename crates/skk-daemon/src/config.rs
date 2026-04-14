@@ -1,7 +1,23 @@
-use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+/// Expands a leading `~` component to the user's home directory.
+/// Returns the path unchanged if it does not start with `~` or if the home
+/// directory cannot be determined.
+fn expand_tilde(path: PathBuf) -> PathBuf {
+    let mut components = path.components();
+    if let Some(Component::Normal(c)) = components.next() {
+        if c == OsStr::new("~") {
+            if let Some(home) = dirs::home_dir() {
+                return home.join(components.as_path());
+            }
+        }
+    }
+    path
+}
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -169,10 +185,11 @@ impl Config {
             path: path.to_path_buf(),
             source: e,
         })?;
-        toml::from_str(&src).map_err(|e| ConfigError::Toml {
+        let config: Self = toml::from_str(&src).map_err(|e| ConfigError::Toml {
             path: path.to_path_buf(),
             source: e,
-        })
+        })?;
+        Ok(config.normalize())
     }
 
     /// Loads config from the default XDG location, returning defaults if the file does not exist.
@@ -187,6 +204,20 @@ impl Config {
             }
         }
     }
+
+    /// Expands `~` in all path fields.
+    fn normalize(mut self) -> Self {
+        if let Some(p) = self.input.kana_table {
+            self.input.kana_table = Some(expand_tilde(p));
+        }
+        if let Some(p) = self.user_dict.path {
+            self.user_dict.path = Some(expand_tilde(p));
+        }
+        for source in &mut self.dict.sources {
+            source.path = expand_tilde(source.path.clone());
+        }
+        self
+    }
 }
 
 /// Returns the default config file path: `$XDG_CONFIG_HOME/y2skk/config.toml`.
@@ -195,4 +226,65 @@ pub fn default_config_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("y2skk")
         .join("config.toml")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_tilde_with_slash() {
+        if let Some(home) = dirs::home_dir() {
+            let p = expand_tilde(PathBuf::from("~/foo/bar"));
+            assert_eq!(p, home.join("foo/bar"));
+        }
+    }
+
+    #[test]
+    fn expand_tilde_alone() {
+        if let Some(home) = dirs::home_dir() {
+            let p = expand_tilde(PathBuf::from("~"));
+            assert_eq!(p, home);
+        }
+    }
+
+    #[test]
+    fn expand_tilde_no_tilde() {
+        let p = expand_tilde(PathBuf::from("/usr/share/skk/SKK-JISYO.L"));
+        assert_eq!(p, PathBuf::from("/usr/share/skk/SKK-JISYO.L"));
+    }
+
+    #[test]
+    fn normalize_expands_user_dict_path() {
+        if let Some(home) = dirs::home_dir() {
+            let toml = r#"
+[user-dict]
+path = "~/.local/share/y2skk/user.dict"
+"#;
+            let config: Config = toml::from_str(toml).unwrap();
+            let config = config.normalize();
+            assert_eq!(
+                config.user_dict.path.unwrap(),
+                home.join(".local/share/y2skk/user.dict"),
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_expands_dict_source_path() {
+        if let Some(home) = dirs::home_dir() {
+            let toml = r#"
+[[dict.sources]]
+path = "~/dicts/SKK-JISYO.L"
+encoding = "utf-8"
+priority = 0
+"#;
+            let config: Config = toml::from_str(toml).unwrap();
+            let config = config.normalize();
+            assert_eq!(
+                config.dict.sources[0].path,
+                home.join("dicts/SKK-JISYO.L"),
+            );
+        }
+    }
 }

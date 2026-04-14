@@ -35,12 +35,14 @@ conversion_trigger_chars = [",", ".", "を"]
 [user-dict]
 # Path to the user dictionary file.
 # The file is created automatically if it does not exist.
+# A leading ~ is expanded to the home directory.
 # Default: ~/.local/share/y2skk/user.dict
 # path = "~/.local/share/y2skk/user.dict"
 
 # System dictionaries (multiple entries allowed).
 # Higher priority values are searched first.
 # The user dictionary always has the highest priority.
+# A leading ~ in path is expanded to the home directory.
 
 # Example: system-installed SKK dictionary
 # [[dict.sources]]
