@@ -88,7 +88,12 @@ void StatusWindow::positionAtCursor()
 
     QPoint screenPos(screenBottom.x(), screenBottom.y() + kGap);
 
-    QScreen *scr = focusWin ? focusWin->screen() : nullptr;
+    // Pick the screen based on the popup anchor point (cursor position),
+    // not the focus window, so that windows spanning multiple monitors
+    // still get the popup on the monitor that contains the cursor.
+    QScreen *scr = QGuiApplication::screenAt(screenBottom);
+    if (!scr)
+        scr = focusWin ? focusWin->screen() : nullptr;
     if (!scr)
         scr = QGuiApplication::primaryScreen();
 
