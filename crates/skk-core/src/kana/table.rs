@@ -33,15 +33,6 @@ pub enum KanaMode {
     HalfWidth,
 }
 
-/// Built-in kana layout names
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum KanaLayout {
-    Romaji,
-    AzikUs,
-    AzikJp,
-    DvorakJpUs,
-    DvorakJpJp,
-}
 
 /// Result of a state machine transition
 #[derive(Debug, Clone, PartialEq, Eq)]

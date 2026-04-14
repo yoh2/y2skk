@@ -1960,12 +1960,15 @@ mod tests {
     use super::*;
     use crate::dict::entry::{DictEntry, DictError};
     use crate::dict::traits::DictionaryProvider;
-    use crate::kana::builtin::builtin_table;
-    use crate::kana::table::KanaLayout;
+    use crate::kana::parser::parse_table;
+
+    fn romaji_table() -> KanaTable {
+        parse_table(include_str!("../../../dist/tables/romaji.txt"))
+            .expect("bundled romaji table is invalid")
+    }
 
     fn engine() -> SkkEngine {
-        let table = builtin_table(KanaLayout::Romaji);
-        SkkEngine::new(table, SkkKeybindings::default())
+        SkkEngine::new(romaji_table(), SkkKeybindings::default())
     }
 
     fn press(ch: char) -> KeyEvent {
@@ -2061,7 +2064,7 @@ mod tests {
     fn test_listing_mode_selection_key() {
         // With inline_count=2 and selection_keys="as", after 2 inline candidates
         // the next Space enters listing mode; pressing 'a' or 's' picks a candidate.
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         let keybindings = SkkKeybindings {
             inline_count: 2,
             selection_keys: vec!['a', 's'],
@@ -2098,7 +2101,7 @@ mod tests {
 
     #[test]
     fn test_listing_mode_page_advance() {
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         let keybindings = SkkKeybindings {
             inline_count: 1,
             selection_keys: vec!['a', 's'],
@@ -2129,7 +2132,7 @@ mod tests {
     fn test_cancel_goes_back_one_candidate() {
         // In ▼ mode, the cancel key ('x') should decrement the candidate index.
         // Only when index==0 should it return to midashi.
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         let keybindings = SkkKeybindings {
             inline_count: 3,
             selection_keys: vec!['a', 's'],
@@ -2167,7 +2170,7 @@ mod tests {
     fn test_cancel_in_listing_goes_back_page() {
         // In listing mode, cancel should go back one page; from the first listing
         // page it should return to the last inline candidate.
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         let keybindings = SkkKeybindings {
             inline_count: 1,
             selection_keys: vec!['a', 's'],
@@ -2353,7 +2356,7 @@ mod tests {
     #[test]
     fn test_register_saves_to_user_dict() {
         use crate::dict::file::UserDict;
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         let mut eng = SkkEngine::new(table, SkkKeybindings::default());
         // UserDict with no entries: lookup returns None → register mode; learn actually stores.
         let user_dict = UserDict::empty(std::path::PathBuf::from("/tmp/y2skk_test_register.dict"));
@@ -2726,7 +2729,7 @@ mod tests {
     #[test]
     fn test_conversion_trigger_disabled() {
         // With empty conversion_trigger_chars, '.' in ▽ mode is ignored (not a trigger).
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         let mut eng = SkkEngine::new(table, SkkKeybindings {
             conversion_trigger_chars: vec![],
             ..SkkKeybindings::default()
@@ -2838,7 +2841,7 @@ mod tests {
 
     #[test]
     fn test_purge_ignored_in_listing_mode() {
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         let keybindings = SkkKeybindings {
             inline_count: 1,
             selection_keys: vec!['a', 's'],
@@ -2885,7 +2888,7 @@ mod tests {
     // ── vi_escape tests ───────────────────────────────────────────────────────
 
     fn vi_escape_engine() -> SkkEngine {
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         SkkEngine::new(table, SkkKeybindings { vi_escape: true, ..SkkKeybindings::default() })
     }
 
@@ -2963,7 +2966,7 @@ mod tests {
     #[test]
     fn test_vi_escape_preserves_selecting_cancel() {
         // Esc in ▼ (Selecting) mode returns to Midashi — not Ascii.
-        let table = builtin_table(KanaLayout::Romaji);
+        let table = romaji_table();
         let mut eng = SkkEngine::new(
             table,
             SkkKeybindings { vi_escape: true, ..SkkKeybindings::default() },

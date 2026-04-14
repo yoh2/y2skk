@@ -919,6 +919,7 @@ dependencies = [
  "serde",
  "skk-core",
  "skk-ipc",
+ "tempfile",
  "thiserror",
  "tokio",
  "toml",

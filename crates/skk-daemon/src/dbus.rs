@@ -68,7 +68,7 @@ impl DaemonInterface {
 
 /// Starts the D-Bus service and runs until the process receives a shutdown signal.
 pub async fn run(config: Config) -> anyhow::Result<()> {
-    let sessions = Arc::new(Mutex::new(SessionManager::new(&config)));
+    let sessions = Arc::new(Mutex::new(SessionManager::new(&config)?));
     let config = Arc::new(Mutex::new(config));
 
     let interface = DaemonInterface::new(sessions.clone(), config);

@@ -166,6 +166,7 @@ fn cmd_install(opts: Opts) {
 
     if opts.daemon {
         install_daemon(&ws, &opts.mode);
+        install_tables(&ws, &opts.mode);
     }
     if opts.xim {
         install_xim(&ws, &opts.mode);
@@ -269,6 +270,34 @@ fn install_daemon(ws: &Path, mode: &Mode) {
     let dest = mode.daemon_prefix().join("bin/y2skk-daemon");
     let use_sudo = matches!(mode, Mode::System);
     install_file(&src, &dest, use_sudo);
+}
+
+// ── kana tables ───────────────────────────────────────────────────────────────
+
+fn install_tables(ws: &Path, mode: &Mode) {
+    let src_dir = ws.join("dist/tables");
+    let dest_dir = mode.daemon_prefix().join("share/y2skk/tables");
+    let use_sudo = matches!(mode, Mode::System);
+
+    println!("==> Installing kana tables -> {}", dest_dir.display());
+    fs::create_dir_all(&dest_dir).unwrap_or_else(|e| {
+        if use_sudo {
+            run(Command::new("sudo").args(["mkdir", "-p"]).arg(&dest_dir));
+        } else {
+            panic!("failed to create {}: {e}", dest_dir.display());
+        }
+    });
+
+    for entry in fs::read_dir(&src_dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", src_dir.display()))
+    {
+        let entry = entry.unwrap();
+        let src = entry.path();
+        if src.extension().and_then(|e| e.to_str()) == Some("txt") {
+            let dest = dest_dir.join(entry.file_name());
+            install_file(&src, &dest, use_sudo);
+        }
+    }
 }
 
 // ── XIM server ────────────────────────────────────────────────────────────────
@@ -597,6 +626,18 @@ fn cmd_uninstall(opts: Opts) {
     if xim_path.exists() {
         println!("  Removing XIM server: {}", xim_path.display());
         fs::remove_file(&xim_path).unwrap_or_else(|e| eprintln!("  Warning: {e}"));
+        removed = true;
+    }
+
+    // Kana tables directory.
+    let tables_dir = opts.mode.daemon_prefix().join("share/y2skk/tables");
+    if tables_dir.exists() {
+        println!("  Removing kana tables: {}", tables_dir.display());
+        if matches!(opts.mode, Mode::System) {
+            let _ = Command::new("sudo").args(["rm", "-rf"]).arg(&tables_dir).status();
+        } else {
+            fs::remove_dir_all(&tables_dir).unwrap_or_else(|e| eprintln!("  Warning: {e}"));
+        }
         removed = true;
     }
 

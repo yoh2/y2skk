@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
+use std::env;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -220,6 +221,88 @@ impl Config {
     }
 }
 
+// ── Kana table resolution ─────────────────────────────────────────────────────
+
+/// Error returned when the kana conversion table cannot be located or parsed.
+#[derive(Debug, thiserror::Error)]
+pub enum KanaTableResolveError {
+    #[error("kana table file not found for layout {layout:?}; searched: {searched}")]
+    NotFound { layout: String, searched: String },
+    #[error("kana table path {path} does not exist")]
+    ExplicitPathNotFound { path: PathBuf },
+    #[error("failed to parse kana table {path}: {source}")]
+    Parse { path: PathBuf, source: skk_core::kana::parser::KanaTableError },
+}
+
+/// Returns XDG-based directories in which to search for kana table files.
+///
+/// Search order (highest to lowest priority):
+/// 1. `$XDG_CONFIG_HOME/y2skk/tables/` (default `~/.config/y2skk/tables/`)
+/// 2. `$XDG_DATA_HOME/y2skk/tables/`   (default `~/.local/share/y2skk/tables/`)
+/// 3. Each dir in `$XDG_DATA_DIRS` + `y2skk/tables/` (default `/usr/local/share:/usr/share`)
+pub fn kana_table_search_dirs() -> Vec<PathBuf> {
+    let mut dirs_list = Vec::new();
+
+    // XDG_CONFIG_HOME (or ~/.config)
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::config_dir().unwrap_or_else(|| PathBuf::from(".config")));
+    dirs_list.push(config_home.join("y2skk/tables"));
+
+    // XDG_DATA_HOME (or ~/.local/share)
+    let data_home = env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(|| PathBuf::from(".local/share")));
+    dirs_list.push(data_home.join("y2skk/tables"));
+
+    // XDG_DATA_DIRS (or /usr/local/share:/usr/share)
+    let data_dirs_str = env::var_os("XDG_DATA_DIRS")
+        .unwrap_or_else(|| OsStr::new("/usr/local/share:/usr/share").to_os_string());
+    for part in env::split_paths(&data_dirs_str) {
+        dirs_list.push(part.join("y2skk/tables"));
+    }
+
+    dirs_list
+}
+
+/// Resolves the kana table path from `[input]` config, then loads and returns it.
+///
+/// - If `input.kana_table` is set, use that path directly (must exist).
+/// - Otherwise, search for `<kana_layout>.txt` in the XDG table directories.
+/// - Returns `Err` if the file is not found or fails to parse.
+pub fn load_kana_table(
+    input: &InputConfig,
+) -> Result<skk_core::kana::table::KanaTable, KanaTableResolveError> {
+    use skk_core::kana::parser::load_table;
+
+    let path = if let Some(explicit) = &input.kana_table {
+        if !explicit.exists() {
+            return Err(KanaTableResolveError::ExplicitPathNotFound { path: explicit.clone() });
+        }
+        explicit.clone()
+    } else {
+        let filename = format!("{}.txt", input.kana_layout);
+        let search_dirs = kana_table_search_dirs();
+        let found = search_dirs.iter().map(|d| d.join(&filename)).find(|p| p.exists());
+        match found {
+            Some(p) => p,
+            None => {
+                let searched = search_dirs
+                    .iter()
+                    .map(|d| d.join(&filename).display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(KanaTableResolveError::NotFound {
+                    layout: input.kana_layout.clone(),
+                    searched,
+                });
+            }
+        }
+    };
+
+    load_table(&path).map_err(|e| KanaTableResolveError::Parse { path: path.clone(), source: e })
+}
+
 /// Returns the default config file path: `$XDG_CONFIG_HOME/y2skk/config.toml`.
 pub fn default_config_path() -> PathBuf {
     dirs::config_dir()
@@ -285,6 +368,85 @@ priority = 0
                 config.dict.sources[0].path,
                 home.join("dicts/SKK-JISYO.L"),
             );
+        }
+    }
+
+    #[test]
+    fn resolve_kana_table_via_xdg_data_home() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let tables_dir = tmp.path().join("y2skk/tables");
+        std::fs::create_dir_all(&tables_dir).unwrap();
+        let table_file = tables_dir.join("romaji.txt");
+        std::fs::copy("../../dist/tables/romaji.txt", &table_file).unwrap();
+
+        // Override XDG_DATA_HOME so the search finds our temp dir.
+        // Also clear XDG_CONFIG_HOME to avoid any accidental match there.
+        let _guard = EnvGuard::set("XDG_DATA_HOME", tmp.path().to_str().unwrap());
+        let _guard2 = EnvGuard::set("XDG_CONFIG_HOME", "/nonexistent");
+        let _guard3 = EnvGuard::set("XDG_DATA_DIRS", "/nonexistent");
+
+        let input = InputConfig { kana_layout: "romaji".into(), ..InputConfig::default() };
+        let result = load_kana_table(&input);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[test]
+    fn resolve_kana_table_not_found() {
+        let _guard  = EnvGuard::set("XDG_DATA_HOME",   "/nonexistent");
+        let _guard2 = EnvGuard::set("XDG_CONFIG_HOME", "/nonexistent");
+        let _guard3 = EnvGuard::set("XDG_DATA_DIRS",   "/nonexistent");
+
+        let input = InputConfig { kana_layout: "romaji".into(), ..InputConfig::default() };
+        let result = load_kana_table(&input);
+        assert!(matches!(result, Err(KanaTableResolveError::NotFound { .. })));
+    }
+
+    #[test]
+    fn resolve_kana_table_explicit_path() {
+        // Absolute path to the dist table (works from crate root during `cargo test`)
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = manifest.join("../../dist/tables/romaji.txt");
+        let input = InputConfig {
+            kana_layout: "romaji".into(),
+            kana_table: Some(path),
+            ..InputConfig::default()
+        };
+        let result = load_kana_table(&input);
+        assert!(result.is_ok(), "expected Ok, got {result:?}");
+    }
+
+    #[test]
+    fn resolve_kana_table_explicit_path_missing() {
+        let input = InputConfig {
+            kana_layout: "romaji".into(),
+            kana_table: Some(PathBuf::from("/nonexistent/romaji.txt")),
+            ..InputConfig::default()
+        };
+        let result = load_kana_table(&input);
+        assert!(matches!(result, Err(KanaTableResolveError::ExplicitPathNotFound { .. })));
+    }
+
+    // ── Helper: temporarily override an environment variable ─────────────────
+
+    struct EnvGuard {
+        key: String,
+        original: Option<std::ffi::OsString>,
+    }
+    impl EnvGuard {
+        fn set(key: &str, val: &str) -> Self {
+            let original = env::var_os(key);
+            // SAFETY: tests run single-threaded (each test in its own process in cargo test).
+            unsafe { env::set_var(key, val) };
+            Self { key: key.to_string(), original }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: same as in EnvGuard::set.
+            match &self.original {
+                Some(v) => unsafe { env::set_var(&self.key, v) },
+                None    => unsafe { env::remove_var(&self.key) },
+            }
         }
     }
 }

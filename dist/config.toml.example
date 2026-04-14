@@ -6,8 +6,17 @@
 
 [input]
 # Kana input layout.
-# Built-in options: romaji / azik-us / azik-jp / dvorakjp-us / dvorakjp-jp
+# The value is used as the filename stem to locate the table file:
+#   <data dir>/y2skk/tables/<kana_layout>.txt
+# Search order: $XDG_CONFIG_HOME, $XDG_DATA_HOME, $XDG_DATA_DIRS.
+# Built-in layouts installed by `cargo xtask install`:
+#   romaji / azik-us / azik-jp / dvorakjp-us / dvorakjp-jp
 kana_layout = "romaji"
+
+# Explicit path to a kana table file.
+# When set, kana_layout is ignored.
+# A leading ~ is expanded to the home directory.
+# kana_table = "~/.config/y2skk/tables/my-layout.txt"
 
 # Default input mode on startup.
 # Options: ascii / hiragana / katakana / half-width-katakana / wide-ascii

@@ -51,6 +51,7 @@ The GTK3 and Qt6 adapters require additional environment variables (printed at t
 |-----------|---------------|
 | `y2skk-daemon` | `~/.local/bin/y2skk-daemon` |
 | `y2skk-xim` | `~/.local/bin/y2skk-xim` |
+| Kana tables | `~/.local/share/y2skk/tables/` |
 | GTK3 IM module | `~/.local/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `~/.local/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
@@ -71,6 +72,7 @@ No extra environment variables are needed after this.
 |-----------|---------------|
 | `y2skk-daemon` | `/usr/local/bin/y2skk-daemon` |
 | `y2skk-xim` | `/usr/local/bin/y2skk-xim` |
+| Kana tables | `/usr/local/share/y2skk/tables/` |
 | GTK3 IM module | `<pkg-config libdir>/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `<qmake QT_INSTALL_PLUGINS>/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
@@ -99,6 +101,7 @@ cargo xtask install --prefix /path/to/staging/usr
 |-----------|---------------|
 | `y2skk-daemon` | `<prefix>/bin/y2skk-daemon` |
 | `y2skk-xim` | `<prefix>/bin/y2skk-xim` |
+| Kana tables | `<prefix>/share/y2skk/tables/` |
 | GTK3 IM module | `<prefix>/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `<prefix>/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 
@@ -254,6 +257,34 @@ Common causes:
    ```sh
    find "$(qmake6 -query QT_INSTALL_PLUGINS)" -name 'libqy2skk*.so' 2>/dev/null
    ```
+
+### Daemon fails to start: kana table not found
+
+If the log shows a "kana table not found" error:
+
+```sh
+journalctl --user -u y2skk-daemon -n 20
+```
+
+The daemon searches for `<kana_layout>.txt` (default `romaji.txt`) in:
+
+1. `~/.config/y2skk/tables/`
+2. `~/.local/share/y2skk/tables/`
+3. Directories in `$XDG_DATA_DIRS` (e.g. `/usr/local/share/y2skk/tables/`, `/usr/share/y2skk/tables/`)
+
+Reinstall the daemon to restore the tables:
+
+```sh
+cargo xtask install --daemon          # user-local
+cargo xtask install --system --daemon # system-wide (sudo)
+```
+
+To use a custom table file, set `kana_table` in `config.toml`:
+
+```toml
+[input]
+kana_table = "~/.config/y2skk/tables/my-layout.txt"
+```
 
 ### XIM clients do not use y2skk
 

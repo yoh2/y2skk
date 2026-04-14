@@ -5,8 +5,7 @@ use skk_core::config::SkkKeybindings;
 use skk_core::dict::file::{DictEncoding, FileDict, UserDict};
 use skk_core::dict::traits::DictionaryProvider;
 use skk_core::engine::{EngineAction, SkkEngine, SkkPhase};
-use skk_core::kana::builtin::builtin_table;
-use skk_core::kana::table::KanaLayout;
+use skk_core::kana::table::KanaTable;
 use skk_core::key::{Key, Modifiers};
 use skk_ipc::{IpcAction, SessionId, ACTION_SESSION_INVALID};
 
@@ -19,7 +18,8 @@ use crate::config::Config;
 pub struct SessionManager {
     sessions: HashMap<SessionId, SkkEngine>,
     next_id: SessionId,
-    layout: KanaLayout,
+    /// Loaded kana conversion table shared by all sessions.
+    kana_table: KanaTable,
     keybindings: SkkKeybindings,
     initial_phase: SkkPhase,
     /// Shared read-only dictionaries (system dicts, loaded once at startup).
@@ -31,15 +31,15 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    pub fn new(config: &Config) -> Self {
-        let layout = parse_layout(&config.input.kana_layout);
+    pub fn new(config: &Config) -> Result<Self, crate::config::KanaTableResolveError> {
+        let kana_table = crate::config::load_kana_table(&config.input)?;
         let (dicts, user_dict) = load_dicts(config);
         let keybindings = keybindings_from_config(config);
         let initial_phase = parse_default_mode(&config.input.default_mode);
-        Self {
+        Ok(Self {
             sessions: HashMap::new(),
             next_id: 1,
-            layout,
+            kana_table,
             keybindings,
             initial_phase,
             dicts,
@@ -49,7 +49,7 @@ impl SessionManager {
             } else {
                 0
             },
-        }
+        })
     }
 
     /// Creates a new session and returns its ID.
@@ -57,8 +57,7 @@ impl SessionManager {
         let id = self.next_id;
         self.next_id += 1;
 
-        let table = builtin_table(self.layout);
-        let mut engine = SkkEngine::new(table, self.keybindings.clone())
+        let mut engine = SkkEngine::new(self.kana_table.clone(), self.keybindings.clone())
             .with_initial_phase(self.initial_phase.clone());
 
         // Attach shared dictionaries (highest-priority first).
@@ -248,15 +247,6 @@ fn parse_default_mode(name: &str) -> SkkPhase {
     }
 }
 
-fn parse_layout(name: &str) -> KanaLayout {
-    match name {
-        "azik" | "azik-us" => KanaLayout::AzikUs,
-        "azik-jp" => KanaLayout::AzikJp,
-        "dvorakjp" | "dvorakjp-us" => KanaLayout::DvorakJpUs,
-        "dvorakjp-jp" => KanaLayout::DvorakJpJp,
-        _ => KanaLayout::Romaji,
-    }
-}
 
 // ── Arc wrappers so shared dicts satisfy DictionaryProvider ──────────────────
 
