@@ -99,14 +99,16 @@ z	e		ぜ
 z	o		ぞ
 z	 		　
 z	-		〜
-z	,		‥
-z	.		…
+# z+, and z+. are omitted: conflict with dvorakjp kana mappings
+#z	,		‥
+#z	.		…
 z	[		『
 z	]		』
 z	/		・
 z	h	zy
-z	j		↓
-z	k		↑
+# z+j and z+k are omitted: conflict with dvorakjp kana mappings
+#z	j		↓
+#z	k		↑
 z	l		→
 z	z	z	っ
 zy	a		じゃ
@@ -172,7 +174,6 @@ n	u		ぬ
 n	e		ね
 n	o		の
 n	n		ん
-n	;		ん
 n	y	ny
 ny	a		にゃ
 ny	i		にぃ
@@ -483,8 +484,12 @@ sy	x		しぃん
 
 # ざ行 contractions (z+, z+. z+j z+k omitted: conflict with symbol mappings)
 z	:		ざい
+z	,		ぞう
+z	.		ぜい
 z	;		ざん
 z	q		ぞん
+z	j		ぜん
+z	k		ずん
 z	x		じん
 
 # zy contractions
@@ -567,10 +572,11 @@ dh	j		でぇん
 dh	k		でゅん
 dh	x		でぃん
 
-# な行 contractions (n+; omitted: conflicts with ん)
+# な行 contractions
 n	:		ない
 n	,		のう
 n	.		ねい
+n	;		なん
 n	q		のん
 n	j		ねん
 n	k		ぬん
