@@ -92,9 +92,21 @@ impl KanaTable {
         // Wildcard match: `\*` in the table file is stored as input == '*' and matches any char.
         // When the wildcard rule has no explicit next state (to == ""), the matched character is
         // retried from the start state so it is not silently dropped (e.g. "nka" → "ん" + "か").
+        //
+        // Safety: if the wildcard fires from the *empty* start state with to == "", returning
+        // OkRetry would cause infinite recursion (the retry would hit the same wildcard again).
+        // In that case, return Ok instead — the output is emitted but no retry is issued.
+        // A wildcard on the empty state means every undefined char maps to the same output,
+        // which is unusual and typically a table authoring mistake (e.g. using plain `*` in the
+        // input column when a literal asterisk mapping was intended — note that `*` is reserved
+        // as the wildcard marker and cannot be used as a literal input character).
         if let Some(t) = transitions.iter().find(|t| t.from == state && t.input == '*') {
             let output = self.convert_output(&t.output, mode);
             if t.to.is_empty() {
+                if state.is_empty() {
+                    // Wildcard from start state: emit output only, no retry (would loop).
+                    return TransitionResult::Ok { output, next_state: String::new() };
+                }
                 return TransitionResult::OkRetry { output, retry: input };
             }
             return TransitionResult::Ok { output, next_state: t.to.clone() };

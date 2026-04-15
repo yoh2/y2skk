@@ -3304,4 +3304,74 @@ mod tests {
         // Restored to Abbrev with buf = "abc"
         assert!(matches!(eng.phase(), SkkPhase::Abbrev { buf } if buf == "abc"));
     }
+
+    fn dvorakjp_us_table() -> KanaTable {
+        parse_table(include_str!("../../../dist/tables/dvorakjp-us.txt"))
+            .expect("dvorakjp-us table must parse without error")
+    }
+
+    fn dvorakjp_engine() -> SkkEngine {
+        SkkEngine::new(dvorakjp_us_table(), SkkKeybindings::default())
+    }
+
+    /// Regression: undefined chars in dvorakjp-us must not cause stack overflow.
+    ///
+    /// Root cause: `\t*\t\t＊` in the 1-letter fullwidth section used plain `*` in the
+    /// input column.  The `*` char is the wildcard marker — it matches ANY input from
+    /// the given state.  With an empty-state wildcard and `to=""`, every undefined char
+    /// triggered `OkRetry { retry: same_char }`, causing infinite mutual recursion between
+    /// `feed_kana` / `handle_midashi` and the transition.
+    ///
+    /// Fixed by:
+    ///   1. Removing the `*` rule from the table (wildcard `*` cannot represent a
+    ///      literal asterisk input — it is a reserved marker character).
+    ///   2. Guarding `KanaTable::transition` against empty-state wildcard returning
+    ///      OkRetry (returns Ok instead, so even a mistaken future rule won't crash).
+    #[test]
+    fn test_dvorakjp_undefined_chars_no_stack_overflow() {
+        // Previously caused stack overflow via empty-state wildcard + OkRetry loop.
+        let undefined = ['#', ':', '_', '*'];
+
+        // Hiragana (direct) mode
+        for &ch in &undefined {
+            let mut eng = dvorakjp_engine();
+            let _actions = eng.process_key(&press(ch));
+        }
+
+        // ▽ (midashi) mode — this was the primary crash trigger
+        for &ch in &undefined {
+            let mut eng = dvorakjp_engine();
+            eng.process_key(&KeyEvent::press(Key::Char('A'), Modifiers::empty()));
+            eng.process_key(&press('a')); // adds "あ" to midashi
+            let _actions = eng.process_key(&press(ch));
+        }
+
+        // abbrev mode
+        for &ch in &undefined {
+            let mut eng = dvorakjp_engine();
+            eng.process_key(&press('/'));
+            let _actions = eng.process_key(&press(ch));
+        }
+    }
+
+    /// Defined 1-letter fullwidth symbols in dvorakjp-us should commit the fullwidth variant.
+    /// Note: `*` is NOT included — it is the wildcard marker and cannot be mapped.
+    #[test]
+    fn test_dvorakjp_fullwidth_symbols_direct_mode() {
+        let cases: &[(char, &str)] = &[
+            ('!', "！"),
+            ('?', "？"),
+            ('=', "＝"),
+            ('+', "＋"),
+        ];
+        for &(input, expected_output) in cases {
+            let mut eng = dvorakjp_engine();
+            let actions = eng.process_key(&press(input));
+            let committed: Vec<&str> = actions.iter().filter_map(|a| {
+                if let EngineAction::Commit(s) = a { Some(s.as_str()) } else { None }
+            }).collect();
+            assert_eq!(committed, vec![expected_output],
+                "dvorakjp-us: pressing {:?} should commit {:?}", input, expected_output);
+        }
+    }
 }

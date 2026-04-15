@@ -781,12 +781,12 @@ vy	x		ゔぃん
 	~		〜
 	!		！
 	@		＠
-# input `#` is not supported
+# input `#` is not supported (the `#` character is reserved as a comment marker)
+# input `*` is not supported (the `*` character is reserved as the wildcard marker)
 	$		＄
 	%		％
 	^		＾
 	&		＆
-	*		＊
 	(		（
 	)		）
 	[		［
