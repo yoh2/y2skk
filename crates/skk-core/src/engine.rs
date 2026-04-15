@@ -4,6 +4,12 @@ use crate::dict::traits::DictionaryProvider;
 use crate::kana::table::{hiragana_to_halfwidth, hiragana_to_katakana, KanaMode, KanaTable, TransitionResult};
 use crate::key::{Key, KeyEvent, Modifiers};
 
+/// Separator inserted between the user-typed portion and the completion ghost
+/// in the preedit string.  Placed at the ghost boundary so it is rendered in
+/// the ghost style (e.g. grey) on colour-capable renderers, and appears as a
+/// plain ASCII character on terminal emulators that ignore IME colour attributes.
+const GHOST_SEPARATOR: &str = "|";
+
 // ── Public types ─────────────────────────────────────────────────────────────
 
 /// Preedit text sent to the application's input context.
@@ -1982,7 +1988,7 @@ impl SkkEngine {
                     // "▽" is U+25BD = 3 UTF-8 bytes.
                     let ghost_suffix = &state.preview[kana_buf.len()..];
                     let cursor_pos = 3 + display.len();
-                    let inner = format!("▽{display}{ghost_suffix}");
+                    let inner = format!("▽{display}{GHOST_SEPARATOR}{ghost_suffix}");
 
                     if let Some(frame) = self.register_stack.last() {
                         let depth = self.register_stack.len();
@@ -2766,8 +2772,8 @@ mod tests {
         eng.process_key(&press('a')); // kana_buf = "か"
 
         let preedit = eng.build_preedit();
-        // text should include ghost suffix "らだ" after "▽か"
-        assert!(preedit.text.contains("からだ"), "ghost text should contain completion: {:?}", preedit.text);
+        // text should be "▽か|らだ" — user typed "か", separator "|", ghost "らだ"
+        assert!(preedit.text.contains("|らだ"), "ghost text should contain separator+ghost: {:?}", preedit.text);
     }
 
     #[test]
@@ -2834,19 +2840,18 @@ mod tests {
         eng.process_key(&press('a')); // kana_buf = "か"
 
         let preedit = eng.build_preedit();
-        // preedit.text should be "▽かからだ" (user typed "か", ghost "からだ"[1..] = "らだ")
-        // Wait: preview = "からだ", kana_buf = "か", ghost_suffix = "らだ"
-        // text = "▽からだ"
+        // preview = "からだ", kana_buf = "か", ghost_suffix = "らだ"
+        // text = "▽か|らだ"  (separator "|" is first byte of ghost region)
         // cursor = "▽か".len() = 3 + 3 = 6
-        // ghost_start = Some(6)
+        // ghost_start = Some(6)  — points to "|"
         assert!(preedit.ghost_start.is_some(), "ghost_start should be Some when completion is active");
         let gs = preedit.ghost_start.unwrap();
         // ghost_start should equal cursor (boundary between user input and ghost)
         assert_eq!(gs, preedit.cursor,
             "ghost_start should equal cursor; preedit={:?}", preedit);
-        // Verify ghost text starts where expected
-        assert_eq!(&preedit.text[gs..], "らだ",
-            "ghost portion of preedit text should be 'らだ'; preedit={:?}", preedit);
+        // Verify ghost region starts with the separator then the ghost suffix
+        assert_eq!(&preedit.text[gs..], "|らだ",
+            "ghost portion of preedit text should be '|らだ'; preedit={:?}", preedit);
     }
 
     #[test]
