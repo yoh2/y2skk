@@ -178,7 +178,7 @@ ny	e		にぇ
 ny	o		にょ
 # DvorakJP: nh is an alias for ny (h is adjacent to n on Dvorak home row)
 n	h	ny
-n	\*		ん
+n	*		ん
 
 # は行
 	h	h
@@ -781,8 +781,8 @@ vy	x		ゔぃん
 	~		〜
 	!		！
 	@		＠
-# input `#` is not supported (the `#` character is reserved as a comment marker)
-# input `*` is not supported (the `*` character is reserved as the wildcard marker)
+	\#		＃
+	\*		＊
 	$		＄
 	%		％
 	^		＾

@@ -3355,7 +3355,6 @@ mod tests {
     }
 
     /// Defined 1-letter fullwidth symbols in dvorakjp-us should commit the fullwidth variant.
-    /// Note: `*` is NOT included — it is the wildcard marker and cannot be mapped.
     #[test]
     fn test_dvorakjp_fullwidth_symbols_direct_mode() {
         let cases: &[(char, &str)] = &[
@@ -3363,6 +3362,8 @@ mod tests {
             ('?', "？"),
             ('=', "＝"),
             ('+', "＋"),
+            ('#', "＃"),
+            ('*', "＊"),
         ];
         for &(input, expected_output) in cases {
             let mut eng = dvorakjp_engine();

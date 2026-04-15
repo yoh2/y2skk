@@ -3,7 +3,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use super::table::{KanaTable, KanaTransition};
+use super::table::{KanaInput, KanaTable, KanaTransition};
 
 #[derive(Debug, Error)]
 pub enum KanaTableError {
@@ -33,12 +33,12 @@ pub fn parse_table(src: &str) -> Result<KanaTable, KanaTableError> {
     for (lineno, raw) in src.lines().enumerate() {
         let line_num = lineno + 1;
 
-        // Strip comments, then trailing spaces/CR/LF (but NOT tabs, which are field separators)
-        let line = match raw.find('#') {
+        // Strip comments (first unescaped `#`), then trailing spaces/CR/LF (but NOT tabs)
+        let line = match find_comment_start(raw) {
             Some(pos) => &raw[..pos],
             None => raw,
         };
-        let line = line.trim_end_matches(|c: char| matches!(c, ' ' | '\r' | '\n'));
+        let line = line.trim_end_matches(|c: char| matches!(c, ' ' | '\t' | '\r' | '\n'));
 
         if line.is_empty() {
             continue;
@@ -94,6 +94,91 @@ pub fn load_table(path: &Path) -> Result<KanaTable, KanaTableError> {
     parse_table(&src)
 }
 
+/// Returns the byte position of the first unescaped `#` in `raw`, or `None`.
+/// A `#` preceded by an odd number of `\` characters is considered escaped and skipped.
+fn find_comment_start(raw: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (i, c) in raw.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '#' => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Resolves backslash escape sequences in a field string.
+///
+/// Supported escapes:
+/// - `\#`  → `#`
+/// - `\*`  → `*`
+/// - `\\`  → `\`
+///
+/// Any other `\x` sequence is a parse error, as is a trailing bare `\`.
+fn unescape(s: &str, line_num: usize) -> Result<String, KanaTableError> {
+    let err = |msg: &str| KanaTableError::Parse {
+        line: line_num,
+        message: msg.to_string(),
+    };
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('#') => out.push('#'),
+                Some('*') => out.push('*'),
+                Some('\\') => out.push('\\'),
+                Some(other) => return Err(err(&format!("unknown escape sequence: \\{other}"))),
+                None => return Err(err("trailing backslash in field")),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    Ok(out)
+}
+
+/// Parses the input field into a `KanaInput`.
+/// - Bare `*` → `KanaInput::Wildcard`
+/// - `\*` → `KanaInput::Char('*')` (literal asterisk)
+/// - `\#` → `KanaInput::Char('#')` (literal hash)
+/// - `\\` → `KanaInput::Char('\\')`
+/// - Any other single character → `KanaInput::Char(c)`
+fn parse_input_spec(s: &str, line_num: usize) -> Result<KanaInput, KanaTableError> {
+    let err = |msg: &str| KanaTableError::Parse {
+        line: line_num,
+        message: msg.to_string(),
+    };
+    if s == "*" {
+        return Ok(KanaInput::Wildcard);
+    }
+    let unescaped = unescape(s, line_num)?;
+    let mut chars = unescaped.chars();
+    let c = chars.next().ok_or_else(|| err("input field is empty"))?;
+    if chars.next().is_some() {
+        return Err(err(&format!("input field must be a single character, got: {s:?}")));
+    }
+    Ok(KanaInput::Char(c))
+}
+
+/// Parses the input field into a single `char`.
+/// Used for `[okuri_alias]` entries where `KanaInput::Wildcard` is not meaningful.
+fn parse_alias_char(s: &str, line_num: usize) -> Result<char, KanaTableError> {
+    let err = |msg: &str| KanaTableError::Parse {
+        line: line_num,
+        message: msg.to_string(),
+    };
+    match parse_input_spec(s, line_num)? {
+        KanaInput::Char(c) => Ok(c),
+        KanaInput::Wildcard => Err(err("wildcard `*` is not valid in okuri_alias")),
+    }
+}
+
 /// Parses a single line from `[trans]` or `[trans.katakana]`.
 /// Format: `from TAB input TAB to TAB output` (4 tab-separated fields)
 fn parse_trans_line(line: &str, line_num: usize) -> Result<KanaTransition, KanaTableError> {
@@ -113,38 +198,12 @@ fn parse_trans_line(line: &str, line_num: usize) -> Result<KanaTransition, KanaT
         )));
     }
 
-    let from = fields[0].to_string();
-    let input_str = fields[1];
-    let to = fields[2].to_string();
-    let output = fields.get(3).copied().unwrap_or("").to_string();
-
-    // `\*` in the input field is the wildcard character `*`
-    let input = parse_input_char(input_str, line_num)?;
-
-    // `\*` in the from field also maps to `*`
-    let from = if from == r"\*" { "*".to_string() } else { from };
+    let from = unescape(fields[0], line_num)?;
+    let input = parse_input_spec(fields[1], line_num)?;
+    let to = unescape(fields[2], line_num)?;
+    let output = unescape(fields.get(3).copied().unwrap_or(""), line_num)?;
 
     Ok(KanaTransition { from, input, to, output })
-}
-
-/// Parses the input field into a single char.
-/// `\*` is the wildcard and maps to `*`; everything else must be exactly one character.
-fn parse_input_char(s: &str, line_num: usize) -> Result<char, KanaTableError> {
-    let err = |msg: &str| KanaTableError::Parse {
-        line: line_num,
-        message: msg.to_string(),
-    };
-
-    if s == r"\*" {
-        return Ok('*');
-    }
-
-    let mut chars = s.chars();
-    let c = chars.next().ok_or_else(|| err("input field is empty"))?;
-    if chars.next().is_some() {
-        return Err(err(&format!("input field must be a single character, got: {s:?}")));
-    }
-    Ok(c)
 }
 
 /// Parses a single line from `[okuri_alias]`.
@@ -164,8 +223,8 @@ fn parse_okuri_alias_line(
         return Err(err("expected 2 tab-separated fields in okuri_alias"));
     }
 
-    let from = parse_input_char(fields[0], line_num)?;
-    let to = parse_input_char(fields[1], line_num)?;
+    let from = parse_alias_char(fields[0], line_num)?;
+    let to = parse_alias_char(fields[1], line_num)?;
     map.insert(from, to);
     Ok(())
 }
@@ -183,7 +242,7 @@ name = \"test\"
 k\ta\t\tか
 k\ti\t\tき
 \tn\tn\t
-n\t\\*\t\tん
+n\t*\t\tん
 n\ta\t\tな
 
 [trans.katakana]
@@ -221,5 +280,79 @@ c\tk
             output: "ん".into(),
             retry: 'k',
         });
+    }
+
+    #[test]
+    fn test_literal_hash_input() {
+        let src = "[trans]\n\t\\#\t\t＃\n";
+        let table = parse_table(src).unwrap();
+        use super::super::table::KanaMode;
+        let r = table.transition("", '#', KanaMode::Hiragana);
+        assert_eq!(r, super::super::table::TransitionResult::Ok {
+            output: "＃".into(),
+            next_state: "".into(),
+        });
+    }
+
+    #[test]
+    fn test_literal_asterisk_input() {
+        let src = "[trans]\n\t\\*\t\t＊\n";
+        let table = parse_table(src).unwrap();
+        use super::super::table::KanaMode;
+        // '\*' is now a literal '*', not a wildcard — 'x' should be NoMatch
+        let r = table.transition("", 'x', KanaMode::Hiragana);
+        assert_eq!(r, super::super::table::TransitionResult::NoMatch {
+            flush: "".into(),
+            retry: None,
+        });
+        // '*' key itself should produce "＊"
+        let r = table.transition("", '*', KanaMode::Hiragana);
+        assert_eq!(r, super::super::table::TransitionResult::Ok {
+            output: "＊".into(),
+            next_state: "".into(),
+        });
+    }
+
+    #[test]
+    fn test_literal_backslash_input() {
+        let src = "[trans]\n\t\\\\\t\tＸ\n";
+        let table = parse_table(src).unwrap();
+        use super::super::table::KanaMode;
+        let r = table.transition("", '\\', KanaMode::Hiragana);
+        assert_eq!(r, super::super::table::TransitionResult::Ok {
+            output: "Ｘ".into(),
+            next_state: "".into(),
+        });
+    }
+
+    #[test]
+    fn test_comment_with_escaped_hash() {
+        // "\#" in a line should NOT be treated as a comment start.
+        let src = "[trans]\n\t\\#\t\t＃\t# this comment should not affect parsing\n";
+        let table = parse_table(src).unwrap();
+        use super::super::table::KanaMode;
+        let r = table.transition("", '#', KanaMode::Hiragana);
+        assert_eq!(r, super::super::table::TransitionResult::Ok {
+            output: "＃".into(),
+            next_state: "".into(),
+        });
+    }
+
+    #[test]
+    fn test_unknown_escape_errors() {
+        let src = "[trans]\n\t\\z\t\tＺ\n";
+        assert!(parse_table(src).is_err());
+    }
+
+    #[test]
+    fn test_trailing_backslash_errors() {
+        let src = "[trans]\n\t\\\t\tＸ\n";
+        assert!(parse_table(src).is_err());
+    }
+
+    #[test]
+    fn test_wildcard_in_okuri_alias_errors() {
+        let src = "[okuri_alias]\n*\tk\n";
+        assert!(parse_table(src).is_err());
     }
 }

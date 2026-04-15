@@ -151,7 +151,7 @@ ny	i		にぃ
 ny	u		にゅ
 ny	e		にぇ
 ny	o		にょ
-n	\*		ん
+n	*		ん
 
 # は行
 	h	h

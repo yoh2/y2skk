@@ -1,13 +1,22 @@
 use std::collections::HashMap;
 
+/// Input specifier for a kana transition rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KanaInput {
+    /// Matches exactly the given character.
+    Char(char),
+    /// Wildcard: matches any character not covered by an exact rule.
+    Wildcard,
+}
+
 /// A single entry in a kana conversion table.
 /// Represents the transition rule `(from, input) → (to, output)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KanaTransition {
     /// Current intermediate state ("" = start state)
     pub from: String,
-    /// Input character
-    pub input: char,
+    /// Input specifier (exact character or wildcard)
+    pub input: KanaInput,
     /// Next state after transition ("" = return to start state)
     pub to: String,
     /// Output kana string ("" = no output yet)
@@ -84,23 +93,19 @@ impl KanaTable {
         let transitions = self.effective_transitions(mode);
 
         // Exact match
-        if let Some(t) = transitions.iter().find(|t| t.from == state && t.input == input) {
+        if let Some(t) = transitions.iter().find(|t| t.from == state && t.input == KanaInput::Char(input)) {
             let output = self.convert_output(&t.output, mode);
             return TransitionResult::Ok { output, next_state: t.to.clone() };
         }
 
-        // Wildcard match: `\*` in the table file is stored as input == '*' and matches any char.
+        // Wildcard match: `KanaInput::Wildcard` matches any character not covered by an exact rule.
         // When the wildcard rule has no explicit next state (to == ""), the matched character is
         // retried from the start state so it is not silently dropped (e.g. "nka" → "ん" + "か").
         //
         // Safety: if the wildcard fires from the *empty* start state with to == "", returning
         // OkRetry would cause infinite recursion (the retry would hit the same wildcard again).
         // In that case, return Ok instead — the output is emitted but no retry is issued.
-        // A wildcard on the empty state means every undefined char maps to the same output,
-        // which is unusual and typically a table authoring mistake (e.g. using plain `*` in the
-        // input column when a literal asterisk mapping was intended — note that `*` is reserved
-        // as the wildcard marker and cannot be used as a literal input character).
-        if let Some(t) = transitions.iter().find(|t| t.from == state && t.input == '*') {
+        if let Some(t) = transitions.iter().find(|t| t.from == state && t.input == KanaInput::Wildcard) {
             let output = self.convert_output(&t.output, mode);
             if t.to.is_empty() {
                 if state.is_empty() {
@@ -276,11 +281,34 @@ mod tests {
         let transitions = entries.iter().map(|(from, input, to, output)| {
             KanaTransition {
                 from: from.to_string(),
-                input: *input,
+                input: KanaInput::Char(*input),
                 to: to.to_string(),
                 output: output.to_string(),
             }
         }).collect();
+        KanaTable::new(transitions, vec![], HashMap::new())
+    }
+
+    fn make_table_with_wildcard(
+        exact: &[(&str, char, &str, &str)],
+        wildcards: &[(&str, &str, &str)],
+    ) -> KanaTable {
+        let mut transitions: Vec<KanaTransition> = exact.iter().map(|(from, input, to, output)| {
+            KanaTransition {
+                from: from.to_string(),
+                input: KanaInput::Char(*input),
+                to: to.to_string(),
+                output: output.to_string(),
+            }
+        }).collect();
+        for (from, to, output) in wildcards {
+            transitions.push(KanaTransition {
+                from: from.to_string(),
+                input: KanaInput::Wildcard,
+                to: to.to_string(),
+                output: output.to_string(),
+            });
+        }
         KanaTable::new(transitions, vec![], HashMap::new())
     }
 
@@ -324,5 +352,35 @@ mod tests {
     fn test_hiragana_to_katakana() {
         assert_eq!(hiragana_to_katakana("かきくけこ"), "カキクケコ");
         assert_eq!(hiragana_to_katakana("っ"), "ッ");
+    }
+
+    #[test]
+    fn test_literal_star_not_wildcard() {
+        // A Char('*') rule must NOT act as a wildcard.
+        let table = make_table(&[
+            ("", '*', "", "＊"),
+        ]);
+        // '*' key → "＊"
+        let r = table.transition("", '*', KanaMode::Hiragana);
+        assert_eq!(r, TransitionResult::Ok { output: "＊".into(), next_state: "".into() });
+        // 'x' key → NoMatch (the '*' rule is literal, not a wildcard)
+        let r = table.transition("", 'x', KanaMode::Hiragana);
+        assert_eq!(r, TransitionResult::NoMatch { flush: "".into(), retry: None });
+    }
+
+    #[test]
+    fn test_wildcard_coexists_with_literal_star() {
+        // When both Char('*') and Wildcard are present for the same from-state,
+        // input '*' hits Char('*') (exact match first), and any other input hits Wildcard.
+        let table = make_table_with_wildcard(
+            &[("n", '*', "", "＊")],
+            &[("n", "", "ん")],
+        );
+        // 'n' + '*' → exact rule fires: output "＊", back to start
+        let r = table.transition("n", '*', KanaMode::Hiragana);
+        assert_eq!(r, TransitionResult::Ok { output: "＊".into(), next_state: "".into() });
+        // 'n' + 'k' → wildcard fires: output "ん", retry 'k'
+        let r = table.transition("n", 'k', KanaMode::Hiragana);
+        assert_eq!(r, TransitionResult::OkRetry { output: "ん".into(), retry: 'k' });
     }
 }
