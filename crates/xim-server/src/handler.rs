@@ -206,7 +206,12 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
                 }
                 k if k == ACTION_UPDATE_PREEDIT => {
                     consumed = true;
-                    if let Err(e) = self.preedit.update(&action.text, spot.as_ref()) {
+                    let ghost = if action.ghost_start == skk_ipc::NO_GHOST {
+                        None
+                    } else {
+                        Some(action.ghost_start as usize)
+                    };
+                    if let Err(e) = self.preedit.update(&action.text, ghost, spot.as_ref()) {
                         warn!(handle = sid, "preedit update failed: {e}");
                     }
                 }

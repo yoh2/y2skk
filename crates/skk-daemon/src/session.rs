@@ -104,6 +104,7 @@ impl SessionManager {
                 cursor: 0,
                 candidates: vec![],
                 focused: 0,
+                ghost_start: skk_ipc::NO_GHOST,
             }];
         };
 

@@ -14,7 +14,8 @@ use skk_ipc::{
 #[repr(C)]
 pub struct Y2skkCallbacks {
     pub commit: unsafe extern "C" fn(*mut c_void, *const c_char),
-    pub update_preedit: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint),
+    /// text, cursor (byte offset), ghost_start (byte offset; u32::MAX = no ghost)
+    pub update_preedit: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint, c_uint),
     pub clear_preedit: unsafe extern "C" fn(*mut c_void),
     pub show_candidates: unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
@@ -117,7 +118,7 @@ pub unsafe extern "C" fn y2skk_process_key(
             k if k == ACTION_UPDATE_PREEDIT => {
                 consumed = true;
                 if let Ok(cs) = CString::new(action.text.as_str()) {
-                    (cbs.update_preedit)(ctx, cs.as_ptr(), action.cursor);
+                    (cbs.update_preedit)(ctx, cs.as_ptr(), action.cursor, action.ghost_start);
                 }
             }
             k if k == ACTION_CLEAR_PREEDIT => {

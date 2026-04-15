@@ -13,6 +13,11 @@ pub struct Preedit {
     pub text: String,
     /// Byte offset of the cursor inside `text`.
     pub cursor: usize,
+    /// Byte offset where the completion ghost text begins.
+    /// `None` means no ghost is present; the adapter should style the entire
+    /// preedit uniformly.  When `Some(n)`, bytes `n..` are the ghost preview
+    /// and should be rendered in a visually subdued style (e.g. grey / dimmed).
+    pub ghost_start: Option<usize>,
 }
 
 /// Output actions produced by `SkkEngine::process_key`.
@@ -1970,9 +1975,9 @@ impl SkkEngine {
                             let prefix = format!("{}辞書登録{} {}: ", open, close, midashi_disp);
                             let text   = format!("{}{}{}{}", prefix, before, inner, after);
                             let cursor = prefix.len() + before.len() + inner.len();
-                            return Preedit { text, cursor };
+                            return Preedit { text, cursor, ghost_start: None };
                         }
-                        return Preedit { text: inner.clone(), cursor: inner.len() };
+                        return Preedit { text: inner.clone(), cursor: inner.len(), ghost_start: None };
                     }
                     // "▽" is U+25BD = 3 UTF-8 bytes.
                     let ghost_suffix = &state.preview[kana_buf.len()..];
@@ -1993,9 +1998,11 @@ impl SkkEngine {
                         let prefix = format!("{}辞書登録{} {}: ", open, close, midashi_disp);
                         let text   = format!("{}{}{}{}", prefix, before, inner, after);
                         let cursor = prefix.len() + before.len() + cursor_pos;
-                        return Preedit { text, cursor };
+                        // ghost_start coincides with the cursor (cursor is positioned
+                        // right at the boundary between user input and ghost text).
+                        return Preedit { text, cursor, ghost_start: Some(cursor) };
                     }
-                    return Preedit { text: inner, cursor: cursor_pos };
+                    return Preedit { text: inner, cursor: cursor_pos, ghost_start: Some(cursor_pos) };
                 }
             }
         }
@@ -2021,11 +2028,11 @@ impl SkkEngine {
             // IM cursor sits at the end of <inner_preedit>.
             let text   = format!("{}{}{}{}", prefix, before, inner, after);
             let cursor = prefix.len() + before.len() + inner.len();
-            return Preedit { text, cursor };
+            return Preedit { text, cursor, ghost_start: None };
         }
 
         let cursor = inner.len();
-        Preedit { text: inner, cursor }
+        Preedit { text: inner, cursor, ghost_start: None }
     }
 
     /// Returns the preedit text for the current phase, without any register prefix.
@@ -2816,6 +2823,42 @@ mod tests {
 
         eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty())); // accept "からだ"
         assert!(eng.completion.is_none(), "no more completions after cycling through all");
+    }
+
+    #[test]
+    fn test_preedit_ghost_start_set_when_completion_active() {
+        // When a completion preview is showing, build_preedit must set ghost_start
+        // to the byte position right after "▽" + the user-typed kana.
+        let mut eng = engine_with_completions(vec!["からだ"]);
+        eng.process_key(&press('K'));
+        eng.process_key(&press('a')); // kana_buf = "か"
+
+        let preedit = eng.build_preedit();
+        // preedit.text should be "▽かからだ" (user typed "か", ghost "からだ"[1..] = "らだ")
+        // Wait: preview = "からだ", kana_buf = "か", ghost_suffix = "らだ"
+        // text = "▽からだ"
+        // cursor = "▽か".len() = 3 + 3 = 6
+        // ghost_start = Some(6)
+        assert!(preedit.ghost_start.is_some(), "ghost_start should be Some when completion is active");
+        let gs = preedit.ghost_start.unwrap();
+        // ghost_start should equal cursor (boundary between user input and ghost)
+        assert_eq!(gs, preedit.cursor,
+            "ghost_start should equal cursor; preedit={:?}", preedit);
+        // Verify ghost text starts where expected
+        assert_eq!(&preedit.text[gs..], "らだ",
+            "ghost portion of preedit text should be 'らだ'; preedit={:?}", preedit);
+    }
+
+    #[test]
+    fn test_preedit_no_ghost_start_without_completion() {
+        // Without completion, ghost_start must be None.
+        let mut eng = engine();
+        eng.process_key(&press('K'));
+        eng.process_key(&press('a')); // kana_buf = "か"
+
+        let preedit = eng.build_preedit();
+        assert!(preedit.ghost_start.is_none(),
+            "ghost_start should be None without completion: {:?}", preedit);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use skk_core::engine::{EngineAction, Preedit};
 use skk_core::key::{Key, KeyEvent, Modifiers};
 
-use crate::{IpcAction, keysym};
+use crate::{IpcAction, NO_GHOST, keysym};
 
 // ── EngineAction → IpcAction ──────────────────────────────────────────────────
 
@@ -11,8 +11,9 @@ impl From<EngineAction> for IpcAction {
     fn from(action: EngineAction) -> Self {
         match action {
             EngineAction::Commit(text) => IpcAction::commit(text),
-            EngineAction::UpdatePreedit(Preedit { text, cursor }) => {
-                IpcAction::update_preedit(text, cursor as u32)
+            EngineAction::UpdatePreedit(Preedit { text, cursor, ghost_start }) => {
+                let gs = ghost_start.map(|n| n as u32).unwrap_or(NO_GHOST);
+                IpcAction::update_preedit(text, cursor as u32, gs)
             }
             EngineAction::ClearPreedit => IpcAction::clear_preedit(),
             EngineAction::ShowCandidates(candidates, focused, sel_keys) => {

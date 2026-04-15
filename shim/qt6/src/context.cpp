@@ -11,6 +11,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QTextCharFormat>
+#include <QtGui/QColor>
 #include <QtCore/QCoreApplication>
 #include <cstring>
 
@@ -136,7 +137,8 @@ void Y2skkInputContext::cbCommit(void *ctx, const char *text)
         self->m_status->followCursor();
 }
 
-void Y2skkInputContext::cbUpdatePreedit(void *ctx, const char *text, uint32_t cursor)
+void Y2skkInputContext::cbUpdatePreedit(void *ctx, const char *text, uint32_t cursor,
+                                        uint32_t ghost_start)
 {
     auto *self = static_cast<Y2skkInputContext *>(ctx);
 
@@ -146,17 +148,48 @@ void Y2skkInputContext::cbUpdatePreedit(void *ctx, const char *text, uint32_t cu
 
     self->m_preedit = QString::fromUtf8(text);
 
-    // Underline the whole preedit text.
-    QTextCharFormat fmt;
-    fmt.setUnderlineStyle(QTextCharFormat::SingleUnderline);
-
     QList<QInputMethodEvent::Attribute> attrs;
-    attrs.append(QInputMethodEvent::Attribute(
-        QInputMethodEvent::TextFormat,
-        0,
-        self->m_preedit.length(),
-        fmt
-    ));
+
+    const bool has_ghost = (ghost_start != UINT32_MAX) && (ghost_start < static_cast<uint32_t>(strlen(text)));
+
+    if (has_ghost) {
+        // User-typed portion: underline only (0..ghost_start in char units).
+        const int char_ghost = QString::fromUtf8(text, static_cast<int>(ghost_start)).length();
+
+        if (char_ghost > 0) {
+            QTextCharFormat input_fmt;
+            input_fmt.setUnderlineStyle(QTextCharFormat::SingleUnderline);
+            attrs.append(QInputMethodEvent::Attribute(
+                QInputMethodEvent::TextFormat,
+                0,
+                char_ghost,
+                input_fmt
+            ));
+        }
+
+        // Ghost portion: grey foreground, no underline (char_ghost..end).
+        const int ghost_len = self->m_preedit.length() - char_ghost;
+        if (ghost_len > 0) {
+            QTextCharFormat ghost_fmt;
+            ghost_fmt.setForeground(QColor(0x80, 0x80, 0x80));
+            attrs.append(QInputMethodEvent::Attribute(
+                QInputMethodEvent::TextFormat,
+                char_ghost,
+                ghost_len,
+                ghost_fmt
+            ));
+        }
+    } else {
+        // No ghost: underline everything.
+        QTextCharFormat fmt;
+        fmt.setUnderlineStyle(QTextCharFormat::SingleUnderline);
+        attrs.append(QInputMethodEvent::Attribute(
+            QInputMethodEvent::TextFormat,
+            0,
+            self->m_preedit.length(),
+            fmt
+        ));
+    }
 
     // Cursor position: Rust gives byte offset, Qt wants QChar index.
     const int char_cursor = QString::fromUtf8(text, static_cast<int>(cursor)).length();

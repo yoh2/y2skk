@@ -28,6 +28,7 @@ pub const FONT_CANDIDATES: &[&str] = &[
 /// Background / foreground colours for the preedit window.
 const BG_COLOR: u32 = 0xFFFF_E0; // light yellow
 const FG_COLOR: u32 = 0x0000_00; // black
+const GHOST_FG_COLOR: u32 = 0x8080_80; // grey for completion ghost text
 const BORDER_COLOR: u32 = 0x6060_60; // dark grey
 
 const PADDING: i16 = 4;
@@ -46,7 +47,10 @@ pub struct SpotHint {
 pub struct PreeditWindow {
     conn: Arc<RustConnection>,
     win: Window,
+    /// GC for user-typed text (black).
     gc: u32,
+    /// GC for completion ghost text (grey).
+    ghost_gc: u32,
     screen_height: u16,
     font_ascent: i16,
     font_descent: i16,
@@ -102,7 +106,7 @@ impl PreeditWindow {
             &aux,
         )?;
 
-        // Create a GC with the font.
+        // Create a GC for normal (user-typed) text.
         let gc = conn.generate_id()?;
         let gc_aux = CreateGCAux::new()
             .foreground(FG_COLOR)
@@ -110,7 +114,15 @@ impl PreeditWindow {
             .font(font_id);
         conn.create_gc(gc, win, &gc_aux)?;
 
-        // Close the font handle (GC retains its own reference).
+        // Create a second GC for ghost (completion preview) text in grey.
+        let ghost_gc = conn.generate_id()?;
+        let ghost_gc_aux = CreateGCAux::new()
+            .foreground(GHOST_FG_COLOR)
+            .background(BG_COLOR)
+            .font(font_id);
+        conn.create_gc(ghost_gc, win, &ghost_gc_aux)?;
+
+        // Close the font handle (GCs retain their own references).
         conn.close_font(font_id)?;
         conn.flush()?;
 
@@ -118,6 +130,7 @@ impl PreeditWindow {
             conn,
             win,
             gc,
+            ghost_gc,
             screen_height: screen.height_in_pixels,
             font_ascent,
             font_descent,
@@ -127,15 +140,19 @@ impl PreeditWindow {
 
     /// Shows the preedit window with the given text.
     ///
+    /// `ghost_start` is the byte offset within `text` where the completion
+    /// ghost preview begins.  Characters from that position onwards are drawn
+    /// in grey; the rest are drawn in the normal foreground colour.
+    ///
     /// If `spot` is provided, the window is placed at the cursor position
     /// (over-the-spot).  Otherwise it falls back to the bottom-left of the
     /// screen.
-    pub fn update(&mut self, text: &str, spot: Option<&SpotHint>) -> Result<()> {
+    pub fn update(&mut self, text: &str, ghost_start: Option<usize>, spot: Option<&SpotHint>) -> Result<()> {
         if text.is_empty() {
             return self.hide();
         }
 
-        let chars: Vec<Char2b> = text
+        let all_chars: Vec<Char2b> = text
             .chars()
             .map(|c| {
                 let cp = c as u32;
@@ -146,10 +163,16 @@ impl PreeditWindow {
             })
             .collect();
 
-        // Measure text width.
+        // Split at ghost boundary (convert byte offset to char count).
+        let ghost_char_idx: Option<usize> = ghost_start.map(|byte_off| {
+            let clamped = byte_off.min(text.len());
+            text[..clamped].chars().count()
+        });
+
+        // Measure total text width.
         let extents = self
             .conn
-            .query_text_extents(Fontable::from(self.gc), &chars)?
+            .query_text_extents(Fontable::from(self.gc), &all_chars)?
             .reply()
             .context("query_text_extents")?;
         let text_width = extents.overall_width as u16;
@@ -186,16 +209,43 @@ impl PreeditWindow {
             self.mapped = true;
         }
 
-        // Clear and draw.
+        // Clear window.
         self.conn
             .clear_area(true, self.win, 0, 0, win_width, win_height)?;
-        self.conn.image_text16(
-            self.win,
-            self.gc,
-            PADDING,
-            PADDING + self.font_ascent,
-            &chars,
-        )?;
+
+        let baseline_y = PADDING + self.font_ascent;
+
+        if let Some(split) = ghost_char_idx {
+            let (input_chars, ghost_chars) = all_chars.split_at(split);
+
+            // Draw user-typed portion in normal colour.
+            if !input_chars.is_empty() {
+                self.conn.image_text16(self.win, self.gc, PADDING, baseline_y, input_chars)?;
+            }
+
+            // Draw ghost portion in grey, offset by the width of the input part.
+            if !ghost_chars.is_empty() {
+                let input_width = if input_chars.is_empty() {
+                    0i16
+                } else {
+                    self.conn
+                        .query_text_extents(Fontable::from(self.gc), input_chars)?
+                        .reply()
+                        .context("query_text_extents (input part)")?
+                        .overall_width as i16
+                };
+                self.conn.image_text16(
+                    self.win,
+                    self.ghost_gc,
+                    PADDING + input_width,
+                    baseline_y,
+                    ghost_chars,
+                )?;
+            }
+        } else {
+            // No ghost: draw everything in normal colour.
+            self.conn.image_text16(self.win, self.gc, PADDING, baseline_y, &all_chars)?;
+        }
 
         // Raise to top.
         let raise = ConfigureWindowAux::new().stack_mode(StackMode::ABOVE);
@@ -234,5 +284,6 @@ impl Drop for PreeditWindow {
     fn drop(&mut self) {
         let _ = self.conn.destroy_window(self.win);
         let _ = self.conn.free_gc(self.gc);
+        let _ = self.conn.free_gc(self.ghost_gc);
     }
 }

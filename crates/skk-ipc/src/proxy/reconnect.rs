@@ -561,6 +561,7 @@ mod tests {
             cursor: 0,
             candidates: vec![],
             focused: 0,
+            ghost_start: crate::NO_GHOST,
         }]
     }
 
@@ -571,6 +572,7 @@ mod tests {
             cursor: 0,
             candidates: vec![],
             focused: 0,
+            ghost_start: crate::NO_GHOST,
         }]
     }
 
@@ -581,6 +583,7 @@ mod tests {
             cursor: 0,
             candidates: vec![],
             focused: 0,
+            ghost_start: crate::NO_GHOST,
         }]
     }
 

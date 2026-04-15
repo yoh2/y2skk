@@ -33,9 +33,10 @@ typedef struct Y2skkCallbacks {
     void (*commit)(void *ctx, const char *text);
 
     /* Update the preedit string.
-     * text   — UTF-8 preedit (may be empty)
-     * cursor — byte offset of cursor inside text */
-    void (*update_preedit)(void *ctx, const char *text, uint32_t cursor);
+     * text        — UTF-8 preedit (may be empty)
+     * cursor      — byte offset of cursor inside text
+     * ghost_start — byte offset where completion ghost begins; UINT32_MAX = no ghost */
+    void (*update_preedit)(void *ctx, const char *text, uint32_t cursor, uint32_t ghost_start);
 
     /* Clear the preedit string (shorthand for update_preedit with empty text). */
     void (*clear_preedit)(void *ctx);

@@ -37,15 +37,16 @@ typedef struct _Y2skkIMContextClass Y2skkIMContextClass;
 
 struct _Y2skkIMContext {
     GtkIMContext   parent;
-    uint32_t       session_id;       /* 0 = not yet allocated */
-    gchar         *preedit_text;     /* owned, may be NULL */
-    gint           preedit_cursor;   /* byte offset */
-    GdkWindow     *client_window;    /* window the context is attached to */
-    GdkRectangle   cursor_area;      /* last known cursor rectangle (widget coords) */
-    GtkWidget     *cand_window;      /* floating candidate popup, or NULL */
-    GtkWidget     *status_window;    /* floating mode indicator, or NULL */
-    GtkWidget     *status_label;     /* label inside status_window */
-    guint          status_timer_id;  /* GSource ID for auto-hide (0 = none) */
+    uint32_t       session_id;         /* 0 = not yet allocated */
+    gchar         *preedit_text;       /* owned, may be NULL */
+    gint           preedit_cursor;     /* byte offset */
+    uint32_t       preedit_ghost_start; /* byte offset where ghost begins; UINT32_MAX = no ghost */
+    GdkWindow     *client_window;      /* window the context is attached to */
+    GdkRectangle   cursor_area;        /* last known cursor rectangle (widget coords) */
+    GtkWidget     *cand_window;        /* floating candidate popup, or NULL */
+    GtkWidget     *status_window;      /* floating mode indicator, or NULL */
+    GtkWidget     *status_label;       /* label inside status_window */
+    guint          status_timer_id;    /* GSource ID for auto-hide (0 = none) */
 };
 
 struct _Y2skkIMContextClass {
@@ -101,8 +102,9 @@ static void y2skk_im_context_init(GtkIMContext *ctx)
 {
     Y2skkIMContext *self = (Y2skkIMContext *)ctx;
     self->session_id     = 0;
-    self->preedit_text   = NULL;
-    self->preedit_cursor = 0;
+    self->preedit_text        = NULL;
+    self->preedit_cursor      = 0;
+    self->preedit_ghost_start = UINT32_MAX;
     self->client_window  = NULL;
     memset(&self->cursor_area, 0, sizeof(self->cursor_area));
     self->cand_window    = NULL;
@@ -200,20 +202,22 @@ static void cb_commit(void *ctx_ptr, const char *text)
     g_signal_emit_by_name(ctx, "commit", text);
 }
 
-static void cb_update_preedit(void *ctx_ptr, const char *text, uint32_t cursor)
+static void cb_update_preedit(void *ctx_ptr, const char *text, uint32_t cursor,
+                               uint32_t ghost_start)
 {
     Y2skkIMContext *self = (Y2skkIMContext *)ctx_ptr;
 
     g_free(self->preedit_text);
-    self->preedit_text   = g_strdup(text ? text : "");
-    self->preedit_cursor = (gint)cursor;
+    self->preedit_text        = g_strdup(text ? text : "");
+    self->preedit_cursor      = (gint)cursor;
+    self->preedit_ghost_start = ghost_start;
 
     g_signal_emit_by_name(ctx_ptr, "preedit-changed");
 }
 
 static void cb_clear_preedit(void *ctx_ptr)
 {
-    cb_update_preedit(ctx_ptr, "", 0);
+    cb_update_preedit(ctx_ptr, "", 0, UINT32_MAX);
 }
 
 static void cb_show_candidates(void *ctx_ptr, const char **words, uint32_t focused,
@@ -461,11 +465,31 @@ static void y2skk_get_preedit_string(GtkIMContext  *ctx,
         const gchar *text = self->preedit_text ? self->preedit_text : "";
         guint len = (guint)strlen(text);
         if (len > 0) {
-            /* Underline the whole preedit string */
-            PangoAttribute *uline = pango_attr_underline_new(PANGO_UNDERLINE_SINGLE);
-            uline->start_index = 0;
-            uline->end_index   = len;
-            pango_attr_list_insert(*attrs, uline);
+            uint32_t gs = self->preedit_ghost_start;
+            /* Clamp ghost_start to a valid byte boundary within text. */
+            if (gs > len) gs = len;
+
+            if (gs > 0) {
+                /* Underline only the user-typed portion (0..ghost_start). */
+                PangoAttribute *uline = pango_attr_underline_new(PANGO_UNDERLINE_SINGLE);
+                uline->start_index = 0;
+                uline->end_index   = gs;
+                pango_attr_list_insert(*attrs, uline);
+            } else {
+                /* No ghost: underline everything. */
+                PangoAttribute *uline = pango_attr_underline_new(PANGO_UNDERLINE_SINGLE);
+                uline->start_index = 0;
+                uline->end_index   = len;
+                pango_attr_list_insert(*attrs, uline);
+            }
+
+            if (gs < len) {
+                /* Ghost portion: grey foreground, no underline. */
+                PangoAttribute *fg = pango_attr_foreground_new(0x8080, 0x8080, 0x8080);
+                fg->start_index = gs;
+                fg->end_index   = len;
+                pango_attr_list_insert(*attrs, fg);
+            }
         }
     }
 }
