@@ -52,6 +52,13 @@ conversion_trigger_chars = [",", ".", "を"]
 # Default: ~/.local/share/y2skk/user.dict
 # path = "~/.local/share/y2skk/user.dict"
 
+[dict]
+# When true, (skk-ignore-dic-word "word" ...) entries in dictionaries are
+# interpreted: the listed words are filtered out from the candidate list.
+# This is standard SKK behaviour.  Disable only if you encounter problems
+# with a specific dictionary file.
+# lisp_directives = true
+
 # System dictionaries (multiple entries allowed).
 # Higher priority values are searched first.
 # The user dictionary always has the highest priority.

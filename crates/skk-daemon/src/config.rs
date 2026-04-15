@@ -108,10 +108,24 @@ impl UserDictConfig {
 
 // ── [dict] ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DictConfig {
     pub sources: Vec<DictSource>,
+    /// When true, `(skk-ignore-dic-word ...)` directives in dictionaries are
+    /// interpreted and the listed words are filtered from the candidate list.
+    /// Set to false only if the parser has issues with a specific dictionary.
+    /// Default: true.
+    pub lisp_directives: bool,
+}
+
+impl Default for DictConfig {
+    fn default() -> Self {
+        Self {
+            sources: Vec::new(),
+            lisp_directives: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -605,6 +619,7 @@ priority = 0
                     encoding: "utf-8".to_string(),
                     priority: 0,
                 }],
+                ..DictConfig::default()
             },
             ..Config::default()
         };

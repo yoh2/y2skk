@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
 
-use super::entry::{Candidate, DictEntry, DictError};
+use super::entry::{Candidate, DictEntry, DictError, LispForm};
 use super::traits::DictionaryProvider;
 
 // ── Encoding ──────────────────────────────────────────────────────────────────
@@ -180,10 +180,21 @@ impl DictionaryProvider for UserDict {
     /// Learns a new conversion, promoting it to the front of the candidate list.
     /// Also moves the headword to the end of the IndexMap so that `complete()`
     /// (which iterates in reverse) returns the most-recently-used headwords first.
+    ///
+    /// If the user dict contains a `(skk-ignore-dic-word ...)` entry for the same
+    /// headword, any learned word is removed from that ignore list.  An ignore
+    /// entry whose list becomes empty is dropped entirely.
     fn learn(&mut self, entry: DictEntry) -> Result<(), DictError> {
         // Remove and re-insert at the end to record recency.
         let mut okuri_map = self.entries.shift_remove(&entry.midashi)
             .unwrap_or_default();
+
+        // Collect the plain words being learned so we can remove them from any
+        // skk-ignore-dic-word directives in the same bucket.
+        let learned_words: Vec<String> = entry.candidates.iter()
+            .filter(|c| c.lisp_form.is_none())
+            .map(|c| c.word.clone())
+            .collect();
 
         let list = okuri_map.entry(entry.okuri).or_default();
         for new_cand in entry.candidates.into_iter().rev() {
@@ -192,6 +203,16 @@ impl DictionaryProvider for UserDict {
             // Prepend to give it highest priority.
             list.insert(0, new_cand);
         }
+
+        // Remove learned words from any skk-ignore-dic-word entries in this
+        // bucket, and drop the directive entirely when its list becomes empty.
+        for cand in list.iter_mut() {
+            if let Some(LispForm::IgnoreDicWord(words)) = &mut cand.lisp_form {
+                words.retain(|w| !learned_words.contains(w));
+                cand.word = super::lisp::render_ignore_dic_word(words);
+            }
+        }
+        list.retain(|c| !matches!(&c.lisp_form, Some(LispForm::IgnoreDicWord(ws)) if ws.is_empty()));
 
         // Re-insert at the end (= most recently used position).
         self.entries.insert(entry.midashi, okuri_map);
@@ -316,7 +337,12 @@ fn parse_candidates(s: &str, line_num: usize) -> Result<Vec<Candidate>, DictErro
         if field.is_empty() {
             continue;
         }
-        let cand = if let Some(semi) = field.find(';') {
+        // Lisp-form candidates start with `(`.  They may contain `;` inside
+        // string literals, so we must NOT apply the annotation `;` split.
+        let cand = if field.starts_with('(') {
+            let form = crate::dict::lisp::classify(field);
+            Candidate::lisp(field, form.unwrap_or(crate::dict::entry::LispForm::Unknown))
+        } else if let Some(semi) = field.find(';') {
             Candidate::with_annotation(&field[..semi], &field[semi + 1..])
         } else {
             Candidate::new(field)
@@ -387,7 +413,16 @@ fn serialize_user_dict(map: &UserEntryMap) -> String {
             let cands: String = candidates
                 .iter()
                 .map(|c| {
-                    if let Some(ann) = &c.annotation {
+                    // Lisp-form candidates: re-render the S-expression; annotations
+                    // are not supported for Lisp forms to avoid `;` ambiguity.
+                    if let Some(form) = &c.lisp_form {
+                        use crate::dict::entry::LispForm;
+                        match form {
+                            LispForm::IgnoreDicWord(words) =>
+                                crate::dict::lisp::render_ignore_dic_word(words),
+                            LispForm::Unknown => c.word.clone(),
+                        }
+                    } else if let Some(ann) = &c.annotation {
                         format!("{};{}", c.word, ann)
                     } else {
                         c.word.clone()
@@ -499,6 +534,76 @@ mod tests {
         // Check key entries survived the roundtrip
         assert!(reparsed.get("あ").unwrap().get(&Some("k".into())).is_some());
         assert!(reparsed.get("てすと").unwrap().get(&None).is_some());
+    }
+
+    #[test]
+    fn test_learn_removes_word_from_ignore_dic_word() {
+        // When a word listed in skk-ignore-dic-word is explicitly learned, it
+        // should be removed from the directive.
+        let ignore_cand = Candidate::lisp(
+            "(skk-ignore-dic-word \"無視\" \"除外\")",
+            LispForm::IgnoreDicWord(vec!["無視".into(), "除外".into()]),
+        );
+        let mut udict = UserDict {
+            path: PathBuf::from("/tmp/y2skk_test.dict"),
+            entries: {
+                let mut m = IndexMap::new();
+                let mut inner = HashMap::new();
+                inner.insert(None, vec![Candidate::new("普通"), ignore_cand]);
+                m.insert("むし".to_string(), inner);
+                m
+            },
+            dirty: false,
+        };
+
+        // Learn one of the ignored words.
+        udict.learn(DictEntry {
+            midashi: "むし".into(),
+            okuri: None,
+            candidates: vec![Candidate::new("無視")],
+        }).unwrap();
+
+        let entry = udict.lookup("むし", None).unwrap();
+        // "無視" should now be at the front.
+        assert_eq!(entry.candidates[0].word, "無視");
+        // The ignore directive should still exist but without "無視".
+        let ignore = entry.candidates.iter()
+            .find(|c| matches!(&c.lisp_form, Some(LispForm::IgnoreDicWord(_))));
+        let ignore = ignore.expect("IgnoreDicWord entry should still exist");
+        if let Some(LispForm::IgnoreDicWord(ws)) = &ignore.lisp_form {
+            assert_eq!(ws, &["除外".to_string()]);
+        }
+    }
+
+    #[test]
+    fn test_learn_drops_empty_ignore_dic_word() {
+        // When all words in skk-ignore-dic-word are learned, the entry is removed.
+        let ignore_cand = Candidate::lisp(
+            "(skk-ignore-dic-word \"唯一\")",
+            LispForm::IgnoreDicWord(vec!["唯一".into()]),
+        );
+        let mut udict = UserDict {
+            path: PathBuf::from("/tmp/y2skk_test.dict"),
+            entries: {
+                let mut m = IndexMap::new();
+                let mut inner = HashMap::new();
+                inner.insert(None, vec![ignore_cand]);
+                m.insert("ゆいいつ".to_string(), inner);
+                m
+            },
+            dirty: false,
+        };
+
+        udict.learn(DictEntry {
+            midashi: "ゆいいつ".into(),
+            okuri: None,
+            candidates: vec![Candidate::new("唯一")],
+        }).unwrap();
+
+        let entry = udict.lookup("ゆいいつ", None).unwrap();
+        // The ignore directive should be gone.
+        assert!(!entry.candidates.iter().any(|c| c.lisp_form.is_some()));
+        assert_eq!(entry.candidates[0].word, "唯一");
     }
 
     #[test]

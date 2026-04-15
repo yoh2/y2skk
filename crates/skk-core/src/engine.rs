@@ -181,6 +181,10 @@ pub struct SkkEngine {
     /// this holds the string to append after the committed candidate.
     /// Cleared on conversion cancel or when registration mode is entered.
     conversion_trigger: Option<String>,
+    /// When true, `(skk-ignore-dic-word ...)` directives from dictionaries are
+    /// interpreted and the listed words are filtered from the candidate list.
+    /// Default: `true`.
+    lisp_directives: bool,
 }
 
 impl SkkEngine {
@@ -196,7 +200,15 @@ impl SkkEngine {
             midashi_is_abbrev: false,
             completion: None,
             conversion_trigger: None,
+            lisp_directives: true,
         }
+    }
+
+    /// Enables or disables interpretation of Lisp-form dictionary directives
+    /// such as `(skk-ignore-dic-word ...)` (builder pattern).  Default: `true`.
+    pub fn with_lisp_directives(mut self, enabled: bool) -> Self {
+        self.lisp_directives = enabled;
+        self
     }
 
     /// Sets the initial input phase (builder pattern).
@@ -1251,13 +1263,30 @@ impl SkkEngine {
         let mut candidates: Vec<Candidate> = Vec::new();
         let mut origin: Vec<CandidateOrigin> = Vec::new();
         {
-            let mut seen = std::collections::HashSet::new();
             let dict_candidates: Vec<Candidate> = self.dict.iter()
                 .filter_map(|d| d.lookup(lookup_key, okuri_key))
                 .flat_map(|e| e.candidates)
                 .collect();
 
+            // Collect the union of all skk-ignore-dic-word sets across dictionaries.
+            // Words listed in any of these directives are excluded from the candidate list.
+            // Owned Strings so we can later move dict_candidates into the iteration loop.
+            let ignore_set: std::collections::HashSet<String> = dict_candidates.iter()
+                .filter_map(|c| match &c.lisp_form {
+                    Some(crate::dict::entry::LispForm::IgnoreDicWord(ws)) => Some(ws.as_slice()),
+                    _ => None,
+                })
+                .flatten()
+                .cloned()
+                .collect();
+
+            let mut seen = std::collections::HashSet::new();
             for c in dict_candidates {
+                // Skip all Lisp-form candidates (directives, unknown forms, etc.).
+                if c.lisp_form.is_some() {
+                    continue;
+                }
+
                 // For digit midashi, expand #n markers; skip unexpandable entries.
                 let expanded_word = if has_digits {
                     match crate::num::expand(&c.word, &digit_runs) {
@@ -1268,12 +1297,17 @@ impl SkkEngine {
                     c.word.clone()
                 };
 
+                // Skip words blacklisted by any skk-ignore-dic-word directive.
+                if self.lisp_directives && ignore_set.contains(&expanded_word) {
+                    continue;
+                }
+
                 if seen.insert(expanded_word.clone()) {
                     let orig = CandidateOrigin::Dict {
                         template_midashi: lookup_key.to_string(),
                         template_word: c.word.clone(),
                     };
-                    candidates.push(Candidate { word: expanded_word, annotation: c.annotation });
+                    candidates.push(Candidate { word: expanded_word, annotation: c.annotation, lisp_form: None });
                     origin.push(orig);
                 }
             }
@@ -1291,7 +1325,7 @@ impl SkkEngine {
         if has_digits && (candidates.is_empty() || pure_digit_midashi) {
             for synth_word in crate::num::synthesize(&digit_runs, crate::num::NumType::SYNTH_TYPES) {
                 if !candidates.iter().any(|c| c.word == synth_word) {
-                    candidates.push(Candidate { word: synth_word, annotation: None });
+                    candidates.push(Candidate { word: synth_word, annotation: None, lisp_form: None });
                     origin.push(CandidateOrigin::Synthetic);
                 }
             }
@@ -1568,6 +1602,7 @@ impl SkkEngine {
                     candidates: vec![Candidate {
                         word: template_word.clone(),
                         annotation: chosen.annotation.clone(),
+                        lisp_form: None,
                     }],
                 })
             }
@@ -1768,7 +1803,7 @@ impl SkkEngine {
         let entry = crate::dict::entry::DictEntry {
             midashi: frame.midashi.clone(),
             okuri: frame.okuri_key.clone(),
-            candidates: vec![Candidate { word: word.clone(), annotation: None }],
+            candidates: vec![Candidate { word: word.clone(), annotation: None, lisp_form: None }],
         };
         for dict in self.dict.iter_mut() {
             let _ = dict.learn(entry.clone());
@@ -2859,7 +2894,7 @@ mod tests {
             conversion_trigger_chars: vec![],
             ..SkkKeybindings::default()
         });
-        eng.add_dict(Box::new(StubDict(vec![Candidate { word: "学校".into(), annotation: None }])));
+        eng.add_dict(Box::new(StubDict(vec![Candidate { word: "学校".into(), annotation: None, lisp_form: None }])));
 
         eng.process_key(&press('G'));
         for ch in "akkou".chars() {
@@ -3097,7 +3132,7 @@ mod tests {
             SkkKeybindings { vi_escape: true, ..SkkKeybindings::default() },
         );
         eng.add_dict(Box::new(StubDict(vec![
-            Candidate { word: "亜".into(), annotation: None },
+            Candidate { word: "亜".into(), annotation: None, lisp_form: None },
         ])));
         eng.process_key(&press('A'));
         eng.process_key(&press('i'));
@@ -3352,6 +3387,107 @@ mod tests {
             eng.process_key(&press('/'));
             let _actions = eng.process_key(&press(ch));
         }
+    }
+
+    // ── skk-ignore-dic-word tests ──────────────────────────────────────────────
+
+    /// Candidates listed in (skk-ignore-dic-word ...) should be filtered out.
+    #[test]
+    fn test_ignore_dic_word_filters_candidates() {
+        use crate::dict::entry::{DictEntry, LispForm};
+
+        struct IgnoreDict;
+        impl DictionaryProvider for IgnoreDict {
+            fn lookup(&self, midashi: &str, _okuri: Option<&str>) -> Option<DictEntry> {
+                if midashi == "てすと" {
+                    Some(DictEntry {
+                        midashi: "てすと".into(),
+                        okuri: None,
+                        candidates: vec![
+                            Candidate::lisp(
+                                "(skk-ignore-dic-word \"テスト\")",
+                                LispForm::IgnoreDicWord(vec!["テスト".into()]),
+                            ),
+                            Candidate::new("試験"),
+                        ],
+                    })
+                } else {
+                    None
+                }
+            }
+            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> { Ok(()) }
+        }
+
+        let mut eng = engine();
+        eng.add_dict(Box::new(IgnoreDict));
+
+        // Start conversion for "テスト" — should produce only "試験", not "テスト"
+        let phase = start_conversion_phase(&mut eng, "てすと");
+        if let SkkPhase::Selecting { candidates, .. } = phase {
+            let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+            assert!(!words.contains(&"テスト"), "テスト should be filtered by ignore directive");
+            assert!(words.contains(&"試験"), "試験 should remain");
+        } else {
+            panic!("expected Selecting phase, got {phase:?}");
+        }
+    }
+
+    /// When lisp_directives is disabled the ignore filter should not apply.
+    #[test]
+    fn test_ignore_dic_word_disabled_shows_all_candidates() {
+        use crate::dict::entry::{DictEntry, LispForm};
+
+        struct IgnoreDict2;
+        impl DictionaryProvider for IgnoreDict2 {
+            fn lookup(&self, midashi: &str, _okuri: Option<&str>) -> Option<DictEntry> {
+                if midashi == "てすと" {
+                    Some(DictEntry {
+                        midashi: "てすと".into(),
+                        okuri: None,
+                        candidates: vec![
+                            Candidate::lisp(
+                                "(skk-ignore-dic-word \"テスト\")",
+                                LispForm::IgnoreDicWord(vec!["テスト".into()]),
+                            ),
+                            Candidate::new("テスト"),
+                            Candidate::new("試験"),
+                        ],
+                    })
+                } else {
+                    None
+                }
+            }
+            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> { Ok(()) }
+        }
+
+        let mut eng = SkkEngine::new(romaji_table(), SkkKeybindings::default())
+            .with_lisp_directives(false);
+        eng.add_dict(Box::new(IgnoreDict2));
+
+        let phase = start_conversion_phase(&mut eng, "てすと");
+        if let SkkPhase::Selecting { candidates, .. } = phase {
+            let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+            // With lisp_directives=false the ignore directive has no effect.
+            assert!(words.contains(&"テスト"), "テスト should appear when lisp_directives=false");
+            assert!(words.contains(&"試験"), "試験 should also appear");
+            // The raw Lisp form itself should still not be displayed.
+            assert!(!words.iter().any(|w| w.starts_with('(')), "Lisp forms should never be displayed");
+        } else {
+            panic!("expected Selecting phase, got {phase:?}");
+        }
+    }
+
+    /// Helper: drive the engine into Selecting phase via abbrev mode for the given midashi.
+    /// The midashi is entered directly as-is (abbrev mode treats it as a literal string).
+    fn start_conversion_phase(eng: &mut SkkEngine, midashi: &str) -> SkkPhase {
+        // `/` enters abbrev mode; type the midashi literally (works for any UTF-8 string)
+        eng.process_key(&press('/'));
+        for ch in midashi.chars() {
+            eng.process_key(&KeyEvent::press(Key::Char(ch), Modifiers::empty()));
+        }
+        // Space starts conversion
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        eng.phase.clone()
     }
 
     /// Defined 1-letter fullwidth symbols in dvorakjp-us should commit the fullwidth variant.

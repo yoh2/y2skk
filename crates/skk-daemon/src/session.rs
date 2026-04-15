@@ -28,6 +28,8 @@ pub struct SessionManager {
     user_dict: Arc<Mutex<UserDict>>,
     /// Indicator auto-hide timeout in milliseconds (0 = always visible).
     indicator_timeout_ms: u32,
+    /// Whether Lisp-form directives (e.g. `skk-ignore-dic-word`) are interpreted.
+    lisp_directives: bool,
 }
 
 impl SessionManager {
@@ -51,6 +53,7 @@ impl SessionManager {
             } else {
                 0
             },
+            lisp_directives: config.dict.lisp_directives,
         })
     }
 
@@ -60,7 +63,8 @@ impl SessionManager {
         self.next_id += 1;
 
         let mut engine = SkkEngine::new(self.kana_table.clone(), self.keybindings.clone())
-            .with_initial_phase(self.initial_phase.clone());
+            .with_initial_phase(self.initial_phase.clone())
+            .with_lisp_directives(self.lisp_directives);
 
         // Attach shared dictionaries (highest-priority first).
         // User dict is always first.
