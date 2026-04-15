@@ -34,6 +34,10 @@ pub enum EngineAction {
     UpdateStatus(String),
     /// Key was not consumed; pass it through to the application.
     Passthrough,
+    /// Delete one character before the cursor in the current editing context.
+    /// In normal mode the adapter sends a Backspace to the application.
+    /// In registration mode the engine removes the character from the register buffer.
+    DeleteBack,
 }
 
 /// Code input mode prefix character.
@@ -1443,10 +1447,12 @@ impl SkkEngine {
             return actions;
         }
 
-        // BackSpace → confirm current candidate, then pass BackSpace through to delete the last char
+        // BackSpace → confirm current candidate, then delete the last char.
+        // In normal mode DeleteBack passes a Backspace to the app.
+        // In registration mode intercept_for_register converts it to reg_backspace().
         if event.key == Key::BackSpace {
             let mut actions = self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
-            actions.push(EngineAction::Passthrough);
+            actions.push(EngineAction::DeleteBack);
             return actions;
         }
 
@@ -1878,6 +1884,11 @@ impl SkkEngine {
                 }
                 // Drop Passthrough: keys should not reach the app while registering.
                 EngineAction::Passthrough => {}
+                // DeleteBack: remove one char from the registration buffer.
+                EngineAction::DeleteBack => {
+                    self.reg_backspace();
+                    need_preedit = true;
+                }
             }
         }
 
@@ -2443,8 +2454,51 @@ mod tests {
             "should emit Commit"
         );
         assert!(
-            actions.contains(&EngineAction::Passthrough),
-            "should pass BackSpace through"
+            actions.contains(&EngineAction::DeleteBack),
+            "should emit DeleteBack to delete last char"
+        );
+    }
+
+    #[test]
+    fn test_register_selecting_backspace_deletes_from_buffer() {
+        // Inside a registration frame, pressing Backspace during Selecting
+        // should commit the candidate into the registration buffer AND delete
+        // one character from the end of that buffer.
+        let mut eng = engine_with_dict(vec!["亜", "阿"]);
+
+        // Enter registration for "う" (no candidates)
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // Space exhausts candidates → enter registration mode.
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // Now in registration mode.  Type some kana into the buffer.
+        eng.process_key(&press('u'));  // "う" → committed to reg buf
+        assert!(!eng.register_stack.is_empty(), "should be in registration mode");
+
+        // Start a sub-conversion inside the registration.
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }),
+            "should be Selecting: {:?}", eng.phase());
+
+        // Record the buffer before Backspace.
+        let buf_before = eng.register_stack.last().unwrap().committed.clone();
+
+        // Backspace: commit "亜" (index 0) and delete one char from buffer.
+        eng.process_key(&backspace());
+
+        let frame = eng.register_stack.last().expect("still in registration");
+        let buf_after = frame.committed.clone();
+
+        // "亜" was appended then one char deleted, so length should be:
+        // buf_before.chars().count() + "亜".chars().count() - 1
+        let expected_chars = buf_before.chars().count() + 1 - 1;
+        assert_eq!(
+            buf_after.chars().count(), expected_chars,
+            "buffer should have same char count as before (commit + delete cancel out): before={buf_before:?} after={buf_after:?}"
         );
     }
 

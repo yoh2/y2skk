@@ -33,6 +33,8 @@ impl From<EngineAction> for IpcAction {
             EngineAction::HideCandidates => IpcAction::hide_candidates(),
             EngineAction::UpdateStatus(indicator) => IpcAction::update_status(indicator),
             EngineAction::Passthrough => IpcAction::passthrough(),
+            // DeleteBack: send a Backspace to the application.
+            EngineAction::DeleteBack => IpcAction::passthrough(),
         }
     }
 }
