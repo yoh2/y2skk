@@ -9,11 +9,8 @@ use tracing::{debug, error, info, warn};
 use x11rb::protocol::xproto::KeyPressEvent;
 use xim::{InputStyle, Server, ServerError, ServerHandler, UserInputContext};
 
+use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
 use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
-use skk_ipc::{
-    ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
-    ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
-};
 
 use crate::candidates::CandidateWindow;
 use crate::key::KeyMap;
@@ -43,6 +40,60 @@ impl Handler {
         Self { client, keymap, preedit, candidates }
     }
 }
+
+// ── ActionSink adapter for a single XIM input context ────────────────────────
+
+/// Borrows the XIM server and IC for the duration of one key dispatch.
+struct IcSink<'a, S: Server<XEvent = KeyPressEvent>> {
+    server: &'a mut S,
+    user_ic: &'a mut UserInputContext<IcData>,
+    preedit: &'a mut PreeditWindow,
+    candidates: &'a mut CandidateWindow,
+    spot: Option<SpotHint>,
+    handle: LocalHandle,
+}
+
+impl<S: Server<XEvent = KeyPressEvent>> ActionSink for IcSink<'_, S> {
+    fn commit(&mut self, text: &str) {
+        if let Err(e) = self.preedit.hide() {
+            warn!(handle = self.handle, "preedit hide failed: {e}");
+        }
+        if let Err(e) = self.server.commit(&self.user_ic.ic, text) {
+            warn!(handle = self.handle, "XIM commit failed: {e}");
+        }
+    }
+
+    fn update_preedit(&mut self, text: &str, _cursor: u32, ghost_start: Option<u32>) {
+        let ghost = ghost_start.map(|g| g as usize);
+        if let Err(e) = self.preedit.update(text, ghost, self.spot.as_ref()) {
+            warn!(handle = self.handle, "preedit update failed: {e}");
+        }
+    }
+
+    fn clear_preedit(&mut self) {
+        if let Err(e) = self.preedit.hide() {
+            warn!(handle = self.handle, "preedit hide failed: {e}");
+        }
+    }
+
+    fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
+        if let Err(e) = self.candidates.show(candidates, sel_keys, focused, self.spot.as_ref()) {
+            warn!(handle = self.handle, "candidate show failed: {e}");
+        }
+    }
+
+    fn hide_candidates(&mut self) {
+        if let Err(e) = self.candidates.hide() {
+            warn!(handle = self.handle, "candidate hide failed: {e}");
+        }
+    }
+
+    fn update_status(&mut self, indicator: &str, _timeout_ms: u32) {
+        debug!(handle = self.handle, status = indicator, "UpdateStatus");
+    }
+}
+
+// ── ServerHandler implementation ──────────────────────────────────────────────
 
 impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
     type InputContextData = IcData;
@@ -117,10 +168,7 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         _server: &mut S,
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> Result<(), ServerError> {
-        debug!(
-            handle = user_ic.user_data.handle,
-            "IC gained focus"
-        );
+        debug!(handle = user_ic.user_data.handle, "IC gained focus");
         Ok(())
     }
 
@@ -129,10 +177,7 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
         _server: &mut S,
         user_ic: &mut UserInputContext<Self::InputContextData>,
     ) -> Result<(), ServerError> {
-        debug!(
-            handle = user_ic.user_data.handle,
-            "IC lost focus"
-        );
+        debug!(handle = user_ic.user_data.handle, "IC lost focus");
         Ok(())
     }
 
@@ -171,7 +216,6 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
             }
         };
 
-        // Build spot hint from the IC's preedit_spot and focus/client window.
         let spot = {
             let spot = user_ic.ic.preedit_spot();
             let focus_win = user_ic
@@ -179,72 +223,18 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
                 .app_focus_win()
                 .or(user_ic.ic.app_win())
                 .map(|w| w.get());
-            focus_win.map(|fw| SpotHint {
-                x: spot.x,
-                y: spot.y,
-                focus_win: fw,
-            })
+            focus_win.map(|fw| SpotHint { x: spot.x, y: spot.y, focus_win: fw })
         };
 
-        let mut consumed = false;
-        let mut force_passthrough = false;
-
-        for action in &actions {
-            match action.kind {
-                k if k == ACTION_PASSTHROUGH => {
-                    force_passthrough = true;
-                }
-                k if k == ACTION_COMMIT => {
-                    consumed = true;
-                    // Hide preedit before committing.
-                    if let Err(e) = self.preedit.hide() {
-                        warn!(handle = sid, "preedit hide failed: {e}");
-                    }
-                    if let Err(e) = server.commit(&user_ic.ic, &action.text) {
-                        warn!(handle = sid, "XIM commit failed: {e}");
-                    }
-                }
-                k if k == ACTION_UPDATE_PREEDIT => {
-                    consumed = true;
-                    let ghost = if action.ghost_start == skk_ipc::NO_GHOST {
-                        None
-                    } else {
-                        Some(action.ghost_start as usize)
-                    };
-                    if let Err(e) = self.preedit.update(&action.text, ghost, spot.as_ref()) {
-                        warn!(handle = sid, "preedit update failed: {e}");
-                    }
-                }
-                k if k == ACTION_CLEAR_PREEDIT => {
-                    consumed = true;
-                    if let Err(e) = self.preedit.hide() {
-                        warn!(handle = sid, "preedit hide failed: {e}");
-                    }
-                }
-                k if k == ACTION_SHOW_CANDIDATES => {
-                    consumed = true;
-                    if let Err(e) = self.candidates.show(
-                        &action.candidates,
-                        &action.text, // selection keys
-                        action.focused,
-                        spot.as_ref(),
-                    ) {
-                        warn!(handle = sid, "candidate show failed: {e}");
-                    }
-                }
-                k if k == ACTION_HIDE_CANDIDATES => {
-                    consumed = true;
-                    if let Err(e) = self.candidates.hide() {
-                        warn!(handle = sid, "candidate hide failed: {e}");
-                    }
-                }
-                k if k == ACTION_UPDATE_STATUS => {
-                    debug!(handle = sid, status = action.text, "UpdateStatus");
-                }
-                _ => {}
-            }
-        }
-
-        Ok(consumed && !force_passthrough)
+        let mut sink = IcSink {
+            server,
+            user_ic,
+            preedit: &mut self.preedit,
+            candidates: &mut self.candidates,
+            spot,
+            handle: sid,
+        };
+        let result = dispatch_actions(&actions, &mut sink);
+        Ok(result.consumed && !result.force_passthrough)
     }
 }
