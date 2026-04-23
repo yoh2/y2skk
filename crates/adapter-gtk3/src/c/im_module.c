@@ -194,6 +194,31 @@ static void cand_window_destroy(Y2skkIMContext *self)
     }
 }
 
+/* Configure a popup window to be decoration-free and non-focus-stealing.
+ * On X11, GTK_WINDOW_POPUP already does this implicitly; on Wayland these
+ * flags must be set explicitly to prevent the compositor from treating the
+ * window as a decorated, focusable toplevel. */
+static void configure_popup_window(Y2skkIMContext *self, GtkWindow *win)
+{
+    gtk_window_set_decorated(win, FALSE);
+    gtk_window_set_accept_focus(win, FALSE);
+    gtk_window_set_focus_on_map(win, FALSE);
+    gtk_window_set_type_hint(win, GDK_WINDOW_TYPE_HINT_POPUP_MENU);
+
+    /* Attempt to set transient_for so Wayland compositors can map this as
+     * an xdg_popup anchored to the client surface. */
+    if (self->client_window) {
+        GdkWindow *top = gdk_window_get_toplevel(self->client_window);
+        gpointer user_data = NULL;
+        gdk_window_get_user_data(top, &user_data);
+        if (GTK_IS_WIDGET(user_data)) {
+            GtkWidget *tl = gtk_widget_get_toplevel(GTK_WIDGET(user_data));
+            if (GTK_IS_WINDOW(tl))
+                gtk_window_set_transient_for(win, GTK_WINDOW(tl));
+        }
+    }
+}
+
 /* ── Action callbacks (C → GTK signals / state updates) ─────────────────── */
 
 static void cb_commit(void *ctx_ptr, const char *text)
@@ -241,6 +266,7 @@ static void cb_show_candidates(void *ctx_ptr, const char **words, uint32_t focus
         gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
         gtk_window_set_skip_taskbar_hint(GTK_WINDOW(win), TRUE);
         gtk_window_set_skip_pager_hint(GTK_WINDOW(win), TRUE);
+        configure_popup_window(self, GTK_WINDOW(win));
 
         GtkStyleContext *wsc = gtk_widget_get_style_context(win);
         gtk_style_context_add_class(wsc, "y2skk-cand-window");
@@ -324,6 +350,7 @@ static void cb_update_status(void *ctx_ptr, const char *label, uint32_t timeout_
         gtk_window_set_resizable(GTK_WINDOW(win), FALSE);
         gtk_window_set_skip_taskbar_hint(GTK_WINDOW(win), TRUE);
         gtk_window_set_skip_pager_hint(GTK_WINDOW(win), TRUE);
+        configure_popup_window(self, GTK_WINDOW(win));
 
         GtkStyleContext *wsc = gtk_widget_get_style_context(win);
         gtk_style_context_add_class(wsc, "y2skk-status-window");
