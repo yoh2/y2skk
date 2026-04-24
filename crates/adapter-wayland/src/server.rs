@@ -190,11 +190,16 @@ impl WaylandState {
         });
     }
 
-    /// Cancel any in-flight repeat unconditionally (used on deactivate).
+    /// Cancel any in-flight repeat unconditionally.  Used on deactivate and
+    /// whenever the modifier state changes (so Shift+1 stops repeating when
+    /// Shift is released, matching native Wayland behaviour).
     fn stop_all_repeat(&mut self) {
         if let Some(ra) = self.repeat_active.take() {
             ra.cancel.store(true, Ordering::Relaxed);
             self.pressed_keys.remove(&ra.keycode);
+            if !ra.consumed {
+                self.send_key_release_to_app(ra.keycode);
+            }
         }
         self.pending_stop_release = None;
     }
@@ -580,11 +585,20 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                 mods_locked,
                 group,
             } => {
+                let new_skk_mods = keymap::xkb_mods_to_skk(mods_depressed, mods_latched);
+                let old_skk_mods = state.active.as_ref().map(|a| a.skk_mods).unwrap_or(0);
                 if let Some(active) = &mut state.active {
-                    active.skk_mods = keymap::xkb_mods_to_skk(mods_depressed, mods_latched);
+                    active.skk_mods = new_skk_mods;
                     if let Some(xkb) = &mut active.xkb_state {
                         xkb.update_mask(mods_depressed, mods_latched, mods_locked, group);
                     }
+                }
+                // Modifier change while a repeat is in flight: stop the
+                // repeat so (e.g.) releasing Shift while holding '1' doesn't
+                // morph `!` into `1` and keep repeating.
+                if new_skk_mods != old_skk_mods && state.repeat_active.is_some() {
+                    tracing::debug!("modifier changed during repeat; stopping");
+                    state.stop_all_repeat();
                 }
             }
             _ => {}
