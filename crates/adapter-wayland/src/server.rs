@@ -558,8 +558,23 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
 
                 if is_press {
                     if !state.pressed_keys.insert(key) {
-                        tracing::debug!("stray press for already-pressed key {key}; ignored");
-                        return;
+                        // The key was already in pressed_keys.  When the user
+                        // releases a repeating key we defer `stop_repeat` (to
+                        // ride out KWin's synthetic-release stream), leaving
+                        // the key still marked pressed.  A press that arrives
+                        // during that grace window is a rapid re-tap of the
+                        // same key — close out the old repeat cleanly and
+                        // treat the event as a fresh press.
+                        let is_repeating = state.repeat_active.as_ref()
+                            .map(|r| r.keycode) == Some(key);
+                        if is_repeating && state.pending_stop_release.is_some() {
+                            tracing::debug!("rapid re-tap of {key} during repeat grace");
+                            state.stop_all_repeat();
+                            state.pressed_keys.insert(key);
+                        } else {
+                            tracing::debug!("stray press for already-pressed key {key}; ignored");
+                            return;
+                        }
                     }
                 } else {
                     // Release for a key we are actively repeating: don't stop
