@@ -99,12 +99,15 @@ pub extern "C" fn y2skk_init() -> c_int {
 #[no_mangle]
 pub extern "C" fn y2skk_fini() {}
 
+/// # Safety
+///
+/// `app_id` must be a valid C string or NULL.
 #[no_mangle]
-pub extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
+pub unsafe extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
     let label = if app_id.is_null() {
         "qt6".to_string()
     } else {
-        unsafe { CStr::from_ptr(app_id).to_string_lossy().into_owned() }
+        CStr::from_ptr(app_id).to_string_lossy().into_owned()
     };
     match client() {
         Some(c) => c.create_handle(&label),
@@ -115,6 +118,9 @@ pub extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
     }
 }
 
+/// # Safety
+///
+/// `handle` must be a valid session handle obtained from `y2skk_create_session`.
 #[no_mangle]
 pub extern "C" fn y2skk_destroy_session(handle: c_uint) {
     if let Some(c) = client() {
@@ -127,6 +133,11 @@ pub extern "C" fn y2skk_destroy_session(handle: c_uint) {
 ///
 /// Qt key modifiers bitmask:
 ///   0x02000000 = Shift, 0x04000000 = Ctrl, 0x08000000 = Alt, 0x10000000 = Meta
+///
+/// # Safety
+///
+/// - `handle` must be a valid session handle obtained from `y2skk_create_session`.
+/// - `cbs` must be a valid pointer to a `Y2skkCallbacks` structure.
 #[no_mangle]
 pub unsafe extern "C" fn y2skk_process_key(
     handle: c_uint,
