@@ -25,6 +25,8 @@ struct ActiveContext {
     serial: u32,
     /// Modifier state in skk-ipc bitmask format (Shift=0x01, Ctrl=0x04, Alt=0x08, Meta=0x40).
     skk_mods: u32,
+    /// XKB state built from the keymap fd received via wl_keyboard.keymap.
+    xkb_state: Option<keymap::XkbState>,
 }
 
 // ── Top-level state ───────────────────────────────────────────────────────────
@@ -44,18 +46,12 @@ impl WaylandState {
         })
     }
 
-    fn on_key(&mut self, keycode: u32, is_press: bool) {
+    fn on_key(&mut self, keycode: u32, keysym: u32, is_press: bool) {
         // Extract per-activation data without holding a reference.
         let (handle, serial, skk_mods) = match self.active.as_ref() {
             Some(a) => (a.handle, a.serial, a.skk_mods),
             None => return,
         };
-
-        let shift = skk_mods & 0x01 != 0;
-        let keysym = keymap::evdev_to_keysym(keycode, shift);
-        if keysym == 0 {
-            return;
-        }
 
         let actions = match self.client.process_key(handle, keysym, skk_mods, is_press) {
             Ok(a) => a,
@@ -171,6 +167,7 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
                     handle,
                     serial: 0,
                     skk_mods: 0,
+                    xkb_state: None,
                 });
             }
             zwp_input_method_v1::Event::Deactivate { context: _ctx } => {
@@ -222,23 +219,42 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
         _qh: &QueueHandle<Self>,
     ) {
         match event {
-            wl_keyboard::Event::Keymap { format: _, fd: _, size: _ } => {
-                // Phase A: keymap ignored; using hardcoded US QWERTY table.
-                // The fd (OwnedFd) is dropped here, which closes it.
+            wl_keyboard::Event::Keymap { format, fd, size } => {
+                if format != WEnum::Value(wl_keyboard::KeymapFormat::XkbV1) {
+                    tracing::warn!("unsupported keymap format — keyboard layout will not work");
+                    return;
+                }
+                match keymap::XkbState::from_fd(fd, size) {
+                    Ok(xkb) => {
+                        if let Some(active) = &mut state.active {
+                            active.xkb_state = Some(xkb);
+                        }
+                    }
+                    Err(e) => tracing::error!("failed to load XKB keymap: {e}"),
+                }
             }
             wl_keyboard::Event::Key { serial: _, time: _, key, state: key_state } => {
                 let is_press = matches!(key_state, WEnum::Value(wl_keyboard::KeyState::Pressed));
-                state.on_key(key, is_press);
+                let keysym = state.active.as_ref()
+                    .and_then(|a| a.xkb_state.as_ref())
+                    .map(|s| s.key_get_one_sym(key))
+                    .unwrap_or(0);
+                if keysym != 0 {
+                    state.on_key(key, keysym, is_press);
+                }
             }
             wl_keyboard::Event::Modifiers {
                 serial: _,
                 mods_depressed,
                 mods_latched,
-                mods_locked: _,
-                group: _,
+                mods_locked,
+                group,
             } => {
                 if let Some(active) = &mut state.active {
                     active.skk_mods = keymap::xkb_mods_to_skk(mods_depressed, mods_latched);
+                    if let Some(xkb) = &mut active.xkb_state {
+                        xkb.update_mask(mods_depressed, mods_latched, mods_locked, group);
+                    }
                 }
             }
             _ => {} // Enter, Leave, RepeatInfo: ignore for grabbed keyboard
