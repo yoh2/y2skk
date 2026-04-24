@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
@@ -24,6 +25,41 @@ use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
 
 use crate::candidate_window::{self, CandidateWindow};
 use crate::keymap;
+
+// ── Timer-pipe byte tags ──────────────────────────────────────────────────────
+
+/// Byte written to the timer pipe when the status auto-hide timer fires.
+const TAG_STATUS_HIDE: u8 = 1;
+/// Byte written to the timer pipe for each key-repeat tick.
+const TAG_KEY_REPEAT: u8 = 2;
+
+/// State tracking one currently-repeating key.
+struct RepeatActive {
+    keycode: u32,
+    keysym: u32,
+    /// True if the IM consumed the initial press.  When false the repeat
+    /// cycles release+press via `context.key()` so the app treats each tick
+    /// as a fresh keypress (apps usually ignore duplicate press events).
+    consumed: bool,
+    cancel: Arc<AtomicBool>,
+}
+
+/// Returns true if this keysym should participate in auto-repeat.
+/// Excludes modifier keys, Caps/Num/Scroll Lock, and XKB_KEY_NoSymbol.
+fn keysym_repeats(keysym: u32) -> bool {
+    if keysym == 0 {
+        return false;
+    }
+    // Modifier keysyms: 0xFFE1 - 0xFFEE  (Shift/Ctrl/Meta/Alt/Super/Hyper L+R).
+    // Lock keys: Caps_Lock 0xFFE5, Shift_Lock 0xFFE6, Num_Lock 0xFF7F, Scroll_Lock 0xFF14.
+    if (0xFFE1..=0xFFEE).contains(&keysym) {
+        return false;
+    }
+    if matches!(keysym, 0xFF7F | 0xFF14) {
+        return false;
+    }
+    true
+}
 
 // ── Per-activation state ──────────────────────────────────────────────────────
 
@@ -48,12 +84,29 @@ pub struct WaylandState {
     outputs: Vec<WlOutput>,
     pub candidate_windows: Vec<CandidateWindow>,
     qh: Option<QueueHandle<WaylandState>>,
-    /// Write end of the status auto-hide pipe.  The timer thread writes to this
-    /// fd after the timeout expires; the main event loop polls the read end.
+    /// Write end of the timer pipe.  Used for both status auto-hide and key
+    /// repeat; the byte value distinguishes them (see TAG_* constants).
     timer_write: OwnedFd,
-    /// Cancel flag for the in-flight status timer thread (`Some` while a timer
-    /// is pending).  Setting it to `true` makes the thread skip its write.
+    /// Cancel flag for the in-flight status timer thread.
     status_cancel: Option<Arc<AtomicBool>>,
+    /// Keyboard repeat rate (keys/sec) reported by wl_keyboard.repeat_info.
+    /// 0 disables repeat entirely.
+    repeat_rate: u32,
+    /// Initial delay in ms before key repeat starts.
+    repeat_delay: u32,
+    /// Currently-repeating key, if any.
+    repeat_active: Option<RepeatActive>,
+    /// Evdev keycodes currently believed to be pressed.  Used to filter out
+    /// stray release events that KWin appears to synthesize when it processes
+    /// input-method commits (these show up as a release-only cadence after
+    /// commit_string calls).
+    pressed_keys: HashSet<u32>,
+    /// Deadline for stopping the current repeat.  When KWin sends a release
+    /// event for the repeating key we don't immediately stop — the event is
+    /// likely a synthetic artifact of a commit_string.  Each subsequent
+    /// release event for the same key pushes the deadline further; the
+    /// repeat actually stops once this deadline elapses with no new events.
+    pending_stop_release: Option<Instant>,
 }
 
 impl WaylandState {
@@ -70,7 +123,96 @@ impl WaylandState {
             qh: None,
             timer_write,
             status_cancel: None,
+            // Sensible defaults until repeat_info arrives.
+            repeat_rate: 25,
+            repeat_delay: 500,
+            repeat_active: None,
+            pressed_keys: HashSet::new(),
+            pending_stop_release: None,
         })
+    }
+
+    /// How long to wait after a release event before actually stopping a
+    /// repeat.  KWin emits synthetic release events at the repeat cadence
+    /// after commit_string calls, so a single release could be a phantom.
+    const REPEAT_STOP_GRACE: Duration = Duration::from_millis(60);
+
+    /// Begin repeating the given key after `repeat_delay` ms, then at
+    /// `repeat_rate` presses per second.  Cancels any previous repeat.
+    fn start_repeat(&mut self, keycode: u32, keysym: u32, consumed: bool) {
+        if let Some(old) = self.repeat_active.take() {
+            old.cancel.store(true, Ordering::Relaxed);
+            self.pressed_keys.remove(&old.keycode);
+            // If the old repeat was passthrough, send a final release so the
+            // app doesn't end up thinking the old key is still pressed.
+            if !old.consumed {
+                self.send_key_release_to_app(old.keycode);
+            }
+        }
+        self.pending_stop_release = None;
+        if self.repeat_rate == 0 {
+            tracing::debug!("start_repeat: disabled (rate=0)");
+            return;
+        }
+        let fd = match self.timer_write.as_fd().try_clone_to_owned() {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("repeat fd clone failed: {e}");
+                return;
+            }
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.repeat_active = Some(RepeatActive {
+            keycode, keysym, consumed, cancel: cancel.clone(),
+        });
+
+        let delay_ms = self.repeat_delay as u64;
+        let interval_ms = (1000u32 / self.repeat_rate.max(1)).max(1) as u64;
+
+        tracing::debug!(
+            "start_repeat: code={keycode}, sym={keysym:#x}, delay={delay_ms}ms, interval={interval_ms}ms"
+        );
+
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+            let mut ticks = 0u32;
+            while !cancel.load(Ordering::Relaxed) {
+                match rustix::io::write(&fd, &[TAG_KEY_REPEAT]) {
+                    Ok(_) => { ticks += 1; }
+                    Err(e) => {
+                        tracing::debug!("repeat thread exit on write error: {e:?}");
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(interval_ms));
+            }
+            tracing::debug!("repeat thread exit after {ticks} ticks");
+        });
+    }
+
+    /// Cancel any in-flight repeat unconditionally (used on deactivate).
+    fn stop_all_repeat(&mut self) {
+        if let Some(ra) = self.repeat_active.take() {
+            ra.cancel.store(true, Ordering::Relaxed);
+            self.pressed_keys.remove(&ra.keycode);
+        }
+        self.pending_stop_release = None;
+    }
+
+    /// Directly send a release event for `keycode` to the focused app (no SKK
+    /// processing).  Used for passthrough repeat handling.
+    fn send_key_release_to_app(&self, keycode: u32) {
+        if let Some(active) = self.active.as_ref() {
+            active.context.key(active.serial, 0, keycode, 0);
+        }
+    }
+
+    /// Directly send a press event for `keycode` to the focused app.  Used
+    /// for passthrough repeat handling (each tick is a release+press pair).
+    fn send_key_press_to_app(&self, keycode: u32) {
+        if let Some(active) = self.active.as_ref() {
+            active.context.key(active.serial, 0, keycode, 1);
+        }
     }
 
     /// Create one CandidateWindow per known output. Called once after the first
@@ -111,22 +253,32 @@ impl WaylandState {
         tracing::info!("created {} candidate window(s)", self.candidate_windows.len());
     }
 
-    fn on_key(&mut self, keycode: u32, keysym: u32, is_press: bool) {
+    /// Returns true if the IM consumed the key (no forwarding happened).
+    /// Returns false for passthrough keys — these are forwarded to the app via
+    /// `context.key()` and the app is responsible for its own key repeat.
+    fn on_key(&mut self, keycode: u32, keysym: u32, is_press: bool) -> bool {
         let (handle, serial, skk_mods) = match self.active.as_ref() {
             Some(a) => (a.handle, a.serial, a.skk_mods),
-            None => return,
+            None => {
+                tracing::debug!("on_key: no active context, dropping event");
+                return false;
+            }
         };
 
         let actions = match self.client.process_key(handle, keysym, skk_mods, is_press) {
             Ok(a) => a,
             Err(e) => {
                 tracing::error!(handle, "process_key error: {e:?}");
-                return;
+                return false;
             }
         };
+        tracing::debug!(
+            "on_key(code={keycode}, sym={keysym:#x}, press={is_press}) → {} action(s) (serial={serial})",
+            actions.len()
+        );
 
         if self.active.is_none() {
-            return;
+            return false;
         }
 
         let context = &self.active.as_ref().unwrap().context;
@@ -145,10 +297,12 @@ impl WaylandState {
         };
         let result = dispatch_actions(&actions, &mut sink);
 
-        if !result.consumed || result.force_passthrough {
+        let consumed = result.consumed && !result.force_passthrough;
+        if !consumed {
             let state_val: u32 = if is_press { 1 } else { 0 };
             self.active.as_ref().unwrap().context.key(serial, 0, keycode, state_val);
         }
+        consumed
     }
 }
 
@@ -165,6 +319,7 @@ struct ContextSink<'a> {
 
 impl ActionSink for ContextSink<'_> {
     fn commit(&mut self, text: &str) {
+        tracing::debug!("commit({text:?}) with serial={}", self.serial);
         self.context.commit_string(self.serial, text.to_string());
     }
 
@@ -218,7 +373,7 @@ impl ActionSink for ContextSink<'_> {
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(timeout_ms as u64));
                 if !cancel.load(Ordering::Relaxed) {
-                    let _ = rustix::io::write(&fd, &[1u8]);
+                    let _ = rustix::io::write(&fd, &[TAG_STATUS_HIDE]);
                 }
             });
         }
@@ -299,6 +454,8 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
                 });
             }
             zwp_input_method_v1::Event::Deactivate { context: _ctx } => {
+                state.stop_all_repeat();
+                state.pressed_keys.clear();
                 if let Some(active) = state.active.take() {
                     tracing::info!(handle = active.handle, "input context deactivated");
                     state.client.destroy_handle(active.handle);
@@ -362,13 +519,59 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
             }
             wl_keyboard::Event::Key { serial: _, time: _, key, state: key_state } => {
                 let is_press = matches!(key_state, WEnum::Value(wl_keyboard::KeyState::Pressed));
+
+                if is_press {
+                    if !state.pressed_keys.insert(key) {
+                        tracing::debug!("stray press for already-pressed key {key}; ignored");
+                        return;
+                    }
+                } else {
+                    // Release for a key we are actively repeating: don't stop
+                    // immediately.  KWin emits synthetic release events at the
+                    // repeat cadence after commit_string; only a pause in the
+                    // release stream indicates a real user release.
+                    let is_repeating = state.repeat_active.as_ref()
+                        .map(|r| r.keycode) == Some(key);
+                    if is_repeating {
+                        state.pending_stop_release =
+                            Some(Instant::now() + Self::REPEAT_STOP_GRACE);
+                        tracing::debug!("release for repeating key {key}: defer stop");
+                        return;
+                    }
+                    if !state.pressed_keys.remove(&key) {
+                        tracing::debug!("stray release for non-pressed key {key}; ignored");
+                        return;
+                    }
+                }
+
                 let keysym = state.active.as_ref()
                     .and_then(|a| a.xkb_state.as_ref())
                     .map(|s| s.key_get_one_sym(key))
                     .unwrap_or(0);
-                if keysym != 0 {
-                    state.on_key(key, keysym, is_press);
+                let xkb_allows_repeat = state.active.as_ref()
+                    .and_then(|a| a.xkb_state.as_ref())
+                    .map(|s| s.key_repeats(key))
+                    .unwrap_or(false);
+                let repeat_eligible = xkb_allows_repeat || keysym_repeats(keysym);
+                let consumed = if keysym != 0 {
+                    state.on_key(key, keysym, is_press)
+                } else {
+                    false
+                };
+                tracing::debug!(
+                    "key: code={key}, sym={keysym:#x}, press={is_press}, consumed={consumed}, repeat_eligible={repeat_eligible}"
+                );
+                if is_press && repeat_eligible {
+                    state.start_repeat(key, keysym, consumed);
                 }
+            }
+            wl_keyboard::Event::RepeatInfo { rate, delay } => {
+                state.repeat_rate = rate.max(0) as u32;
+                state.repeat_delay = delay.max(0) as u32;
+                tracing::info!(
+                    "key repeat info: rate={}/s, delay={}ms",
+                    state.repeat_rate, state.repeat_delay,
+                );
             }
             wl_keyboard::Event::Modifiers {
                 serial: _,
@@ -427,21 +630,68 @@ pub fn run() -> anyhow::Result<()> {
     tracing::info!("y2skk-wayland ready");
 
     // Main loop: poll both the Wayland socket and the status timer pipe.
-    use rustix::event::{PollFd, PollFlags, poll};
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
     loop {
-        // Drain any bytes queued on the timer pipe; if any fired, hide status.
-        let mut buf = [0u8; 16];
-        let mut timer_fired = false;
+        // If a repeat-stop is pending and its grace period has elapsed, act.
+        if let Some(deadline) = state.pending_stop_release {
+            if Instant::now() >= deadline {
+                if let Some(ra) = state.repeat_active.take() {
+                    ra.cancel.store(true, Ordering::Relaxed);
+                    state.pressed_keys.remove(&ra.keycode);
+                    // For passthrough repeats we've been cycling press/release
+                    // to the app, ending on a press.  Send a final release so
+                    // the app doesn't leave the key in the held state.
+                    if !ra.consumed {
+                        state.send_key_release_to_app(ra.keycode);
+                    }
+                    tracing::debug!("repeat stopped: grace expired for key {}", ra.keycode);
+                }
+                state.pending_stop_release = None;
+            }
+        }
+
+        // Drain any bytes queued on the timer pipe; classify by tag.
+        let mut buf = [0u8; 32];
+        let mut hide_status = false;
+        let mut repeat_ticks: u32 = 0;
         loop {
             match rustix::io::read(&timer_read, &mut buf) {
-                Ok(n) if n > 0 => timer_fired = true,
+                Ok(n) if n > 0 => {
+                    for &b in &buf[..n] {
+                        match b {
+                            TAG_STATUS_HIDE => hide_status = true,
+                            TAG_KEY_REPEAT => repeat_ticks += 1,
+                            _ => {}
+                        }
+                    }
+                }
                 _ => break,
             }
         }
-        if timer_fired {
+        if hide_status {
             for cw in &mut state.candidate_windows {
                 cw.hide_status();
+            }
+        }
+        if repeat_ticks > 0 {
+            tracing::debug!("main loop: {repeat_ticks} repeat tick(s) to process");
+        }
+        for _ in 0..repeat_ticks {
+            let Some((keycode, keysym, was_consumed)) = state.repeat_active
+                .as_ref()
+                .map(|ra| (ra.keycode, ra.keysym, ra.consumed))
+            else {
+                break;
+            };
+            if was_consumed {
+                // Re-run the IM logic — commits/preedits will fire as usual.
+                state.on_key(keycode, keysym, true);
+            } else {
+                // Passthrough: cycle release + press so the app sees a fresh
+                // keypress each tick (most apps ignore duplicate press events).
+                state.send_key_release_to_app(keycode);
+                state.send_key_press_to_app(keycode);
             }
         }
 
@@ -457,8 +707,15 @@ pub fn run() -> anyhow::Result<()> {
             PollFd::new(&wayland_fd, PollFlags::IN),
             PollFd::new(&timer_fd, PollFlags::IN),
         ];
-        // None = wait indefinitely.
-        let _ = poll(&mut fds, None);
+        // Wait indefinitely unless there's a pending repeat-stop deadline.
+        let timeout: Option<Timespec> = state.pending_stop_release.map(|d| {
+            let remaining = d.saturating_duration_since(Instant::now());
+            Timespec {
+                tv_sec: remaining.as_secs() as _,
+                tv_nsec: remaining.subsec_nanos() as _,
+            }
+        });
+        let _ = poll(&mut fds, timeout.as_ref());
 
         // Only read from the Wayland socket if it actually fired.
         if fds[0].revents().contains(PollFlags::IN) {

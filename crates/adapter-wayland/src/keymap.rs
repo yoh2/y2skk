@@ -38,6 +38,13 @@ impl XkbState {
         let keycode: xkb::Keycode = (evdev_keycode + 8).into();
         self.state.key_get_one_sym(keycode).raw()
     }
+
+    /// Returns true if the keymap says this key should participate in key repeat
+    /// (typically false for modifier keys).
+    pub fn key_repeats(&self, evdev_keycode: u32) -> bool {
+        let keycode: xkb::Keycode = (evdev_keycode + 8).into();
+        self.state.get_keymap().key_repeats(keycode)
+    }
 }
 
 /// Convert the `mods_depressed` + `mods_latched` bitmask from a
