@@ -1,3 +1,4 @@
+mod candidate_window;
 mod keymap;
 mod server;
 

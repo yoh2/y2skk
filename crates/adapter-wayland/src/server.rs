@@ -1,18 +1,22 @@
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
     protocol::{
+        wl_compositor::WlCompositor,
         wl_keyboard::{self, WlKeyboard},
         wl_registry::{self, WlRegistry},
+        wl_shm::WlShm,
     },
 };
 use wayland_protocols::wp::input_method::zv1::client::{
     zwp_input_method_context_v1::{self, ZwpInputMethodContextV1},
     zwp_input_method_v1::{self, ZwpInputMethodV1},
 };
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 
 use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
 use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
 
+use crate::candidate_window::{self, CandidateWindow};
 use crate::keymap;
 
 // ── Per-activation state ──────────────────────────────────────────────────────
@@ -35,6 +39,13 @@ pub struct WaylandState {
     client: ReconnectingClient,
     input_method: Option<ZwpInputMethodV1>,
     active: Option<ActiveContext>,
+    // Candidate window infrastructure
+    compositor: Option<WlCompositor>,
+    shm: Option<WlShm>,
+    layer_shell: Option<ZwlrLayerShellV1>,
+    pub candidate_window: Option<CandidateWindow>,
+    /// Stored QueueHandle so on_key can drive the candidate window.
+    qh: Option<QueueHandle<WaylandState>>,
 }
 
 impl WaylandState {
@@ -43,11 +54,41 @@ impl WaylandState {
             client: ReconnectingClient::new()?,
             input_method: None,
             active: None,
+            compositor: None,
+            shm: None,
+            layer_shell: None,
+            candidate_window: None,
+            qh: None,
         })
     }
 
+    /// Try to create the candidate window once all required globals are bound.
+    fn try_init_candidate_window(&mut self) {
+        if self.candidate_window.is_some() {
+            return;
+        }
+        let (Some(compositor), Some(shm), Some(layer_shell), Some(qh)) = (
+            self.compositor.as_ref(),
+            self.shm.as_ref(),
+            self.layer_shell.as_ref(),
+            self.qh.as_ref(),
+        ) else {
+            return;
+        };
+        let Some(font) = candidate_window::load_font() else {
+            return;
+        };
+        self.candidate_window = Some(CandidateWindow::new(
+            compositor,
+            layer_shell,
+            shm.clone(),
+            font,
+            qh,
+        ));
+        tracing::info!("candidate window created");
+    }
+
     fn on_key(&mut self, keycode: u32, keysym: u32, is_press: bool) {
-        // Extract per-activation data without holding a reference.
         let (handle, serial, skk_mods) = match self.active.as_ref() {
             Some(a) => (a.handle, a.serial, a.skk_mods),
             None => return,
@@ -61,15 +102,21 @@ impl WaylandState {
             }
         };
 
-        // Dispatch actions through the sink.
-        let Some(active) = self.active.as_ref() else { return };
-        let mut sink = ContextSink { context: &active.context, serial };
+        if self.active.is_none() {
+            return;
+        }
+
+        // Build the sink, borrowing different fields of self simultaneously.
+        let context = &self.active.as_ref().unwrap().context;
+        let qh = self.qh.as_ref();
+        let cw = self.candidate_window.as_mut();
+
+        let mut sink = ContextSink { context, serial, candidate_window: cw, qh };
         let result = dispatch_actions(&actions, &mut sink);
 
-        // Forward key to application when not consumed.
         if !result.consumed || result.force_passthrough {
             let state_val: u32 = if is_press { 1 } else { 0 };
-            active.context.key(serial, 0, keycode, state_val);
+            self.active.as_ref().unwrap().context.key(serial, 0, keycode, state_val);
         }
     }
 }
@@ -79,6 +126,8 @@ impl WaylandState {
 struct ContextSink<'a> {
     context: &'a ZwpInputMethodContextV1,
     serial: u32,
+    candidate_window: Option<&'a mut CandidateWindow>,
+    qh: Option<&'a QueueHandle<WaylandState>>,
 }
 
 impl ActionSink for ContextSink<'_> {
@@ -87,7 +136,6 @@ impl ActionSink for ContextSink<'_> {
     }
 
     fn update_preedit(&mut self, text: &str, cursor: u32, _ghost_start: Option<u32>) {
-        // Set cursor position first, then send the preedit string.
         self.context.preedit_cursor(cursor as i32);
         self.context.preedit_string(self.serial, text.to_string(), String::new());
     }
@@ -96,16 +144,20 @@ impl ActionSink for ContextSink<'_> {
         self.context.preedit_string(self.serial, String::new(), String::new());
     }
 
-    fn show_candidates(&mut self, _candidates: &[String], _focused: u32, _sel_keys: &str) {
-        // Phase A: candidate window not yet implemented.
+    fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
+        if let (Some(cw), Some(qh)) = (&mut self.candidate_window, &self.qh) {
+            cw.show(candidates, focused, sel_keys, qh);
+        }
     }
 
     fn hide_candidates(&mut self) {
-        // Phase A: candidate window not yet implemented.
+        if let Some(cw) = &mut self.candidate_window {
+            cw.hide();
+        }
     }
 
     fn update_status(&mut self, _indicator: &str, _timeout_ms: u32) {
-        // Phase A: status indicator not yet implemented.
+        // Phase C: status indicator not yet implemented.
     }
 }
 
@@ -121,10 +173,29 @@ impl Dispatch<WlRegistry, ()> for WaylandState {
         qh: &QueueHandle<Self>,
     ) {
         if let wl_registry::Event::Global { name, interface, version } = event {
-            if interface == ZwpInputMethodV1::interface().name {
-                tracing::info!("found zwp_input_method_v1 (version {version})");
-                let im: ZwpInputMethodV1 = registry.bind(name, 1, qh, ());
-                state.input_method = Some(im);
+            match interface.as_str() {
+                i if i == ZwpInputMethodV1::interface().name => {
+                    tracing::info!("found zwp_input_method_v1 (version {version})");
+                    let im: ZwpInputMethodV1 = registry.bind(name, 1, qh, ());
+                    state.input_method = Some(im);
+                }
+                "wl_compositor" => {
+                    let c: WlCompositor = registry.bind(name, 4.min(version), qh, ());
+                    state.compositor = Some(c);
+                    state.try_init_candidate_window();
+                }
+                "wl_shm" => {
+                    let s: WlShm = registry.bind(name, 1, qh, ());
+                    state.shm = Some(s);
+                    state.try_init_candidate_window();
+                }
+                "zwlr_layer_shell_v1" => {
+                    tracing::info!("found zwlr_layer_shell_v1 (version {version})");
+                    let ls: ZwlrLayerShellV1 = registry.bind(name, 4.min(version), qh, ());
+                    state.layer_shell = Some(ls);
+                    state.try_init_candidate_window();
+                }
+                _ => {}
             }
         }
     }
@@ -149,7 +220,6 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
     ) {
         match event {
             zwp_input_method_v1::Event::Activate { id } => {
-                // Destroy any previously active context (shouldn't happen in practice).
                 if let Some(prev) = state.active.take() {
                     tracing::warn!("new activation before previous deactivation — cleaning up");
                     state.client.destroy_handle(prev.handle);
@@ -175,7 +245,8 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
                     tracing::info!(handle = active.handle, "input context deactivated");
                     state.client.destroy_handle(active.handle);
                     active.keyboard.release();
-                    active.context.destroy();
+                    // Do not call context.destroy(): KWin frees it server-side on deactivate,
+                    // so calling destroy() causes an "invalid object" protocol error.
                 }
             }
             _ => {}
@@ -199,12 +270,11 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylandState {
                 }
             }
             zwp_input_method_context_v1::Event::Reset => {
-                // Clear preedit on compositor request.
                 if let Some(active) = state.active.as_ref() {
                     active.context.preedit_string(active.serial, String::new(), String::new());
                 }
             }
-            _ => {} // surrounding_text, content_type, invoke_action, preferred_language: ignore
+            _ => {}
         }
     }
 }
@@ -257,7 +327,7 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                     }
                 }
             }
-            _ => {} // Enter, Leave, RepeatInfo: ignore for grabbed keyboard
+            _ => {}
         }
     }
 }
@@ -273,11 +343,11 @@ pub fn run() -> anyhow::Result<()> {
     let qh = event_queue.handle();
 
     let mut state = WaylandState::new()?;
+    state.qh = Some(qh.clone());
 
-    // Trigger registry global enumeration.
     display.get_registry(&qh, ());
 
-    // First roundtrip: receive all current globals.
+    // First roundtrip: bind all globals (input_method, compositor, shm, layer_shell).
     event_queue.roundtrip(&mut state)?;
 
     if state.input_method.is_none() {
@@ -286,6 +356,15 @@ pub fn run() -> anyhow::Result<()> {
              Make sure you are running a Wayland compositor that supports it \
              (KDE Plasma 5/6 should work)."
         );
+    }
+
+    // Second roundtrip: process layer surface configure event so the candidate
+    // window is ready before any key input arrives.
+    if state.candidate_window.is_some() {
+        event_queue.roundtrip(&mut state)?;
+        tracing::info!("candidate window ready");
+    } else {
+        tracing::warn!("candidate window unavailable (missing layer_shell, compositor, or font)");
     }
 
     tracing::info!("y2skk-wayland ready");
