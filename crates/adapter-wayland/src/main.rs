@@ -2,12 +2,22 @@ mod candidate_window;
 mod keymap;
 mod server;
 
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    // Send events to both stderr (useful when run directly in a terminal) and
+    // the systemd journal (useful when KWin launches us via the virtual-keyboard
+    // mechanism, where stderr goes nowhere visible).  `journalctl -t y2skk-wayland`
+    // shows the logs.  If journald is unreachable the layer is simply omitted.
+    let journald_layer = tracing_journald::layer().ok();
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(journald_layer)
         .init();
 
     server::run()
