@@ -355,7 +355,7 @@ fn split_midashi_okuri(raw: &str) -> (&str, Option<&str>) {
         // The trailing ASCII letter is the okurigana consonant only when the midashi
         // contains kana characters.  A purely ASCII midashi (abbrev mode entry such as
         // "is" or "define") must not be split.
-        if last.is_ascii_alphabetic() && raw.chars().any(|c| !c.is_ascii()) {
+        if last.is_ascii_alphabetic() && !raw.is_ascii() {
             let split = raw.len() - 1;
             return (&raw[..split], Some(&raw[split..]));
         }

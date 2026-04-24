@@ -1033,7 +1033,7 @@ impl SkkEngine {
 
         // '>', '<', '?' trigger prefix conversion: append '>' to the midashi and
         // convert immediately (looks up "reading>" in the dictionary).
-        if matches!(ch, '>' | '<' | '?') {
+        if ['>', '<', '?'].contains(&ch) {
             self.completion = None;
             if !roman_buf.is_empty() {
                 kana_buf.push_str(&roman_buf);
@@ -1467,6 +1467,7 @@ impl SkkEngine {
         actions
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_selecting(
         &mut self,
         event: &KeyEvent,
@@ -1493,7 +1494,7 @@ impl SkkEngine {
         // Cancel key (e.g. 'x') → go back one candidate, or return to midashi at index 0.
         if event
             .printable_char()
-            .map_or(false, |c| self.keybindings.cancel.contains(&c))
+            .is_some_and(|c| self.keybindings.cancel.contains(&c))
         {
             if index == 0 {
                 // At the first candidate → back to midashi (cancel conversion).
@@ -1665,7 +1666,7 @@ impl SkkEngine {
         // '>', '<', '?' → commit current candidate and enter suffix mode (new ▽ with '>' prefix)
         if event
             .printable_char()
-            .map_or(false, |c| matches!(c, '>' | '<' | '?'))
+            .is_some_and(|c| ['>', '<', '?'].contains(&c))
         {
             let mut actions =
                 self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);

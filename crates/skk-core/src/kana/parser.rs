@@ -38,7 +38,7 @@ pub fn parse_table(src: &str) -> Result<KanaTable, KanaTableError> {
             Some(pos) => &raw[..pos],
             None => raw,
         };
-        let line = line.trim_end_matches(|c: char| matches!(c, ' ' | '\t' | '\r' | '\n'));
+        let line = line.trim_end_matches(|c| [' ', '\t', '\r', '\n'].contains(&c));
 
         if line.is_empty() {
             continue;

@@ -46,7 +46,7 @@ fn parse_ignore_dic_word(s: &str) -> Option<Vec<String>> {
 
     loop {
         // Skip whitespace
-        while chars.peek().map_or(false, |c| c.is_ascii_whitespace()) {
+        while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) {
             chars.next();
         }
         match chars.peek() {
