@@ -39,11 +39,9 @@ pub unsafe extern "C" fn im_module_create(context_id: *const c_char) -> *mut c_v
     _y2skk_im_module_create(context_id)
 }
 
+use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
 use skk_ipc::proxy::reconnect::ReconnectingClient;
-use skk_ipc::{
-    ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
-    ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
-};
+use skk_ipc::NO_GHOST;
 
 // ── Callbacks struct (mirrors y2skk_im.h) ────────────────────────────────────
 
@@ -56,6 +54,55 @@ pub struct Y2skkCallbacks {
     pub show_candidates: unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
     pub update_status: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint),
+}
+
+// ── ActionSink adapter for the GTK3 callback table ───────────────────────────
+
+struct CallbackSink {
+    ctx: *mut c_void,
+    cbs: *const Y2skkCallbacks,
+}
+
+impl ActionSink for CallbackSink {
+    fn commit(&mut self, text: &str) {
+        if let Ok(cs) = CString::new(text) {
+            unsafe { ((*self.cbs).commit)(self.ctx, cs.as_ptr()) }
+        }
+    }
+
+    fn update_preedit(&mut self, text: &str, cursor: u32, ghost_start: Option<u32>) {
+        if let Ok(cs) = CString::new(text) {
+            let ghost = ghost_start.unwrap_or(NO_GHOST);
+            unsafe { ((*self.cbs).update_preedit)(self.ctx, cs.as_ptr(), cursor, ghost) }
+        }
+    }
+
+    fn clear_preedit(&mut self) {
+        unsafe { ((*self.cbs).clear_preedit)(self.ctx) }
+    }
+
+    fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
+        let cstrings: Vec<CString> =
+            candidates.iter().filter_map(|w| CString::new(w.as_str()).ok()).collect();
+        let ptrs: Vec<*const c_char> = cstrings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain(std::iter::once(std::ptr::null()))
+            .collect();
+        let keys_cs = CString::new(sel_keys).unwrap_or_default();
+        unsafe { ((*self.cbs).show_candidates)(self.ctx, ptrs.as_ptr(), focused, keys_cs.as_ptr()) }
+    }
+
+    fn hide_candidates(&mut self) {
+        unsafe { ((*self.cbs).hide_candidates)(self.ctx) }
+    }
+
+    fn update_status(&mut self, indicator: &str, timeout_ms: u32) {
+        if let Ok(cs) = CString::new(indicator) {
+            // timeout_ms is passed via action.cursor in the GTK3 C callback.
+            unsafe { ((*self.cbs).update_status)(self.ctx, cs.as_ptr(), timeout_ms) }
+        }
+    }
 }
 
 // ── Global reconnecting client ────────────────────────────────────────────────
@@ -127,68 +174,15 @@ pub unsafe extern "C" fn y2skk_process_key(
     cbs: *const Y2skkCallbacks,
 ) -> c_int {
     let Some(c) = client() else { return 0 };
-    let cbs = &*cbs;
 
     let actions = match c.process_key(handle, keyval, modifiers, is_press != 0) {
         Ok(a) => a,
         Err(_) => return 0,
     };
 
-    let mut consumed = false;
-    let mut force_passthrough = false;
-    for action in &actions {
-        match action.kind {
-            k if k == ACTION_PASSTHROUGH => {
-                // Passthrough can appear alongside commit actions (e.g. Return confirms
-                // the candidate AND sends Enter to the application).
-                force_passthrough = true;
-            }
-            k if k == ACTION_COMMIT => {
-                consumed = true;
-                if let Ok(cs) = CString::new(action.text.as_str()) {
-                    (cbs.commit)(ctx, cs.as_ptr());
-                }
-            }
-            k if k == ACTION_UPDATE_PREEDIT => {
-                consumed = true;
-                if let Ok(cs) = CString::new(action.text.as_str()) {
-                    (cbs.update_preedit)(ctx, cs.as_ptr(), action.cursor, action.ghost_start);
-                }
-            }
-            k if k == ACTION_CLEAR_PREEDIT => {
-                consumed = true;
-                (cbs.clear_preedit)(ctx);
-            }
-            k if k == ACTION_SHOW_CANDIDATES => {
-                consumed = true;
-                // Build a NULL-terminated array of C strings
-                let cstrings: Vec<CString> = action
-                    .candidates
-                    .iter()
-                    .filter_map(|w| CString::new(w.as_str()).ok())
-                    .collect();
-                let ptrs: Vec<*const c_char> = cstrings
-                    .iter()
-                    .map(|s| s.as_ptr())
-                    .chain(std::iter::once(std::ptr::null()))
-                    .collect();
-                let keys_cs = CString::new(action.text.as_str()).unwrap_or_default();
-                (cbs.show_candidates)(ctx, ptrs.as_ptr(), action.focused, keys_cs.as_ptr());
-            }
-            k if k == ACTION_HIDE_CANDIDATES => {
-                consumed = true;
-                (cbs.hide_candidates)(ctx);
-            }
-            k if k == ACTION_UPDATE_STATUS => {
-                if let Ok(cs) = CString::new(action.text.as_str()) {
-                    (cbs.update_status)(ctx, cs.as_ptr(), action.cursor);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if consumed && !force_passthrough { 1 } else { 0 }
+    let mut sink = CallbackSink { ctx, cbs };
+    let result = dispatch_actions(&actions, &mut sink);
+    if result.consumed && !result.force_passthrough { 1 } else { 0 }
 }
 
 /// Notifies the daemon that the context gained focus.

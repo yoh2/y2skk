@@ -6,6 +6,7 @@ members = [
     "crates/xim-server",
     "crates/adapter-gtk3",
     "crates/adapter-qt6",
+    "crates/adapter-wayland",
     "crates/y2skk-indicator",
     "crates/y2skk-settings",
     "xtask",
