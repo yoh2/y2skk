@@ -1,4 +1,7 @@
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
@@ -45,10 +48,16 @@ pub struct WaylandState {
     outputs: Vec<WlOutput>,
     pub candidate_windows: Vec<CandidateWindow>,
     qh: Option<QueueHandle<WaylandState>>,
+    /// Write end of the status auto-hide pipe.  The timer thread writes to this
+    /// fd after the timeout expires; the main event loop polls the read end.
+    timer_write: OwnedFd,
+    /// Cancel flag for the in-flight status timer thread (`Some` while a timer
+    /// is pending).  Setting it to `true` makes the thread skip its write.
+    status_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl WaylandState {
-    fn new() -> anyhow::Result<Self> {
+    fn new(timer_write: OwnedFd) -> anyhow::Result<Self> {
         Ok(Self {
             client: ReconnectingClient::new()?,
             input_method: None,
@@ -59,6 +68,8 @@ impl WaylandState {
             outputs: Vec::new(),
             candidate_windows: Vec::new(),
             qh: None,
+            timer_write,
+            status_cancel: None,
         })
     }
 
@@ -121,8 +132,17 @@ impl WaylandState {
         let context = &self.active.as_ref().unwrap().context;
         let qh = self.qh.as_ref();
         let cws = &mut self.candidate_windows;
+        let timer_fd = self.timer_write.as_fd();
+        let cancel = &mut self.status_cancel;
 
-        let mut sink = ContextSink { context, serial, candidate_windows: cws, qh };
+        let mut sink = ContextSink {
+            context,
+            serial,
+            candidate_windows: cws,
+            qh,
+            timer_write_fd: timer_fd,
+            status_cancel: cancel,
+        };
         let result = dispatch_actions(&actions, &mut sink);
 
         if !result.consumed || result.force_passthrough {
@@ -139,6 +159,8 @@ struct ContextSink<'a> {
     serial: u32,
     candidate_windows: &'a mut Vec<CandidateWindow>,
     qh: Option<&'a QueueHandle<WaylandState>>,
+    timer_write_fd: BorrowedFd<'a>,
+    status_cancel: &'a mut Option<Arc<AtomicBool>>,
 }
 
 impl ActionSink for ContextSink<'_> {
@@ -169,7 +191,38 @@ impl ActionSink for ContextSink<'_> {
         }
     }
 
-    fn update_status(&mut self, _indicator: &str, _timeout_ms: u32) {}
+    fn update_status(&mut self, indicator: &str, timeout_ms: u32) {
+        // Cancel any previous auto-hide timer.
+        if let Some(old) = self.status_cancel.take() {
+            old.store(true, Ordering::Relaxed);
+        }
+
+        if let Some(qh) = self.qh {
+            for cw in self.candidate_windows.iter_mut() {
+                cw.show_status(indicator, qh);
+            }
+        }
+
+        // Schedule auto-hide.
+        if timeout_ms > 0 {
+            let fd = match self.timer_write_fd.try_clone_to_owned() {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!("status timer fd clone failed: {e}");
+                    return;
+                }
+            };
+            let cancel = Arc::new(AtomicBool::new(false));
+            *self.status_cancel = Some(cancel.clone());
+
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(timeout_ms as u64));
+                if !cancel.load(Ordering::Relaxed) {
+                    let _ = rustix::io::write(&fd, &[1u8]);
+                }
+            });
+        }
+    }
 }
 
 // ── Dispatch implementations ──────────────────────────────────────────────────
@@ -346,12 +399,15 @@ pub fn run() -> anyhow::Result<()> {
     let mut event_queue: EventQueue<WaylandState> = conn.new_event_queue();
     let qh = event_queue.handle();
 
-    let mut state = WaylandState::new()?;
+    // Create the status auto-hide timer pipe (non-blocking so drain loops don't block).
+    let (timer_read, timer_write) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::NONBLOCK | rustix::pipe::PipeFlags::CLOEXEC,
+    )?;
+
+    let mut state = WaylandState::new(timer_write)?;
     state.qh = Some(qh.clone());
 
     display.get_registry(&qh, ());
-
-    // First roundtrip: enumerate all globals including wl_output.
     event_queue.roundtrip(&mut state)?;
 
     if state.input_method.is_none() {
@@ -362,10 +418,7 @@ pub fn run() -> anyhow::Result<()> {
         );
     }
 
-    // Create one candidate window per output now that all outputs are known.
     state.init_candidate_windows();
-
-    // Second roundtrip: process layer surface configure events.
     if !state.candidate_windows.is_empty() {
         event_queue.roundtrip(&mut state)?;
         tracing::info!("candidate windows ready");
@@ -373,7 +426,44 @@ pub fn run() -> anyhow::Result<()> {
 
     tracing::info!("y2skk-wayland ready");
 
+    // Main loop: poll both the Wayland socket and the status timer pipe.
+    use rustix::event::{PollFd, PollFlags, poll};
+
     loop {
-        event_queue.blocking_dispatch(&mut state)?;
+        // Drain any bytes queued on the timer pipe; if any fired, hide status.
+        let mut buf = [0u8; 16];
+        let mut timer_fired = false;
+        loop {
+            match rustix::io::read(&timer_read, &mut buf) {
+                Ok(n) if n > 0 => timer_fired = true,
+                _ => break,
+            }
+        }
+        if timer_fired {
+            for cw in &mut state.candidate_windows {
+                cw.hide_status();
+            }
+        }
+
+        // Process any buffered Wayland events and flush pending sends.
+        event_queue.dispatch_pending(&mut state)?;
+        let _ = event_queue.flush();
+
+        // Wait for the next event (Wayland socket or timer pipe).
+        let Some(guard) = event_queue.prepare_read() else { continue };
+        let wayland_fd = guard.connection_fd();
+        let timer_fd = timer_read.as_fd();
+        let mut fds = [
+            PollFd::new(&wayland_fd, PollFlags::IN),
+            PollFd::new(&timer_fd, PollFlags::IN),
+        ];
+        // None = wait indefinitely.
+        let _ = poll(&mut fds, None);
+
+        // Only read from the Wayland socket if it actually fired.
+        if fds[0].revents().contains(PollFlags::IN) {
+            let _ = guard.read();
+        }
+        // Otherwise drop the guard; the timer-pipe path is handled next iteration.
     }
 }

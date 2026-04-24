@@ -153,6 +153,60 @@ fn render_candidates(
     unsafe { munmap(ptr as *mut _, size).expect("munmap") };
 }
 
+/// Render the mode indicator as a small box at the bottom-left of the canvas.
+fn render_status(fd: &OwnedFd, font: &Font, indicator: &str) {
+    use rustix::mm::{mmap, munmap, MapFlags, ProtFlags};
+
+    let size = (CANVAS_W * CANVAS_H * 4) as usize;
+    let ptr = unsafe {
+        mmap(
+            ptr::null_mut(),
+            size,
+            ProtFlags::READ | ProtFlags::WRITE,
+            MapFlags::SHARED,
+            fd,
+            0,
+        )
+        .expect("mmap") as *mut u8
+    };
+    let pixels = unsafe { std::slice::from_raw_parts_mut(ptr, size) };
+
+    // Clear the full canvas first.
+    for chunk in pixels.chunks_exact_mut(4) {
+        chunk.copy_from_slice(&TRANSPARENT);
+    }
+
+    // Small indicator box (~50x30) anchored to bottom-left of the canvas
+    // (which itself is anchored to bottom-left of the screen).
+    let box_w: i32 = 60;
+    let box_h: i32 = LINE_H + ROW_PAD * 2;
+    let box_x: i32 = 0;
+    let box_y: i32 = CANVAS_H - box_h;
+
+    draw_rect(pixels, box_x, box_y, box_w, box_h, BORDER_COLOR, CANVAS_W);
+    draw_filled_rect(
+        pixels,
+        box_x + 1, box_y + 1,
+        box_w - 2, box_h - 2,
+        BG_COLOR,
+        CANVAS_W,
+    );
+
+    let baseline_y = box_y + ROW_PAD + FONT_SIZE as i32;
+    draw_text(
+        pixels,
+        font,
+        indicator,
+        box_x + H_MARGIN,
+        baseline_y,
+        TEXT_COLOR,
+        CANVAS_W,
+        CANVAS_H,
+    );
+
+    unsafe { munmap(ptr as *mut _, size).expect("munmap") };
+}
+
 fn draw_text(
     pixels: &mut [u8],
     font: &Font,
@@ -257,10 +311,18 @@ fn draw_rect(
 
 // ── CandidateWindow ───────────────────────────────────────────────────────────
 
-struct PendingDraw {
-    candidates: Vec<String>,
-    focused: u32,
-    sel_keys: String,
+/// Pending draw queued while the layer surface is not yet configured.
+enum PendingDraw {
+    Candidates { candidates: Vec<String>, focused: u32, sel_keys: String },
+    Status { indicator: String },
+}
+
+/// What's currently on the surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayState {
+    Empty,
+    Candidates,
+    Status,
 }
 
 pub struct CandidateWindow {
@@ -271,6 +333,7 @@ pub struct CandidateWindow {
     buf: Option<ShmBuf>,
     configured: bool,
     pending: Option<PendingDraw>,
+    state: DisplayState,
 }
 
 impl CandidateWindow {
@@ -310,10 +373,11 @@ impl CandidateWindow {
             buf: None,
             configured: false,
             pending: None,
+            state: DisplayState::Empty,
         }
     }
 
-    /// Called when candidates should be displayed.
+    /// Show candidates (takes priority over status indicator).
     pub fn show(
         &mut self,
         candidates: &[String],
@@ -322,27 +386,61 @@ impl CandidateWindow {
         qh: &QueueHandle<WaylandState>,
     ) {
         if !self.configured {
-            self.pending = Some(PendingDraw {
+            self.pending = Some(PendingDraw::Candidates {
                 candidates: candidates.to_vec(),
                 focused,
                 sel_keys: sel_keys.to_string(),
             });
             return;
         }
-        self.do_draw(candidates, focused, sel_keys, qh);
+        self.do_draw_candidates(candidates, focused, sel_keys, qh);
+        self.state = DisplayState::Candidates;
     }
 
-    /// Called when candidates should be hidden.
+    /// Hide candidates (clears the surface).
     pub fn hide(&mut self) {
         if !self.configured {
-            self.pending = None;
+            if matches!(self.pending, Some(PendingDraw::Candidates { .. })) {
+                self.pending = None;
+            }
             return;
         }
-        // Overwrite with fully transparent pixels.
-        if let Some(buf) = &self.buf {
-            if let Ok(pixels) = self.make_transparent() {
-                let _ = pixels; // rendered into the mmap'd fd already
+        if self.state == DisplayState::Candidates {
+            self.clear_surface();
+            self.state = DisplayState::Empty;
+        }
+    }
+
+    /// Show the mode indicator ("あ", "A", ...) — only when candidates are not visible.
+    pub fn show_status(&mut self, indicator: &str, qh: &QueueHandle<WaylandState>) {
+        if self.state == DisplayState::Candidates {
+            return;
+        }
+        if !self.configured {
+            self.pending = Some(PendingDraw::Status { indicator: indicator.to_string() });
+            return;
+        }
+        self.do_draw_status(indicator, qh);
+        self.state = DisplayState::Status;
+    }
+
+    /// Hide the mode indicator (called when the auto-hide timer fires).
+    pub fn hide_status(&mut self) {
+        if !self.configured {
+            if matches!(self.pending, Some(PendingDraw::Status { .. })) {
+                self.pending = None;
             }
+            return;
+        }
+        if self.state == DisplayState::Status {
+            self.clear_surface();
+            self.state = DisplayState::Empty;
+        }
+    }
+
+    fn clear_surface(&mut self) {
+        if let Some(buf) = self.buf.as_ref() {
+            let _ = self.make_transparent();
             self.surface.attach(Some(&buf.buffer), 0, 0);
             self.surface.damage_buffer(0, 0, CANVAS_W, CANVAS_H);
             self.surface.commit();
@@ -369,24 +467,14 @@ impl CandidateWindow {
         Ok(())
     }
 
-    fn do_draw(
+    fn do_draw_candidates(
         &mut self,
         candidates: &[String],
         focused: u32,
         sel_keys: &str,
         qh: &QueueHandle<WaylandState>,
     ) {
-        // Allocate buffer on first use.
-        if self.buf.is_none() {
-            match ShmBuf::new(&self.shm, qh) {
-                Ok(b) => self.buf = Some(b),
-                Err(e) => {
-                    tracing::error!("SHM buffer creation failed: {e}");
-                    return;
-                }
-            }
-        }
-
+        if !self.ensure_buffer(qh) { return; }
         render_candidates(
             &self.buf.as_ref().unwrap().fd,
             &self.font,
@@ -394,7 +482,29 @@ impl CandidateWindow {
             focused,
             sel_keys,
         );
+        self.commit_buffer();
+    }
 
+    fn do_draw_status(&mut self, indicator: &str, qh: &QueueHandle<WaylandState>) {
+        if !self.ensure_buffer(qh) { return; }
+        render_status(&self.buf.as_ref().unwrap().fd, &self.font, indicator);
+        self.commit_buffer();
+    }
+
+    fn ensure_buffer(&mut self, qh: &QueueHandle<WaylandState>) -> bool {
+        if self.buf.is_none() {
+            match ShmBuf::new(&self.shm, qh) {
+                Ok(b) => self.buf = Some(b),
+                Err(e) => {
+                    tracing::error!("SHM buffer creation failed: {e}");
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn commit_buffer(&mut self) {
         let buf = self.buf.as_ref().unwrap();
         self.surface.attach(Some(&buf.buffer), 0, 0);
         self.surface.damage_buffer(0, 0, CANVAS_W, CANVAS_H);
@@ -415,8 +525,16 @@ impl CandidateWindow {
         self.layer_surface.ack_configure(serial);
         self.configured = true;
 
-        if let Some(p) = self.pending.take() {
-            self.do_draw(&p.candidates, p.focused, &p.sel_keys, qh);
+        match self.pending.take() {
+            Some(PendingDraw::Candidates { candidates, focused, sel_keys }) => {
+                self.do_draw_candidates(&candidates, focused, &sel_keys, qh);
+                self.state = DisplayState::Candidates;
+            }
+            Some(PendingDraw::Status { indicator }) => {
+                self.do_draw_status(&indicator, qh);
+                self.state = DisplayState::Status;
+            }
+            None => {}
         }
     }
 }
