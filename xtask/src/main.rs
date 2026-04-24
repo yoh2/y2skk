@@ -153,7 +153,7 @@ fn main() {
             eprintln!("  --xim            XIM server (+ systemd service) only");
             eprintln!("  --gtk3           GTK3 IM module only");
             eprintln!("  --qt6            Qt6 IM plugin only");
-            eprintln!("  --wayland        Wayland adapter (+ systemd service) only");
+            eprintln!("  --wayland        Wayland adapter (+ KDE virtual-keyboard entry) only");
             eprintln!();
             eprintln!("OTHER:");
             eprintln!("  --restart        After install, run `systemctl --user try-restart`");
@@ -197,16 +197,17 @@ fn cmd_install(opts: Opts) {
             install_xim_service(&ws, &prefix);
         }
         if opts.wayland {
-            install_wayland_service(&ws, &prefix);
+            install_wayland_desktop(&ws, &prefix);
         }
     }
 
     // Optional service restart (opt-in, never in packaging mode).
+    // y2skk-wayland is launched on demand by KWin's virtual-keyboard
+    // mechanism, so it has no systemd unit to restart.
     let did_restart = if opts.restart && !opts.mode.is_packaging() {
         let mut any = false;
-        if opts.daemon  { systemctl_try_restart("y2skk-daemon");   any = true; }
-        if opts.xim     { systemctl_try_restart("y2skk-xim");      any = true; }
-        if opts.wayland { systemctl_try_restart("y2skk-wayland");  any = true; }
+        if opts.daemon { systemctl_try_restart("y2skk-daemon"); any = true; }
+        if opts.xim    { systemctl_try_restart("y2skk-xim");    any = true; }
         any
     } else {
         false
@@ -217,18 +218,16 @@ fn cmd_install(opts: Opts) {
 
     match &opts.mode {
         Mode::UserLocal | Mode::System => {
-            if (opts.daemon || opts.xim || opts.wayland) && !did_restart {
+            if (opts.daemon || opts.xim) && !did_restart {
                 println!();
                 println!("First-time setup (enable & start the service):");
                 if opts.daemon  { println!("  systemctl --user enable --now y2skk-daemon"); }
                 if opts.xim     { println!("  systemctl --user enable --now y2skk-xim"); }
-                if opts.wayland { println!("  systemctl --user enable --now y2skk-wayland"); }
                 println!();
                 println!("Already enabled?  Apply this update by restarting:");
                 let mut units = String::new();
                 if opts.daemon  { units.push_str("y2skk-daemon ");  }
                 if opts.xim     { units.push_str("y2skk-xim ");     }
-                if opts.wayland { units.push_str("y2skk-wayland "); }
                 println!("  systemctl --user try-restart {}", units.trim_end());
                 println!("  (or re-run `cargo xtask install` with --restart)");
             }
@@ -340,18 +339,34 @@ fn install_wayland(ws: &Path, mode: &Mode) {
     install_file(&src, &dest, use_sudo);
 }
 
-fn install_wayland_service(ws: &Path, prefix: &Path) {
-    let src = ws.join("dist/systemd/y2skk-wayland.service");
+/// Install the KDE virtual-keyboard registration (`.desktop` for System
+/// Settings → Virtual Keyboard).
+fn install_wayland_desktop(ws: &Path, prefix: &Path) {
     let bin_path = prefix.join("bin/y2skk-wayland");
 
-    let content = fs::read_to_string(&src)
-        .unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
-    let content = content.replace(
-        "%h/.cargo/bin/y2skk-wayland",
-        bin_path.to_str().unwrap(),
-    );
+    let app_src = ws.join("dist/applications/y2skk-wayland.desktop");
+    let app_content = fs::read_to_string(&app_src)
+        .unwrap_or_else(|e| die(&format!("read {}: {e}", app_src.display())));
+    let app_content = app_content.replace("%Y2SKK_WAYLAND_BIN%", bin_path.to_str().unwrap());
+    let app_dest = home_dir().join(".local/share/applications/y2skk-wayland.desktop");
+    write_user_file(&app_dest, &app_content);
+    println!("  Installed virtual-keyboard entry: {}", app_dest.display());
 
-    install_systemd_unit("y2skk-wayland.service", &content);
+    println!();
+    println!("To finish enabling the Wayland adapter:");
+    println!("  System Settings → Keyboard → Virtual Keyboard → select \"y2skk\"");
+    println!("  (KDE remembers the choice across sessions)");
+}
+
+/// Write `content` to `dest`, creating parent directories as needed.
+/// Used for per-user config files — never needs sudo.
+fn write_user_file(dest: &Path, content: &str) {
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .unwrap_or_else(|e| die(&format!("create dir {}: {e}", parent.display())));
+    }
+    fs::write(dest, content)
+        .unwrap_or_else(|e| die(&format!("write {}: {e}", dest.display())));
 }
 
 // ── GTK3 adapter ───────────────────────────────────────────────────────────────
@@ -676,6 +691,20 @@ fn cmd_uninstall(opts: Opts) {
         removed = true;
     }
 
+    // Wayland virtual-keyboard desktop file (always user-local).  Older
+    // installs may also have left an autostart entry around — clean it up too.
+    let wayland_desktop_files = [
+        home_dir().join(".local/share/applications/y2skk-wayland.desktop"),
+        home_dir().join(".config/autostart/y2skk-wayland-activate.desktop"),
+    ];
+    for path in &wayland_desktop_files {
+        if path.exists() {
+            println!("  Removing desktop file: {}", path.display());
+            fs::remove_file(path).unwrap_or_else(|e| eprintln!("  Warning: {e}"));
+            removed = true;
+        }
+    }
+
     // Kana tables directory.
     let tables_dir = opts.mode.daemon_prefix().join("share/y2skk/tables");
     if tables_dir.exists() {
@@ -688,7 +717,10 @@ fn cmd_uninstall(opts: Opts) {
         removed = true;
     }
 
-    // Systemd services (always user-local).
+    // Systemd services (always user-local).  y2skk-wayland.service is legacy
+    // — earlier versions of xtask installed one, but the Wayland adapter is
+    // now launched by KWin's virtual-keyboard machinery instead.  Clean up
+    // the file if it's left over from a previous install.
     let mut need_reload = false;
     for name in &["y2skk-daemon.service", "y2skk-xim.service", "y2skk-wayland.service"] {
         let service = home_dir().join(".config/systemd/user").join(name);
