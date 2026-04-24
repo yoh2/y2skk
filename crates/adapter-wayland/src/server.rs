@@ -11,6 +11,7 @@ use wayland_client::{
         wl_keyboard::{self, WlKeyboard},
         wl_output::WlOutput,
         wl_registry::{self, WlRegistry},
+        wl_seat::{self, WlSeat},
         wl_shm::WlShm,
     },
 };
@@ -32,6 +33,12 @@ use crate::keymap;
 const TAG_STATUS_HIDE: u8 = 1;
 /// Byte written to the timer pipe for each key-repeat tick.
 const TAG_KEY_REPEAT: u8 = 2;
+
+/// Marker user-data for the wl_keyboard obtained via wl_seat.get_keyboard.
+/// Gives it a distinct Dispatch impl from the IM-grabbed keyboard (which
+/// uses `()` as its user-data).  We only care about RepeatInfo on this one.
+#[derive(Debug)]
+pub struct SeatKbd;
 
 /// State tracking one currently-repeating key.
 struct RepeatActive {
@@ -107,6 +114,14 @@ pub struct WaylandState {
     /// release event for the same key pushes the deadline further; the
     /// repeat actually stops once this deadline elapses with no new events.
     pending_stop_release: Option<Instant>,
+    /// wl_seat bound from the registry, used to get a regular wl_keyboard
+    /// for standard repeat_info delivery (KWin does not emit repeat_info on
+    /// the IM-grabbed keyboard).
+    seat: Option<WlSeat>,
+    /// Regular wl_keyboard obtained via wl_seat.get_keyboard.  Kept alive so
+    /// compositor-driven RepeatInfo updates keep arriving for the lifetime
+    /// of the process.  We ignore all its other events.
+    _seat_keyboard: Option<WlKeyboard>,
 }
 
 impl WaylandState {
@@ -129,13 +144,23 @@ impl WaylandState {
             repeat_active: None,
             pressed_keys: HashSet::new(),
             pending_stop_release: None,
+            seat: None,
+            _seat_keyboard: None,
         })
     }
 
     /// How long to wait after a release event before actually stopping a
-    /// repeat.  KWin emits synthetic release events at the repeat cadence
-    /// after commit_string calls, so a single release could be a phantom.
-    const REPEAT_STOP_GRACE: Duration = Duration::from_millis(60);
+    /// repeat.  KWin emits synthetic release events in bursts after each
+    /// commit_string; we must wait long enough for the next burst (caused
+    /// by our next repeat tick) to reset the deadline.  The grace therefore
+    /// scales with the tick interval.
+    fn repeat_stop_grace(&self) -> Duration {
+        let interval_ms = 1000u64 / (self.repeat_rate.max(1) as u64);
+        // 2× the tick interval gives ample overlap between consecutive
+        // synthetic-release bursts at low rates; clamp to a sane range.
+        let ms = (interval_ms * 2).clamp(60, 500);
+        Duration::from_millis(ms)
+    }
 
     /// Begin repeating the given key after `repeat_delay` ms, then at
     /// `repeat_rate` presses per second.  Cancels any previous repeat.
@@ -416,6 +441,12 @@ impl Dispatch<WlRegistry, ()> for WaylandState {
                     let output: WlOutput = registry.bind(name, 2.min(version), qh, ());
                     state.outputs.push(output);
                 }
+                "wl_seat" => {
+                    // wl_seat.get_keyboard is called later when the seat
+                    // reports a keyboard capability.
+                    let seat: WlSeat = registry.bind(name, 7.min(version), qh, ());
+                    state.seat = Some(seat);
+                }
                 _ => {}
             }
         }
@@ -538,9 +569,12 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                     let is_repeating = state.repeat_active.as_ref()
                         .map(|r| r.keycode) == Some(key);
                     if is_repeating {
-                        state.pending_stop_release =
-                            Some(Instant::now() + Self::REPEAT_STOP_GRACE);
-                        tracing::debug!("release for repeating key {key}: defer stop");
+                        let grace = state.repeat_stop_grace();
+                        state.pending_stop_release = Some(Instant::now() + grace);
+                        tracing::debug!(
+                            "release for repeating key {key}: defer stop (grace {} ms)",
+                            grace.as_millis()
+                        );
                         return;
                     }
                     if !state.pressed_keys.remove(&key) {
@@ -603,6 +637,49 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
             }
             _ => {}
         }
+    }
+}
+
+impl Dispatch<WlSeat, ()> for WaylandState {
+    fn event(
+        state: &mut Self,
+        seat: &WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: WEnum::Value(caps),
+        } = event
+        {
+            if caps.contains(wl_seat::Capability::Keyboard) && state._seat_keyboard.is_none() {
+                tracing::debug!("wl_seat keyboard capability present; binding keyboard");
+                state._seat_keyboard = Some(seat.get_keyboard(qh, SeatKbd));
+            }
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, SeatKbd> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _kbd: &WlKeyboard,
+        event: wl_keyboard::Event,
+        _data: &SeatKbd,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::RepeatInfo { rate, delay } = event {
+            state.repeat_rate = rate.max(0) as u32;
+            state.repeat_delay = delay.max(0) as u32;
+            tracing::info!(
+                "key repeat info (seat): rate={}/s, delay={}ms",
+                state.repeat_rate, state.repeat_delay,
+            );
+        }
+        // Other events (Keymap, Enter/Leave, Key, Modifiers) are handled via
+        // the IM-grabbed keyboard; ignore them here.
     }
 }
 
