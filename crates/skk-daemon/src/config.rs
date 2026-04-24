@@ -90,16 +90,10 @@ impl Default for InputConfig {
 
 // ── [user-dict] ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UserDictConfig {
     pub path: Option<PathBuf>,
-}
-
-impl Default for UserDictConfig {
-    fn default() -> Self {
-        Self { path: None }
-    }
 }
 
 impl UserDictConfig {
