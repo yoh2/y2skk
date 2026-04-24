@@ -1,0 +1,280 @@
+use wayland_client::{
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
+    protocol::{
+        wl_keyboard::{self, WlKeyboard},
+        wl_registry::{self, WlRegistry},
+    },
+};
+use wayland_protocols::wp::input_method::zv1::client::{
+    zwp_input_method_context_v1::{self, ZwpInputMethodContextV1},
+    zwp_input_method_v1::{self, ZwpInputMethodV1},
+};
+
+use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
+use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
+
+use crate::keymap;
+
+// ── Per-activation state ──────────────────────────────────────────────────────
+
+struct ActiveContext {
+    context: ZwpInputMethodContextV1,
+    keyboard: WlKeyboard,
+    handle: LocalHandle,
+    /// Serial from the last commit_state event; required for preedit/commit requests.
+    serial: u32,
+    /// Modifier state in skk-ipc bitmask format (Shift=0x01, Ctrl=0x04, Alt=0x08, Meta=0x40).
+    skk_mods: u32,
+}
+
+// ── Top-level state ───────────────────────────────────────────────────────────
+
+pub struct WaylandState {
+    client: ReconnectingClient,
+    input_method: Option<ZwpInputMethodV1>,
+    active: Option<ActiveContext>,
+}
+
+impl WaylandState {
+    fn new() -> anyhow::Result<Self> {
+        Ok(Self {
+            client: ReconnectingClient::new()?,
+            input_method: None,
+            active: None,
+        })
+    }
+
+    fn on_key(&mut self, keycode: u32, is_press: bool) {
+        // Extract per-activation data without holding a reference.
+        let (handle, serial, skk_mods) = match self.active.as_ref() {
+            Some(a) => (a.handle, a.serial, a.skk_mods),
+            None => return,
+        };
+
+        let shift = skk_mods & 0x01 != 0;
+        let keysym = keymap::evdev_to_keysym(keycode, shift);
+        if keysym == 0 {
+            return;
+        }
+
+        let actions = match self.client.process_key(handle, keysym, skk_mods, is_press) {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::error!(handle, "process_key error: {e:?}");
+                return;
+            }
+        };
+
+        // Dispatch actions through the sink.
+        let Some(active) = self.active.as_ref() else { return };
+        let mut sink = ContextSink { context: &active.context, serial };
+        let result = dispatch_actions(&actions, &mut sink);
+
+        // Forward key to application when not consumed.
+        if !result.consumed || result.force_passthrough {
+            let state_val: u32 = if is_press { 1 } else { 0 };
+            active.context.key(serial, 0, keycode, state_val);
+        }
+    }
+}
+
+// ── ActionSink for zwp_input_method_context_v1 ────────────────────────────────
+
+struct ContextSink<'a> {
+    context: &'a ZwpInputMethodContextV1,
+    serial: u32,
+}
+
+impl ActionSink for ContextSink<'_> {
+    fn commit(&mut self, text: &str) {
+        self.context.commit_string(self.serial, text.to_string());
+    }
+
+    fn update_preedit(&mut self, text: &str, cursor: u32, _ghost_start: Option<u32>) {
+        // Set cursor position first, then send the preedit string.
+        self.context.preedit_cursor(cursor as i32);
+        self.context.preedit_string(self.serial, text.to_string(), String::new());
+    }
+
+    fn clear_preedit(&mut self) {
+        self.context.preedit_string(self.serial, String::new(), String::new());
+    }
+
+    fn show_candidates(&mut self, _candidates: &[String], _focused: u32, _sel_keys: &str) {
+        // Phase A: candidate window not yet implemented.
+    }
+
+    fn hide_candidates(&mut self) {
+        // Phase A: candidate window not yet implemented.
+    }
+
+    fn update_status(&mut self, _indicator: &str, _timeout_ms: u32) {
+        // Phase A: status indicator not yet implemented.
+    }
+}
+
+// ── Dispatch implementations ──────────────────────────────────────────────────
+
+impl Dispatch<WlRegistry, ()> for WaylandState {
+    fn event(
+        state: &mut Self,
+        registry: &WlRegistry,
+        event: wl_registry::Event,
+        _: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_registry::Event::Global { name, interface, version } = event {
+            if interface == ZwpInputMethodV1::interface().name {
+                tracing::info!("found zwp_input_method_v1 (version {version})");
+                let im: ZwpInputMethodV1 = registry.bind(name, 1, qh, ());
+                state.input_method = Some(im);
+            }
+        }
+    }
+}
+
+impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
+    // activate (opcode 0) creates a new ZwpInputMethodContextV1 via new_id.
+    fn event_created_child(
+        _opcode: u16,
+        qhandle: &QueueHandle<Self>,
+    ) -> std::sync::Arc<dyn wayland_client::backend::ObjectData> {
+        qhandle.make_data::<ZwpInputMethodContextV1, ()>(())
+    }
+
+    fn event(
+        state: &mut Self,
+        _im: &ZwpInputMethodV1,
+        event: zwp_input_method_v1::Event,
+        _: &(),
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_input_method_v1::Event::Activate { id } => {
+                // Destroy any previously active context (shouldn't happen in practice).
+                if let Some(prev) = state.active.take() {
+                    tracing::warn!("new activation before previous deactivation — cleaning up");
+                    state.client.destroy_handle(prev.handle);
+                    prev.keyboard.release();
+                    prev.context.destroy();
+                }
+
+                let handle = state.client.create_handle("wayland");
+                let keyboard = id.grab_keyboard(qh, ());
+                tracing::info!(handle, "input context activated");
+
+                state.active = Some(ActiveContext {
+                    context: id,
+                    keyboard,
+                    handle,
+                    serial: 0,
+                    skk_mods: 0,
+                });
+            }
+            zwp_input_method_v1::Event::Deactivate { context: _ctx } => {
+                if let Some(active) = state.active.take() {
+                    tracing::info!(handle = active.handle, "input context deactivated");
+                    state.client.destroy_handle(active.handle);
+                    active.keyboard.release();
+                    active.context.destroy();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpInputMethodContextV1, ()> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _ctx: &ZwpInputMethodContextV1,
+        event: zwp_input_method_context_v1::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_input_method_context_v1::Event::CommitState { serial } => {
+                if let Some(active) = &mut state.active {
+                    active.serial = serial;
+                }
+            }
+            zwp_input_method_context_v1::Event::Reset => {
+                // Clear preedit on compositor request.
+                if let Some(active) = state.active.as_ref() {
+                    active.context.preedit_string(active.serial, String::new(), String::new());
+                }
+            }
+            _ => {} // surrounding_text, content_type, invoke_action, preferred_language: ignore
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _kb: &WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_keyboard::Event::Keymap { format: _, fd: _, size: _ } => {
+                // Phase A: keymap ignored; using hardcoded US QWERTY table.
+                // The fd (OwnedFd) is dropped here, which closes it.
+            }
+            wl_keyboard::Event::Key { serial: _, time: _, key, state: key_state } => {
+                let is_press = matches!(key_state, WEnum::Value(wl_keyboard::KeyState::Pressed));
+                state.on_key(key, is_press);
+            }
+            wl_keyboard::Event::Modifiers {
+                serial: _,
+                mods_depressed,
+                mods_latched,
+                mods_locked: _,
+                group: _,
+            } => {
+                if let Some(active) = &mut state.active {
+                    active.skk_mods = keymap::xkb_mods_to_skk(mods_depressed, mods_latched);
+                }
+            }
+            _ => {} // Enter, Leave, RepeatInfo: ignore for grabbed keyboard
+        }
+    }
+}
+
+// ── Event loop ────────────────────────────────────────────────────────────────
+
+pub fn run() -> anyhow::Result<()> {
+    let conn = Connection::connect_to_env()
+        .map_err(|e| anyhow::anyhow!("Wayland connection failed: {e}"))?;
+
+    let display = conn.display();
+    let mut event_queue: EventQueue<WaylandState> = conn.new_event_queue();
+    let qh = event_queue.handle();
+
+    let mut state = WaylandState::new()?;
+
+    // Trigger registry global enumeration.
+    display.get_registry(&qh, ());
+
+    // First roundtrip: receive all current globals.
+    event_queue.roundtrip(&mut state)?;
+
+    if state.input_method.is_none() {
+        anyhow::bail!(
+            "Compositor does not advertise zwp_input_method_v1. \
+             Make sure you are running a Wayland compositor that supports it \
+             (KDE Plasma 5/6 should work)."
+        );
+    }
+
+    tracing::info!("y2skk-wayland ready");
+
+    loop {
+        event_queue.blocking_dispatch(&mut state)?;
+    }
+}

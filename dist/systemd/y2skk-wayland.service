@@ -1,0 +1,19 @@
+[Unit]
+Description=y2skk Wayland input method server
+Documentation=https://github.com/yoh2/y2skk
+After=graphical-session.target y2skk-daemon.service
+PartOf=graphical-session.target
+Wants=y2skk-daemon.service
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/y2skk-wayland
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=graphical-session.target
