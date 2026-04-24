@@ -333,12 +333,38 @@ xk	e		ゖ
 x	w	xw
 xw	a		ゎ
 
-# punctuation
-	.		。
-	,		、
+# 1-letter fullwidth symbols
+	`		‘
+	~		〜
+	!		！
+	@		＠
+	\#		＃
+	\*		＊
+	$		＄
+	%		％
+	^		＾
+	&		＆
+	(		（
+	)		）
 	[		「
+	{		｛
 	]		」
+	}		｝
+	/		／
+	?		？
+	=		＝
+	+		＋
 	-		ー
+	_		＿
+	|		｜
+	'		’
+	"		”
+	,		、
+	<		＜
+	.		。
+	>		＞
+	:		；
+	¥		￥
 
 [trans.katakana]
 

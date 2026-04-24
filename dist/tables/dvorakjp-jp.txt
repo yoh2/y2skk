@@ -12,9 +12,6 @@ description = "DvorakJP optimized romaji (JP Dvorak keyboard)"
 	e		え
 	o		お
 
-# semicolon = ん (ergonomic on Dvorak right pinky)
-	;		ん
-
 # か行
 	k	k
 k	a		か
@@ -347,14 +344,6 @@ xk	a		ゕ
 xk	e		ゖ
 x	w	xw
 xw	a		ゎ
-
-# punctuation
-	.		。
-	,		、
-	[		「
-	]		」
-	-		ー
-	/		・
 
 # ────────────────────────────────────���────────────────────────
 # DvorakJP contraction shortcuts
@@ -789,21 +778,25 @@ vy	x		ゔぃん
 	&		＆
 	(		（
 	)		）
-	[		［
+	[		「
 	{		｛
-	]		］
+	]		」
 	}		｝
 	/		／
 	?		？
 	=		＝
 	+		＋
+	-		ー
+	_		＿
 	|		｜
 	'		’
 	"		”
-	,		，
+	,		、
 	<		＜
-	.		．
+	.		。
 	>		＞
+	;		；
+	:		；
 	¥		￥
 
 [trans.katakana]
