@@ -1,7 +1,8 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
 use indexmap::IndexMap;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use super::entry::{Candidate, DictEntry, DictError, LispForm};
 use super::traits::DictionaryProvider;
@@ -14,15 +15,28 @@ pub enum DictEncoding {
     #[default]
     Utf8,
     EucJp,
+    // TODO: Support EucJisx0213
 }
 
-impl DictEncoding {
-    /// Parses an encoding name string (case-insensitive).
-    pub fn from_str(s: &str) -> Self {
+impl FromStr for DictEncoding {
+    type Err = DictError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "euc-jp" | "eucjp" | "euc_jp" => Self::EucJp,
-            _ => Self::Utf8,
+            "euc-jp" | "eucjp" | "euc_jp" => Ok(Self::EucJp),
+            "utf-8" | "utf8" | "utf_8" => Ok(Self::Utf8),
+            _ => Err(DictError::UnknownEncoding(s.to_string())),
         }
+    }
+}
+
+impl Display for DictEncoding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Self::Utf8 => "utf-8",
+            Self::EucJp => "euc-jp",
+        };
+        write!(f, "{str}")
     }
 }
 
@@ -637,9 +651,33 @@ mod tests {
 
     #[test]
     fn test_encoding_from_str() {
-        assert_eq!(DictEncoding::from_str("euc-jp"), DictEncoding::EucJp);
-        assert_eq!(DictEncoding::from_str("EUC-JP"), DictEncoding::EucJp);
-        assert_eq!(DictEncoding::from_str("utf-8"), DictEncoding::Utf8);
-        assert_eq!(DictEncoding::from_str("utf8"), DictEncoding::Utf8);
+        assert!(matches!(
+            DictEncoding::from_str("euc-jp"),
+            Ok(DictEncoding::EucJp),
+        ));
+        assert!(matches!(
+            DictEncoding::from_str("EUC_JP"),
+            Ok(DictEncoding::EucJp),
+        ));
+        assert!(matches!(
+            DictEncoding::from_str("eucJP"),
+            Ok(DictEncoding::EucJp),
+        ));
+        assert!(matches!(
+            DictEncoding::from_str("utf-8"),
+            Ok(DictEncoding::Utf8),
+        ));
+        assert!(matches!(
+            DictEncoding::from_str("UTF_8"),
+            Ok(DictEncoding::Utf8),
+        ));
+        assert!(matches!(
+            DictEncoding::from_str("utf8"),
+            Ok(DictEncoding::Utf8),
+        ));
+        assert!(matches!(
+            DictEncoding::from_str("UNKNOWN"),
+            Err(DictError::UnknownEncoding(enc)) if enc == "UNKNOWN",
+        ))
     }
 }

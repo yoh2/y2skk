@@ -3,6 +3,8 @@ use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_with::{serde_as, DisplayFromStr};
+use skk_core::dict::DictEncoding;
 use thiserror::Error;
 
 /// Expands a leading `~` component to the user's home directory.
@@ -134,17 +136,19 @@ impl Default for DictConfig {
     }
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DictSource {
     pub path: PathBuf,
+    #[serde_as(as = "DisplayFromStr")]
     #[serde(default = "default_encoding")]
-    pub encoding: String,
+    pub encoding: DictEncoding,
     #[serde(default)]
     pub priority: i32,
 }
 
-fn default_encoding() -> String {
-    "utf-8".into()
+fn default_encoding() -> DictEncoding {
+    DictEncoding::Utf8
 }
 
 // ── [indicator] ───────────────────────────────────────────────────────────────
@@ -681,7 +685,7 @@ priority = 0
             dict: DictConfig {
                 sources: vec![crate::config::DictSource {
                     path: PathBuf::from("/nonexistent/SKK-JISYO.L"),
-                    encoding: "utf-8".to_string(),
+                    encoding: DictEncoding::Utf8,
                     priority: 0,
                 }],
                 ..DictConfig::default()

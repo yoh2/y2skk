@@ -73,8 +73,8 @@ impl Candidate {
 pub enum DictError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("encoding error: {0}")]
-    Encoding(String),
+    #[error("unknown encoding: {0}")]
+    UnknownEncoding(String),
     #[error("parse error at line {line}: {message}")]
     Parse { line: usize, message: String },
     #[error("dictionary is read-only")]

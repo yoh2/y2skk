@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use skk_core::config::SkkKeybindings;
-use skk_core::dict::file::{DictEncoding, FileDict, UserDict};
+use skk_core::dict::file::{FileDict, UserDict};
 use skk_core::dict::traits::DictionaryProvider;
 use skk_core::engine::{EngineAction, SkkEngine, SkkPhase};
 use skk_core::kana::table::KanaTable;
@@ -165,8 +165,7 @@ fn load_dicts(config: &Config) -> (Vec<Arc<dyn DictionaryProvider>>, Arc<Mutex<U
     // System dicts
     let mut dicts: Vec<Arc<dyn DictionaryProvider>> = Vec::new();
     for source in &config.dict.sources {
-        let encoding = DictEncoding::from_str(&source.encoding);
-        match FileDict::load(&source.path, encoding, source.priority) {
+        match FileDict::load(&source.path, source.encoding, source.priority) {
             Ok(d) => {
                 tracing::info!(
                     "Loaded dict {} (priority {})",
