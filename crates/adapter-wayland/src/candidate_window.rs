@@ -1,11 +1,12 @@
 use std::os::fd::{AsFd, OwnedFd};
 use std::ptr;
+use std::sync::Arc;
 
 use fontdue::Font;
 use wayland_client::{
-    Connection, Dispatch, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
     protocol::{
-        wl_buffer, wl_compositor, wl_shm, wl_shm_pool, wl_surface,
+        wl_buffer, wl_compositor, wl_output, wl_shm, wl_shm_pool, wl_surface,
     },
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
@@ -266,7 +267,7 @@ pub struct CandidateWindow {
     surface: wl_surface::WlSurface,
     layer_surface: ZwlrLayerSurfaceV1,
     shm: wl_shm::WlShm,
-    font: Font,
+    font: Arc<Font>,
     buf: Option<ShmBuf>,
     configured: bool,
     pending: Option<PendingDraw>,
@@ -277,14 +278,15 @@ impl CandidateWindow {
         compositor: &wl_compositor::WlCompositor,
         layer_shell: &ZwlrLayerShellV1,
         shm: wl_shm::WlShm,
-        font: Font,
+        font: Arc<Font>,
         qh: &QueueHandle<WaylandState>,
+        output: Option<&wl_output::WlOutput>,
     ) -> Self {
         let surface = compositor.create_surface(qh, ());
 
         let layer_surface = layer_shell.get_layer_surface(
             &surface,
-            None,
+            output,
             zwlr_layer_shell_v1::Layer::Top,
             "y2skk-candidates".to_string(),
             qh,
@@ -399,6 +401,11 @@ impl CandidateWindow {
         self.surface.commit();
     }
 
+    /// Returns true if this window owns the given layer surface proxy.
+    pub fn owns_layer_surface(&self, surface: &ZwlrLayerSurfaceV1) -> bool {
+        self.layer_surface.id() == surface.id()
+    }
+
     /// Called by the event dispatcher when a configure event is received.
     pub fn handle_configure(
         &mut self,
@@ -419,7 +426,7 @@ impl CandidateWindow {
 impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylandState {
     fn event(
         state: &mut Self,
-        _proxy: &ZwlrLayerSurfaceV1,
+        proxy: &ZwlrLayerSurfaceV1,
         event: zwlr_layer_surface_v1::Event,
         _: &(),
         _conn: &Connection,
@@ -427,18 +434,28 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylandState {
     ) {
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, width: _, height: _ } => {
-                if let Some(cw) = &mut state.candidate_window {
-                    cw.handle_configure(serial, qh);
+                for cw in &mut state.candidate_windows {
+                    if cw.owns_layer_surface(proxy) {
+                        cw.handle_configure(serial, qh);
+                        break;
+                    }
                 }
             }
             zwlr_layer_surface_v1::Event::Closed => {
-                // Output disappeared — drop and let the main loop recreate if needed.
-                tracing::warn!("layer surface closed");
-                state.candidate_window = None;
+                tracing::warn!("layer surface closed — removing window for that output");
+                state.candidate_windows.retain(|cw| !cw.owns_layer_surface(proxy));
             }
             _ => {}
         }
     }
+}
+
+impl Dispatch<wl_output::WlOutput, ()> for WaylandState {
+    fn event(
+        _: &mut Self, _: &wl_output::WlOutput,
+        _: wl_output::Event,
+        _: &(), _: &Connection, _: &QueueHandle<Self>,
+    ) {}
 }
 
 impl Dispatch<ZwlrLayerShellV1, ()> for WaylandState {
