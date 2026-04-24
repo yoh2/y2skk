@@ -39,7 +39,7 @@ pub unsafe extern "C" fn im_module_create(context_id: *const c_char) -> *mut c_v
     _y2skk_im_module_create(context_id)
 }
 
-use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
+use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink};
 use skk_ipc::proxy::reconnect::ReconnectingClient;
 use skk_ipc::NO_GHOST;
 
@@ -51,7 +51,8 @@ pub struct Y2skkCallbacks {
     pub commit: unsafe extern "C" fn(*mut c_void, *const c_char),
     pub update_preedit: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint, c_uint),
     pub clear_preedit: unsafe extern "C" fn(*mut c_void),
-    pub show_candidates: unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
+    pub show_candidates:
+        unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
     pub update_status: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint),
 }
@@ -82,8 +83,10 @@ impl ActionSink for CallbackSink {
     }
 
     fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
-        let cstrings: Vec<CString> =
-            candidates.iter().filter_map(|w| CString::new(w.as_str()).ok()).collect();
+        let cstrings: Vec<CString> = candidates
+            .iter()
+            .filter_map(|w| CString::new(w.as_str()).ok())
+            .collect();
         let ptrs: Vec<*const c_char> = cstrings
             .iter()
             .map(|s| s.as_ptr())
@@ -182,7 +185,11 @@ pub unsafe extern "C" fn y2skk_process_key(
 
     let mut sink = CallbackSink { ctx, cbs };
     let result = dispatch_actions(&actions, &mut sink);
-    if result.consumed && !result.force_passthrough { 1 } else { 0 }
+    if result.consumed && !result.force_passthrough {
+        1
+    } else {
+        0
+    }
 }
 
 /// Notifies the daemon that the context gained focus.

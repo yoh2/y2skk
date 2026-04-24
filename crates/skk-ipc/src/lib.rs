@@ -58,31 +58,80 @@ pub const NO_GHOST: u32 = u32::MAX;
 
 impl IpcAction {
     pub fn passthrough() -> Self {
-        Self { kind: ACTION_PASSTHROUGH, text: String::new(), cursor: 0, candidates: vec![], focused: 0, ghost_start: NO_GHOST }
+        Self {
+            kind: ACTION_PASSTHROUGH,
+            text: String::new(),
+            cursor: 0,
+            candidates: vec![],
+            focused: 0,
+            ghost_start: NO_GHOST,
+        }
     }
 
     pub fn commit(text: impl Into<String>) -> Self {
-        Self { kind: ACTION_COMMIT, text: text.into(), cursor: 0, candidates: vec![], focused: 0, ghost_start: NO_GHOST }
+        Self {
+            kind: ACTION_COMMIT,
+            text: text.into(),
+            cursor: 0,
+            candidates: vec![],
+            focused: 0,
+            ghost_start: NO_GHOST,
+        }
     }
 
     pub fn update_preedit(text: impl Into<String>, cursor: u32, ghost_start: u32) -> Self {
-        Self { kind: ACTION_UPDATE_PREEDIT, text: text.into(), cursor, candidates: vec![], focused: 0, ghost_start }
+        Self {
+            kind: ACTION_UPDATE_PREEDIT,
+            text: text.into(),
+            cursor,
+            candidates: vec![],
+            focused: 0,
+            ghost_start,
+        }
     }
 
     pub fn clear_preedit() -> Self {
-        Self { kind: ACTION_CLEAR_PREEDIT, text: String::new(), cursor: 0, candidates: vec![], focused: 0, ghost_start: NO_GHOST }
+        Self {
+            kind: ACTION_CLEAR_PREEDIT,
+            text: String::new(),
+            cursor: 0,
+            candidates: vec![],
+            focused: 0,
+            ghost_start: NO_GHOST,
+        }
     }
 
     pub fn show_candidates(candidates: Vec<String>, focused: u32) -> Self {
-        Self { kind: ACTION_SHOW_CANDIDATES, text: String::new(), cursor: 0, candidates, focused, ghost_start: NO_GHOST }
+        Self {
+            kind: ACTION_SHOW_CANDIDATES,
+            text: String::new(),
+            cursor: 0,
+            candidates,
+            focused,
+            ghost_start: NO_GHOST,
+        }
     }
 
     pub fn hide_candidates() -> Self {
-        Self { kind: ACTION_HIDE_CANDIDATES, text: String::new(), cursor: 0, candidates: vec![], focused: 0, ghost_start: NO_GHOST }
+        Self {
+            kind: ACTION_HIDE_CANDIDATES,
+            text: String::new(),
+            cursor: 0,
+            candidates: vec![],
+            focused: 0,
+            ghost_start: NO_GHOST,
+        }
     }
 
     pub fn update_status(indicator: impl Into<String>) -> Self {
-        Self { kind: ACTION_UPDATE_STATUS, text: indicator.into(), cursor: 0, candidates: vec![], focused: 0, ghost_start: NO_GHOST }
+        Self {
+            kind: ACTION_UPDATE_STATUS,
+            text: indicator.into(),
+            cursor: 0,
+            candidates: vec![],
+            focused: 0,
+            ghost_start: NO_GHOST,
+        }
     }
 }
 

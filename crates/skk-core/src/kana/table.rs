@@ -42,7 +42,6 @@ pub enum KanaMode {
     HalfWidth,
 }
 
-
 /// Result of a state machine transition
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransitionResult {
@@ -65,19 +64,25 @@ impl KanaTable {
         kata_overrides: Vec<KanaTransition>,
         okuri_aliases: HashMap<char, char>,
     ) -> Self {
-        Self { transitions, kata_overrides, okuri_aliases }
+        Self {
+            transitions,
+            kata_overrides,
+            okuri_aliases,
+        }
     }
 
     /// Overlays a user-defined table on top of this table.
     /// Used to partially override a built-in table with user-defined rules.
     pub fn overlay(mut self, user: KanaTable) -> Self {
         for ut in &user.transitions {
-            self.transitions.retain(|t| !(t.from == ut.from && t.input == ut.input));
+            self.transitions
+                .retain(|t| !(t.from == ut.from && t.input == ut.input));
         }
         self.transitions.extend(user.transitions);
 
         for ut in &user.kata_overrides {
-            self.kata_overrides.retain(|t| !(t.from == ut.from && t.input == ut.input));
+            self.kata_overrides
+                .retain(|t| !(t.from == ut.from && t.input == ut.input));
         }
         self.kata_overrides.extend(user.kata_overrides);
 
@@ -93,9 +98,15 @@ impl KanaTable {
         let transitions = self.effective_transitions(mode);
 
         // Exact match
-        if let Some(t) = transitions.iter().find(|t| t.from == state && t.input == KanaInput::Char(input)) {
+        if let Some(t) = transitions
+            .iter()
+            .find(|t| t.from == state && t.input == KanaInput::Char(input))
+        {
             let output = self.convert_output(&t.output, mode);
-            return TransitionResult::Ok { output, next_state: t.to.clone() };
+            return TransitionResult::Ok {
+                output,
+                next_state: t.to.clone(),
+            };
         }
 
         // Wildcard match: `KanaInput::Wildcard` matches any character not covered by an exact rule.
@@ -105,25 +116,43 @@ impl KanaTable {
         // Safety: if the wildcard fires from the *empty* start state with to == "", returning
         // OkRetry would cause infinite recursion (the retry would hit the same wildcard again).
         // In that case, return Ok instead — the output is emitted but no retry is issued.
-        if let Some(t) = transitions.iter().find(|t| t.from == state && t.input == KanaInput::Wildcard) {
+        if let Some(t) = transitions
+            .iter()
+            .find(|t| t.from == state && t.input == KanaInput::Wildcard)
+        {
             let output = self.convert_output(&t.output, mode);
             if t.to.is_empty() {
                 if state.is_empty() {
                     // Wildcard from start state: emit output only, no retry (would loop).
-                    return TransitionResult::Ok { output, next_state: String::new() };
+                    return TransitionResult::Ok {
+                        output,
+                        next_state: String::new(),
+                    };
                 }
-                return TransitionResult::OkRetry { output, retry: input };
+                return TransitionResult::OkRetry {
+                    output,
+                    retry: input,
+                };
             }
-            return TransitionResult::Ok { output, next_state: t.to.clone() };
+            return TransitionResult::Ok {
+                output,
+                next_state: t.to.clone(),
+            };
         }
 
         // No match from start state: just ignore the input
         if state.is_empty() {
-            return TransitionResult::NoMatch { flush: String::new(), retry: None };
+            return TransitionResult::NoMatch {
+                flush: String::new(),
+                retry: None,
+            };
         }
 
         // No match from an intermediate state: flush the buffer and retry the input
-        TransitionResult::NoMatch { flush: state.to_string(), retry: Some(input) }
+        TransitionResult::NoMatch {
+            flush: state.to_string(),
+            retry: Some(input),
+        }
     }
 
     /// Resolves the okurigana dictionary key for the given input character.
@@ -140,7 +169,11 @@ impl KanaTable {
                 // kata_overrides take priority; fall back to transitions for the rest
                 let mut result: Vec<&KanaTransition> = Vec::new();
                 for t in &self.transitions {
-                    if !self.kata_overrides.iter().any(|o| o.from == t.from && o.input == t.input) {
+                    if !self
+                        .kata_overrides
+                        .iter()
+                        .any(|o| o.from == t.from && o.input == t.input)
+                    {
                         result.push(t);
                     }
                 }
@@ -162,13 +195,15 @@ impl KanaTable {
 
 /// Converts hiragana to katakana using Unicode offsets (U+3041–U+3096 → U+30A1–U+30F6).
 pub fn hiragana_to_katakana(s: &str) -> String {
-    s.chars().map(|c| {
-        if ('\u{3041}'..='\u{3096}').contains(&c) {
-            char::from_u32(c as u32 + 0x60).unwrap_or(c)
-        } else {
-            c
-        }
-    }).collect()
+    s.chars()
+        .map(|c| {
+            if ('\u{3041}'..='\u{3096}').contains(&c) {
+                char::from_u32(c as u32 + 0x60).unwrap_or(c)
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Converts hiragana to half-width katakana.
@@ -179,7 +214,11 @@ pub fn hiragana_to_halfwidth(s: &str) -> String {
 /// Converts a single character to half-width katakana.
 /// Characters with dakuten/handakuten are decomposed into two half-width characters.
 fn to_halfwidth_katakana(c: char) -> Vec<char> {
-    match hiragana_to_katakana(&c.to_string()).chars().next().unwrap_or(c) {
+    match hiragana_to_katakana(&c.to_string())
+        .chars()
+        .next()
+        .unwrap_or(c)
+    {
         'ァ' => vec!['ｧ'],
         'ア' => vec!['ｱ'],
         'ィ' => vec!['ｨ'],
@@ -278,14 +317,15 @@ mod tests {
     use super::*;
 
     fn make_table(entries: &[(&str, char, &str, &str)]) -> KanaTable {
-        let transitions = entries.iter().map(|(from, input, to, output)| {
-            KanaTransition {
+        let transitions = entries
+            .iter()
+            .map(|(from, input, to, output)| KanaTransition {
                 from: from.to_string(),
                 input: KanaInput::Char(*input),
                 to: to.to_string(),
                 output: output.to_string(),
-            }
-        }).collect();
+            })
+            .collect();
         KanaTable::new(transitions, vec![], HashMap::new())
     }
 
@@ -293,14 +333,15 @@ mod tests {
         exact: &[(&str, char, &str, &str)],
         wildcards: &[(&str, &str, &str)],
     ) -> KanaTable {
-        let mut transitions: Vec<KanaTransition> = exact.iter().map(|(from, input, to, output)| {
-            KanaTransition {
+        let mut transitions: Vec<KanaTransition> = exact
+            .iter()
+            .map(|(from, input, to, output)| KanaTransition {
                 from: from.to_string(),
                 input: KanaInput::Char(*input),
                 to: to.to_string(),
                 output: output.to_string(),
-            }
-        }).collect();
+            })
+            .collect();
         for (from, to, output) in wildcards {
             transitions.push(KanaTransition {
                 from: from.to_string(),
@@ -321,31 +362,49 @@ mod tests {
         ]);
 
         let r = table.transition("", 'k', KanaMode::Hiragana);
-        assert_eq!(r, TransitionResult::Ok { output: String::new(), next_state: "k".into() });
+        assert_eq!(
+            r,
+            TransitionResult::Ok {
+                output: String::new(),
+                next_state: "k".into()
+            }
+        );
 
         let r = table.transition("k", 'a', KanaMode::Hiragana);
-        assert_eq!(r, TransitionResult::Ok { output: "か".into(), next_state: String::new() });
+        assert_eq!(
+            r,
+            TransitionResult::Ok {
+                output: "か".into(),
+                next_state: String::new()
+            }
+        );
     }
 
     #[test]
     fn test_katakana_auto_derive() {
-        let table = make_table(&[
-            ("", 'k', "k", ""),
-            ("k", 'a', "", "か"),
-        ]);
+        let table = make_table(&[("", 'k', "k", ""), ("k", 'a', "", "か")]);
         let r = table.transition("k", 'a', KanaMode::Katakana);
-        assert_eq!(r, TransitionResult::Ok { output: "カ".into(), next_state: String::new() });
+        assert_eq!(
+            r,
+            TransitionResult::Ok {
+                output: "カ".into(),
+                next_state: String::new()
+            }
+        );
     }
 
     #[test]
     fn test_no_match_intermediate() {
-        let table = make_table(&[
-            ("", 'k', "k", ""),
-            ("k", 'a', "", "か"),
-        ]);
+        let table = make_table(&[("", 'k', "k", ""), ("k", 'a', "", "か")]);
         // 'b' is not reachable from state "k" → flush="k", retry=Some('b')
         let r = table.transition("k", 'b', KanaMode::Hiragana);
-        assert_eq!(r, TransitionResult::NoMatch { flush: "k".into(), retry: Some('b') });
+        assert_eq!(
+            r,
+            TransitionResult::NoMatch {
+                flush: "k".into(),
+                retry: Some('b')
+            }
+        );
     }
 
     #[test]
@@ -357,30 +416,49 @@ mod tests {
     #[test]
     fn test_literal_star_not_wildcard() {
         // A Char('*') rule must NOT act as a wildcard.
-        let table = make_table(&[
-            ("", '*', "", "＊"),
-        ]);
+        let table = make_table(&[("", '*', "", "＊")]);
         // '*' key → "＊"
         let r = table.transition("", '*', KanaMode::Hiragana);
-        assert_eq!(r, TransitionResult::Ok { output: "＊".into(), next_state: "".into() });
+        assert_eq!(
+            r,
+            TransitionResult::Ok {
+                output: "＊".into(),
+                next_state: "".into()
+            }
+        );
         // 'x' key → NoMatch (the '*' rule is literal, not a wildcard)
         let r = table.transition("", 'x', KanaMode::Hiragana);
-        assert_eq!(r, TransitionResult::NoMatch { flush: "".into(), retry: None });
+        assert_eq!(
+            r,
+            TransitionResult::NoMatch {
+                flush: "".into(),
+                retry: None
+            }
+        );
     }
 
     #[test]
     fn test_wildcard_coexists_with_literal_star() {
         // When both Char('*') and Wildcard are present for the same from-state,
         // input '*' hits Char('*') (exact match first), and any other input hits Wildcard.
-        let table = make_table_with_wildcard(
-            &[("n", '*', "", "＊")],
-            &[("n", "", "ん")],
-        );
+        let table = make_table_with_wildcard(&[("n", '*', "", "＊")], &[("n", "", "ん")]);
         // 'n' + '*' → exact rule fires: output "＊", back to start
         let r = table.transition("n", '*', KanaMode::Hiragana);
-        assert_eq!(r, TransitionResult::Ok { output: "＊".into(), next_state: "".into() });
+        assert_eq!(
+            r,
+            TransitionResult::Ok {
+                output: "＊".into(),
+                next_state: "".into()
+            }
+        );
         // 'n' + 'k' → wildcard fires: output "ん", retry 'k'
         let r = table.transition("n", 'k', KanaMode::Hiragana);
-        assert_eq!(r, TransitionResult::OkRetry { output: "ん".into(), retry: 'k' });
+        assert_eq!(
+            r,
+            TransitionResult::OkRetry {
+                output: "ん".into(),
+                retry: 'k'
+            }
+        );
     }
 }

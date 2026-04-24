@@ -1,7 +1,9 @@
 use crate::config::SkkKeybindings;
 use crate::dict::entry::Candidate;
 use crate::dict::traits::DictionaryProvider;
-use crate::kana::table::{hiragana_to_halfwidth, hiragana_to_katakana, KanaMode, KanaTable, TransitionResult};
+use crate::kana::table::{
+    hiragana_to_halfwidth, hiragana_to_katakana, KanaMode, KanaTable, TransitionResult,
+};
 use crate::key::{Key, KeyEvent, Modifiers};
 
 /// Separator inserted between the user-typed portion and the completion ghost
@@ -90,7 +92,10 @@ pub enum SkkPhase {
     /// ASCII (半角英数, IME pass-through) mode
     Ascii,
     /// Code input mode (`\` or `\u`)
-    CodeInput { prefix: CodeInputPrefix, buf: String },
+    CodeInput {
+        prefix: CodeInputPrefix,
+        buf: String,
+    },
     /// Abbrev mode: ASCII characters typed directly as the dictionary key (▽ascii).
     /// Entered from a kana mode by the abbrev trigger key (default: `/`).
     Abbrev { buf: String },
@@ -267,17 +272,17 @@ impl SkkEngine {
     /// (e.g. q confirming from katakana ▼) are correctly detected.
     fn current_mode_indicator(&self) -> &'static str {
         match &self.phase {
-            SkkPhase::Katakana          => "ア",
+            SkkPhase::Katakana => "ア",
             SkkPhase::HalfWidthKatakana => "ｱ",
-            SkkPhase::Ascii             => "a",
-            SkkPhase::WideAscii         => "Ａ",
+            SkkPhase::Ascii => "a",
+            SkkPhase::WideAscii => "Ａ",
             SkkPhase::Abbrev { .. }
             | SkkPhase::Midashi { .. }
             | SkkPhase::Okuri { .. }
             | SkkPhase::Selecting { .. } => match self.midashi_display_mode {
-                KanaMode::Katakana  => "ア",
+                KanaMode::Katakana => "ア",
                 KanaMode::HalfWidth => "ｱ",
-                KanaMode::Hiragana  => "あ",
+                KanaMode::Hiragana => "あ",
             },
             _ => "あ",
         }
@@ -292,18 +297,21 @@ impl SkkEngine {
     fn handle_press(&mut self, event: &KeyEvent) -> Vec<EngineAction> {
         // ── Registration mode special keys ──────────────────────────────────
         if !self.register_stack.is_empty() {
-            let in_ready_state =
-                matches!(self.phase,
-                    SkkPhase::Hiragana | SkkPhase::Katakana | SkkPhase::HalfWidthKatakana)
-                && self.kana_state.is_empty();
+            let in_ready_state = matches!(
+                self.phase,
+                SkkPhase::Hiragana | SkkPhase::Katakana | SkkPhase::HalfWidthKatakana
+            ) && self.kana_state.is_empty();
 
-            let is_ctrl_g = event.key == Key::Char('g')
-                && event.modifiers.contains(Modifiers::CTRL);
+            let is_ctrl_g =
+                event.key == Key::Char('g') && event.modifiers.contains(Modifiers::CTRL);
 
             if in_ready_state {
                 if event.key == Key::Return {
-                    let buf_empty = self.register_stack.last()
-                        .map(|f| f.committed.is_empty()).unwrap_or(true);
+                    let buf_empty = self
+                        .register_stack
+                        .last()
+                        .map(|f| f.committed.is_empty())
+                        .unwrap_or(true);
                     return if buf_empty {
                         self.cancel_register()
                     } else {
@@ -339,9 +347,10 @@ impl SkkEngine {
                 self.kana_state.clear();
                 return self.cancel_register();
             } else if matches!(
-                    self.phase,
-                    SkkPhase::Abbrev { .. } | SkkPhase::Midashi { .. } | SkkPhase::Okuri { .. })
-                    && event.key == Key::Return {
+                self.phase,
+                SkkPhase::Abbrev { .. } | SkkPhase::Midashi { .. } | SkkPhase::Okuri { .. }
+            ) && event.key == Key::Return
+            {
                 // Return in abbrev/▽/okuri mode during registration: flush the typed text to the
                 // registration buffer and return to Hiragana (ready state).  This allows
                 // the user to commit a kana/ascii string as-is without triggering a conversion.
@@ -367,8 +376,11 @@ impl SkkEngine {
             if matches!(self.phase, SkkPhase::Ascii) {
                 match event.key {
                     Key::Return => {
-                        let buf_empty = self.register_stack.last()
-                            .map(|f| f.committed.is_empty()).unwrap_or(true);
+                        let buf_empty = self
+                            .register_stack
+                            .last()
+                            .map(|f| f.committed.is_empty())
+                            .unwrap_or(true);
                         return if buf_empty {
                             self.cancel_register()
                         } else {
@@ -414,7 +426,10 @@ impl SkkEngine {
         // Only active outside registration mode (register_stack is already empty here
         // for any key that reached this point without an early return above).
         if self.register_stack.is_empty() {
-            let is_toggle = self.keybindings.toggle_keys.iter()
+            let is_toggle = self
+                .keybindings
+                .toggle_keys
+                .iter()
                 .any(|(k, m)| event.key == *k && event.modifiers == *m);
             if is_toggle {
                 match self.phase {
@@ -437,29 +452,33 @@ impl SkkEngine {
             SkkPhase::CodeInput { prefix, buf } => {
                 self.handle_code_input(event, prefix.clone(), buf.clone())
             }
-            SkkPhase::Abbrev { buf } => {
-                self.handle_abbrev(event, buf.clone())
-            }
-            SkkPhase::Midashi { kana_buf, roman_buf } => {
-                self.handle_midashi(event, kana_buf.clone(), roman_buf.clone())
-            }
-            SkkPhase::Okuri { midashi, okuri_prefix, kana_buf } => {
-                self.handle_okuri(event, midashi.clone(), *okuri_prefix, kana_buf.clone())
-            }
-            SkkPhase::Selecting { midashi, okuri, okuri_key, candidates, origin, index } => {
-                self.handle_selecting(
-                    event,
-                    midashi.clone(),
-                    okuri.clone(),
-                    okuri_key.clone(),
-                    candidates.clone(),
-                    origin.clone(),
-                    *index,
-                )
-            }
-            SkkPhase::PurgeConfirm { buf, .. } => {
-                self.handle_purge_confirm(event, buf.clone())
-            }
+            SkkPhase::Abbrev { buf } => self.handle_abbrev(event, buf.clone()),
+            SkkPhase::Midashi {
+                kana_buf,
+                roman_buf,
+            } => self.handle_midashi(event, kana_buf.clone(), roman_buf.clone()),
+            SkkPhase::Okuri {
+                midashi,
+                okuri_prefix,
+                kana_buf,
+            } => self.handle_okuri(event, midashi.clone(), *okuri_prefix, kana_buf.clone()),
+            SkkPhase::Selecting {
+                midashi,
+                okuri,
+                okuri_key,
+                candidates,
+                origin,
+                index,
+            } => self.handle_selecting(
+                event,
+                midashi.clone(),
+                okuri.clone(),
+                okuri_key.clone(),
+                candidates.clone(),
+                origin.clone(),
+                *index,
+            ),
+            SkkPhase::PurgeConfirm { buf, .. } => self.handle_purge_confirm(event, buf.clone()),
         };
 
         // ── Intercept commits when in registration mode ──────────────────────
@@ -601,7 +620,9 @@ impl SkkEngine {
 
     /// Feeds a character into the kana state machine and returns the resulting actions.
     fn feed_kana(&mut self, ch: char, mode: KanaMode) -> Vec<EngineAction> {
-        let result = self.kana_table.transition(&self.kana_state.clone(), ch, mode);
+        let result = self
+            .kana_table
+            .transition(&self.kana_state.clone(), ch, mode);
         match result {
             TransitionResult::Ok { output, next_state } => {
                 self.kana_state = next_state;
@@ -827,9 +848,9 @@ impl SkkEngine {
     /// Returns the `SkkPhase` corresponding to `midashi_display_mode`.
     fn kana_phase_from_display_mode(&self) -> SkkPhase {
         match self.midashi_display_mode {
-            KanaMode::Katakana  => SkkPhase::Katakana,
+            KanaMode::Katakana => SkkPhase::Katakana,
             KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
-            KanaMode::Hiragana  => SkkPhase::Hiragana,
+            KanaMode::Hiragana => SkkPhase::Hiragana,
         }
     }
 
@@ -870,7 +891,10 @@ impl SkkEngine {
                 self.kana_state.clear();
                 return vec![EngineAction::ClearPreedit];
             }
-            self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
+            self.phase = SkkPhase::Midashi {
+                kana_buf,
+                roman_buf,
+            };
             return vec![self.preedit_action()];
         }
 
@@ -932,12 +956,18 @@ impl SkkEngine {
                     }
                     None => {
                         // No completion available: do nothing.
-                        self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
+                        self.phase = SkkPhase::Midashi {
+                            kana_buf,
+                            roman_buf,
+                        };
                     }
                 }
             } else {
                 // roman_buf non-empty: ignore Tab.
-                self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
+                self.phase = SkkPhase::Midashi {
+                    kana_buf,
+                    roman_buf,
+                };
             }
             return vec![self.preedit_action()];
         }
@@ -946,9 +976,9 @@ impl SkkEngine {
         // return to the kana mode that was active before entering ▽ mode.
         if event.key == Key::Char('q') && event.modifiers.contains(Modifiers::CTRL) {
             let return_phase = match self.midashi_display_mode {
-                KanaMode::Katakana  => SkkPhase::Katakana,
+                KanaMode::Katakana => SkkPhase::Katakana,
                 KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
-                KanaMode::Hiragana  => SkkPhase::Hiragana,
+                KanaMode::Hiragana => SkkPhase::Hiragana,
             };
             self.completion = None;
             self.phase = return_phase;
@@ -981,19 +1011,21 @@ impl SkkEngine {
             // Resolve the trigger char through the kana table so the output matches
             // the user's layout (e.g. '.' → "。", ',' → "、", or custom mappings).
             // Fall back to the raw char if the table has no single-step mapping.
-            let trigger_output =
-                match self.kana_table.transition("", ch, KanaMode::Hiragana) {
-                    TransitionResult::Ok { output, next_state }
-                        if !output.is_empty() && next_state.is_empty() =>
-                    {
-                        output
-                    }
-                    _ => ch.to_string(),
-                };
+            let trigger_output = match self.kana_table.transition("", ch, KanaMode::Hiragana) {
+                TransitionResult::Ok { output, next_state }
+                    if !output.is_empty() && next_state.is_empty() =>
+                {
+                    output
+                }
+                _ => ch.to_string(),
+            };
             if kana_buf.is_empty() {
                 // Nothing to convert: just output the trigger char and exit ▽ mode.
                 self.phase = self.kana_phase_from_display_mode();
-                return vec![EngineAction::Commit(trigger_output), EngineAction::ClearPreedit];
+                return vec![
+                    EngineAction::Commit(trigger_output),
+                    EngineAction::ClearPreedit,
+                ];
             }
             self.conversion_trigger = Some(trigger_output);
             return self.start_conversion(kana_buf, None);
@@ -1009,7 +1041,10 @@ impl SkkEngine {
             self.kana_state.clear();
             if kana_buf.is_empty() {
                 // Nothing to convert; stay in midashi mode.
-                self.phase = SkkPhase::Midashi { kana_buf, roman_buf: String::new() };
+                self.phase = SkkPhase::Midashi {
+                    kana_buf,
+                    roman_buf: String::new(),
+                };
                 return vec![self.preedit_action()];
             }
             kana_buf.push('>');
@@ -1024,7 +1059,10 @@ impl SkkEngine {
             roman_buf.clear();
             kana_buf.push(ch);
             self.completion = None;
-            self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
+            self.phase = SkkPhase::Midashi {
+                kana_buf,
+                roman_buf,
+            };
             return vec![self.preedit_action()];
         }
 
@@ -1047,7 +1085,8 @@ impl SkkEngine {
             if !self.kana_state.is_empty() {
                 let state_before = self.kana_state.clone();
                 if let TransitionResult::Ok { output, next_state } =
-                    self.kana_table.transition(&state_before, lower, KanaMode::Hiragana)
+                    self.kana_table
+                        .transition(&state_before, lower, KanaMode::Hiragana)
                 {
                     if !output.is_empty() && !next_state.is_empty() {
                         kana_buf.push_str(&output);
@@ -1073,13 +1112,24 @@ impl SkkEngine {
                 okuri_prefix,
                 kana_buf: String::new(),
             };
-            return self.handle_okuri(event, self.phase.clone_midashi(), okuri_prefix, String::new());
+            return self.handle_okuri(
+                event,
+                self.phase.clone_midashi(),
+                okuri_prefix,
+                String::new(),
+            );
         }
 
         // Lowercase character: feed into kana state machine
-        let lower = if ch.is_ascii_uppercase() { ch.to_ascii_lowercase() } else { ch };
+        let lower = if ch.is_ascii_uppercase() {
+            ch.to_ascii_lowercase()
+        } else {
+            ch
+        };
         let state_before = self.kana_state.clone();
-        let result = self.kana_table.transition(&state_before, lower, KanaMode::Hiragana);
+        let result = self
+            .kana_table
+            .transition(&state_before, lower, KanaMode::Hiragana);
 
         match result {
             TransitionResult::Ok { output, next_state } => {
@@ -1125,7 +1175,10 @@ impl SkkEngine {
                     self.completion = None;
                     self.kana_state = next_state;
                 }
-                self.phase = SkkPhase::Midashi { kana_buf, roman_buf };
+                self.phase = SkkPhase::Midashi {
+                    kana_buf,
+                    roman_buf,
+                };
                 vec![self.preedit_action()]
             }
             TransitionResult::OkRetry { output, retry } => {
@@ -1166,16 +1219,19 @@ impl SkkEngine {
                     //   hiragana ▽       → commit as katakana,  return to hiragana
                     //   katakana ▽       → commit as hiragana,  return to hiragana
                     //   half-width ▽     → commit as hiragana,  return to half-width katakana
-                    if ch == 'q' && !event.modifiers.contains(Modifiers::CTRL) && !kana_buf.is_empty() {
+                    if ch == 'q'
+                        && !event.modifiers.contains(Modifiers::CTRL)
+                        && !kana_buf.is_empty()
+                    {
                         let committed = match self.midashi_display_mode {
                             KanaMode::Hiragana => hiragana_to_katakana(&kana_buf),
-                            _                  => kana_buf.clone(), // kana_buf is hiragana internally
+                            _ => kana_buf.clone(), // kana_buf is hiragana internally
                         };
                         self.completion = None;
                         self.phase = match self.midashi_display_mode {
-                            KanaMode::Katakana  => SkkPhase::Katakana,
+                            KanaMode::Katakana => SkkPhase::Katakana,
                             KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
-                            KanaMode::Hiragana  => SkkPhase::Hiragana,
+                            KanaMode::Hiragana => SkkPhase::Hiragana,
                         };
                         self.kana_state.clear();
                         return vec![EngineAction::Commit(committed), EngineAction::ClearPreedit];
@@ -1207,7 +1263,9 @@ impl SkkEngine {
 
         let lower = ch.to_ascii_lowercase();
 
-        let result = self.kana_table.transition(&self.kana_state.clone(), lower, KanaMode::Hiragana);
+        let result =
+            self.kana_table
+                .transition(&self.kana_state.clone(), lower, KanaMode::Hiragana);
         match result {
             TransitionResult::Ok { output, next_state } => {
                 self.kana_state = next_state;
@@ -1222,7 +1280,11 @@ impl SkkEngine {
                     // Mid-okurigana kana produced (e.g. "っ" from "tt") but more input
                     // expected (next_state is non-empty). Accumulate and continue.
                 }
-                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, kana_buf };
+                self.phase = SkkPhase::Okuri {
+                    midashi,
+                    okuri_prefix,
+                    kana_buf,
+                };
                 vec![self.preedit_action()]
             }
             TransitionResult::OkRetry { output, retry: _ } => {
@@ -1236,13 +1298,21 @@ impl SkkEngine {
                     self.phase = SkkPhase::Hiragana;
                     return self.start_conversion(midashi, Some((okuri_key, kana_buf)));
                 }
-                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, kana_buf };
+                self.phase = SkkPhase::Okuri {
+                    midashi,
+                    okuri_prefix,
+                    kana_buf,
+                };
                 vec![self.preedit_action()]
             }
             TransitionResult::NoMatch { flush: _, retry: _ } => {
                 // Feed failed; treat remaining buffer as mistype and clear state.
                 self.kana_state.clear();
-                self.phase = SkkPhase::Okuri { midashi, okuri_prefix, kana_buf };
+                self.phase = SkkPhase::Okuri {
+                    midashi,
+                    okuri_prefix,
+                    kana_buf,
+                };
                 vec![self.preedit_action()]
             }
         }
@@ -1278,7 +1348,9 @@ impl SkkEngine {
         let mut candidates: Vec<Candidate> = Vec::new();
         let mut origin: Vec<CandidateOrigin> = Vec::new();
         {
-            let dict_candidates: Vec<Candidate> = self.dict.iter()
+            let dict_candidates: Vec<Candidate> = self
+                .dict
+                .iter()
                 .filter_map(|d| d.lookup(lookup_key, okuri_key))
                 .flat_map(|e| e.candidates)
                 .collect();
@@ -1286,7 +1358,8 @@ impl SkkEngine {
             // Collect the union of all skk-ignore-dic-word sets across dictionaries.
             // Words listed in any of these directives are excluded from the candidate list.
             // Owned Strings so we can later move dict_candidates into the iteration loop.
-            let ignore_set: std::collections::HashSet<String> = dict_candidates.iter()
+            let ignore_set: std::collections::HashSet<String> = dict_candidates
+                .iter()
                 .filter_map(|c| match &c.lisp_form {
                     Some(crate::dict::entry::LispForm::IgnoreDicWord(ws)) => Some(ws.as_slice()),
                     _ => None,
@@ -1322,7 +1395,11 @@ impl SkkEngine {
                         template_midashi: lookup_key.to_string(),
                         template_word: c.word.clone(),
                     };
-                    candidates.push(Candidate { word: expanded_word, annotation: c.annotation, lisp_form: None });
+                    candidates.push(Candidate {
+                        word: expanded_word,
+                        annotation: c.annotation,
+                        lisp_form: None,
+                    });
                     origin.push(orig);
                 }
             }
@@ -1338,9 +1415,14 @@ impl SkkEngine {
         // candidates exist, because the bare digit conversions would appear out of context.
         let pure_digit_midashi = has_digits && template == "#";
         if has_digits && (candidates.is_empty() || pure_digit_midashi) {
-            for synth_word in crate::num::synthesize(&digit_runs, crate::num::NumType::SYNTH_TYPES) {
+            for synth_word in crate::num::synthesize(&digit_runs, crate::num::NumType::SYNTH_TYPES)
+            {
                 if !candidates.iter().any(|c| c.word == synth_word) {
-                    candidates.push(Candidate { word: synth_word, annotation: None, lisp_form: None });
+                    candidates.push(Candidate {
+                        word: synth_word,
+                        annotation: None,
+                        lisp_form: None,
+                    });
                     origin.push(CandidateOrigin::Synthetic);
                 }
             }
@@ -1409,7 +1491,10 @@ impl SkkEngine {
         }
 
         // Cancel key (e.g. 'x') → go back one candidate, or return to midashi at index 0.
-        if event.printable_char().map_or(false, |c| self.keybindings.cancel.contains(&c)) {
+        if event
+            .printable_char()
+            .map_or(false, |c| self.keybindings.cancel.contains(&c))
+        {
             if index == 0 {
                 // At the first candidate → back to midashi (cancel conversion).
                 let midashi_str = midashi.clone();
@@ -1462,14 +1547,16 @@ impl SkkEngine {
         // In normal mode DeleteBack passes a Backspace to the app.
         // In registration mode intercept_for_register converts it to reg_backspace().
         if event.key == Key::BackSpace {
-            let mut actions = self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
+            let mut actions =
+                self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
             actions.push(EngineAction::DeleteBack);
             return actions;
         }
 
         // Return → confirm current candidate, then pass the key through to the app
         if event.key == Key::Return {
-            let mut actions = self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
+            let mut actions =
+                self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
             actions.push(EngineAction::Passthrough);
             return actions;
         }
@@ -1477,7 +1564,14 @@ impl SkkEngine {
         // Ctrl+j → confirm current candidate (key consumed, no passthrough)
         let is_ctrl_j = event.key == Key::Char('j') && event.modifiers.contains(Modifiers::CTRL);
         if is_ctrl_j {
-            return self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
+            return self.commit_candidate(
+                &midashi,
+                &candidates,
+                &origin,
+                index,
+                &okuri,
+                &okuri_key,
+            );
         }
 
         // Space → advance to next candidate (inline mode) or next page (listing mode).
@@ -1524,10 +1618,22 @@ impl SkkEngine {
             let listing = sel_len > 0 && index >= inline_count;
             if listing {
                 if let Some(ch) = event.printable_char() {
-                    if let Some(sel_idx) = self.keybindings.selection_keys.iter().position(|&k| k == ch) {
+                    if let Some(sel_idx) = self
+                        .keybindings
+                        .selection_keys
+                        .iter()
+                        .position(|&k| k == ch)
+                    {
                         let cand_idx = index + sel_idx;
                         if cand_idx < candidates.len() {
-                            return self.commit_candidate(&midashi, &candidates, &origin, cand_idx, &okuri, &okuri_key);
+                            return self.commit_candidate(
+                                &midashi,
+                                &candidates,
+                                &origin,
+                                cand_idx,
+                                &okuri,
+                                &okuri_key,
+                            );
                         }
                         // Key pressed but no candidate at that position — consume and ignore.
                         return vec![];
@@ -1557,8 +1663,12 @@ impl SkkEngine {
         }
 
         // '>', '<', '?' → commit current candidate and enter suffix mode (new ▽ with '>' prefix)
-        if event.printable_char().map_or(false, |c| matches!(c, '>' | '<' | '?')) {
-            let mut actions = self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
+        if event
+            .printable_char()
+            .map_or(false, |c| matches!(c, '>' | '<' | '?'))
+        {
+            let mut actions =
+                self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
             // Start a new midashi with '>' as the initial kana_buf so the next
             // conversion looks up ">reading" (suffix entries).
             self.phase = SkkPhase::Midashi {
@@ -1572,7 +1682,8 @@ impl SkkEngine {
 
         // Any other printable character (without Ctrl) → confirm, then re-process in hiragana
         if event.printable_char().is_some() && !event.modifiers.contains(Modifiers::CTRL) {
-            let mut actions = self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
+            let mut actions =
+                self.commit_candidate(&midashi, &candidates, &origin, index, &okuri, &okuri_key);
             // Phase is now Hiragana; re-dispatch the character
             actions.extend(self.handle_kana(event));
             return actions;
@@ -1590,7 +1701,9 @@ impl SkkEngine {
             return None;
         }
         let page: Vec<Candidate> = candidates[index..].iter().take(sel_len).cloned().collect();
-        let sel_keys: String = self.keybindings.selection_keys[..page.len()].iter().collect();
+        let sel_keys: String = self.keybindings.selection_keys[..page.len()]
+            .iter()
+            .collect();
         Some(EngineAction::ShowCandidates(page, 0, sel_keys))
     }
 
@@ -1612,17 +1725,18 @@ impl SkkEngine {
         // Synthetic numeric candidates are NOT recorded; dict-template candidates
         // are recorded under their template midashi/word forms.
         let learn_entry = match origin.get(index) {
-            Some(CandidateOrigin::Dict { template_midashi, template_word }) => {
-                Some(crate::dict::entry::DictEntry {
-                    midashi: template_midashi.clone(),
-                    okuri: okuri_key.clone(),
-                    candidates: vec![Candidate {
-                        word: template_word.clone(),
-                        annotation: chosen.annotation.clone(),
-                        lisp_form: None,
-                    }],
-                })
-            }
+            Some(CandidateOrigin::Dict {
+                template_midashi,
+                template_word,
+            }) => Some(crate::dict::entry::DictEntry {
+                midashi: template_midashi.clone(),
+                okuri: okuri_key.clone(),
+                candidates: vec![Candidate {
+                    word: template_word.clone(),
+                    annotation: chosen.annotation.clone(),
+                    lisp_form: None,
+                }],
+            }),
             Some(CandidateOrigin::Synthetic) => None,
             // Fallback for non-numeric conversions (origin always matches length).
             None => Some(crate::dict::entry::DictEntry {
@@ -1639,9 +1753,9 @@ impl SkkEngine {
 
         // Return to the kana mode that was active before the conversion started.
         self.phase = match self.midashi_display_mode {
-            KanaMode::Katakana  => SkkPhase::Katakana,
+            KanaMode::Katakana => SkkPhase::Katakana,
             KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
-            KanaMode::Hiragana  => SkkPhase::Hiragana,
+            KanaMode::Hiragana => SkkPhase::Hiragana,
         };
         self.kana_state.clear();
         let mut actions = vec![
@@ -1659,16 +1773,12 @@ impl SkkEngine {
 
     // ── Purge confirmation ────────────────────────────────────────────────────
 
-    fn handle_purge_confirm(
-        &mut self,
-        event: &KeyEvent,
-        mut buf: String,
-    ) -> Vec<EngineAction> {
+    fn handle_purge_confirm(&mut self, event: &KeyEvent, mut buf: String) -> Vec<EngineAction> {
         if event.key == Key::Return {
             return match buf.as_str() {
                 "yes" => self.execute_purge(),
-                "no"  => self.cancel_purge(),
-                _     => vec![],
+                "no" => self.cancel_purge(),
+                _ => vec![],
             };
         }
         if event.key == Key::BackSpace {
@@ -1687,11 +1797,25 @@ impl SkkEngine {
 
     fn update_purge_buf(&mut self, buf: String) -> Vec<EngineAction> {
         if let SkkPhase::PurgeConfirm {
-            midashi, okuri, okuri_key, candidates, origin, index, return_mode, ..
+            midashi,
+            okuri,
+            okuri_key,
+            candidates,
+            origin,
+            index,
+            return_mode,
+            ..
         } = std::mem::replace(&mut self.phase, SkkPhase::Hiragana)
         {
             self.phase = SkkPhase::PurgeConfirm {
-                midashi, okuri, okuri_key, candidates, origin, index, buf, return_mode,
+                midashi,
+                okuri,
+                okuri_key,
+                candidates,
+                origin,
+                index,
+                buf,
+                return_mode,
             };
         }
         vec![self.preedit_action()]
@@ -1699,7 +1823,12 @@ impl SkkEngine {
 
     fn execute_purge(&mut self) -> Vec<EngineAction> {
         let SkkPhase::PurgeConfirm {
-            midashi, okuri, candidates, index, return_mode, ..
+            midashi,
+            okuri,
+            candidates,
+            index,
+            return_mode,
+            ..
         } = std::mem::replace(&mut self.phase, SkkPhase::Hiragana)
         else {
             return vec![];
@@ -1712,9 +1841,9 @@ impl SkkEngine {
         }
 
         self.phase = match return_mode {
-            KanaMode::Katakana  => SkkPhase::Katakana,
+            KanaMode::Katakana => SkkPhase::Katakana,
             KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
-            KanaMode::Hiragana  => SkkPhase::Hiragana,
+            KanaMode::Hiragana => SkkPhase::Hiragana,
         };
         self.kana_state.clear();
         self.conversion_trigger = None;
@@ -1723,7 +1852,13 @@ impl SkkEngine {
 
     fn cancel_purge(&mut self) -> Vec<EngineAction> {
         let SkkPhase::PurgeConfirm {
-            midashi, okuri, okuri_key, candidates, origin, index, ..
+            midashi,
+            okuri,
+            okuri_key,
+            candidates,
+            origin,
+            index,
+            ..
         } = std::mem::replace(&mut self.phase, SkkPhase::Hiragana)
         else {
             return vec![];
@@ -1733,7 +1868,12 @@ impl SkkEngine {
             actions.push(show);
         }
         self.phase = SkkPhase::Selecting {
-            midashi, okuri, okuri_key, candidates, origin, index,
+            midashi,
+            okuri,
+            okuri_key,
+            candidates,
+            origin,
+            index,
         };
         actions.push(self.preedit_action());
         actions
@@ -1746,7 +1886,9 @@ impl SkkEngine {
         if let Some(frame) = self.register_stack.last_mut() {
             if frame.cursor > 0 {
                 let (idx, _) = frame.committed[..frame.cursor]
-                    .char_indices().next_back().unwrap();
+                    .char_indices()
+                    .next_back()
+                    .unwrap();
                 frame.committed.remove(idx);
                 frame.cursor = idx;
             }
@@ -1767,7 +1909,9 @@ impl SkkEngine {
         if let Some(frame) = self.register_stack.last_mut() {
             if frame.cursor > 0 {
                 let (idx, _) = frame.committed[..frame.cursor]
-                    .char_indices().next_back().unwrap();
+                    .char_indices()
+                    .next_back()
+                    .unwrap();
                 frame.cursor = idx;
             }
         }
@@ -1812,7 +1956,10 @@ impl SkkEngine {
     /// Completes the topmost registration frame: saves to user dict and either
     /// commits to the application (outermost frame) or appends to the outer frame.
     fn finalize_register(&mut self) -> Vec<EngineAction> {
-        let frame = self.register_stack.pop().expect("finalize_register called with empty stack");
+        let frame = self
+            .register_stack
+            .pop()
+            .expect("finalize_register called with empty stack");
         let word = frame.committed.clone();
         let okuri_kana = frame.okuri_kana.as_deref().unwrap_or("");
 
@@ -1820,7 +1967,11 @@ impl SkkEngine {
         let entry = crate::dict::entry::DictEntry {
             midashi: frame.midashi.clone(),
             okuri: frame.okuri_key.clone(),
-            candidates: vec![Candidate { word: word.clone(), annotation: None, lisp_form: None }],
+            candidates: vec![Candidate {
+                word: word.clone(),
+                annotation: None,
+                lisp_form: None,
+            }],
         };
         for dict in self.dict.iter_mut() {
             let _ = dict.learn(entry.clone());
@@ -1847,7 +1998,10 @@ impl SkkEngine {
     /// Cancels the topmost registration frame and returns to ▽ midashi mode.
     /// If nested, returns to the outer registration frame instead.
     fn cancel_register(&mut self) -> Vec<EngineAction> {
-        let frame = self.register_stack.pop().expect("cancel_register called with empty stack");
+        let frame = self
+            .register_stack
+            .pop()
+            .expect("cancel_register called with empty stack");
         self.phase = SkkPhase::Hiragana;
         self.kana_state.clear();
 
@@ -1856,10 +2010,15 @@ impl SkkEngine {
             // Use the original (concrete-digit) midashi for restoring ▽ mode.
             let restore_midashi = frame.original_midashi;
             if frame.is_abbrev {
-                self.phase = SkkPhase::Abbrev { buf: restore_midashi };
+                self.phase = SkkPhase::Abbrev {
+                    buf: restore_midashi,
+                };
             } else {
                 let midashi_str = restore_midashi.clone();
-                self.phase = SkkPhase::Midashi { kana_buf: restore_midashi, roman_buf: String::new() };
+                self.phase = SkkPhase::Midashi {
+                    kana_buf: restore_midashi,
+                    roman_buf: String::new(),
+                };
                 self.update_completion(&midashi_str);
             }
             vec![EngineAction::HideCandidates, self.preedit_action()]
@@ -1919,7 +2078,8 @@ impl SkkEngine {
     /// Does NOT sort the merged list — preserves dict iteration order.
     fn find_completion(&self, prefix: &str, start_index: usize) -> Option<(String, usize)> {
         let mut seen = std::collections::HashSet::new();
-        let all: Vec<String> = self.dict
+        let all: Vec<String> = self
+            .dict
             .iter()
             .flat_map(|d| d.complete(prefix))
             .filter(|w| seen.insert(w.clone()))
@@ -1937,7 +2097,8 @@ impl SkkEngine {
             self.completion = None;
             return;
         }
-        self.completion = self.find_completion(kana_buf, 0)
+        self.completion = self
+            .find_completion(kana_buf, 0)
             .map(|(preview, next_index)| CompletionState {
                 cycle_prefix: kana_buf.to_string(),
                 next_index,
@@ -1955,13 +2116,17 @@ impl SkkEngine {
         // Ghost text: only when in Midashi with an empty roman_buf and active completion.
         // The ghost suffix is appended after the actual kana_buf; the cursor is placed
         // between kana_buf and the ghost so the UI can visually distinguish them.
-        if let SkkPhase::Midashi { kana_buf, roman_buf } = &self.phase {
+        if let SkkPhase::Midashi {
+            kana_buf,
+            roman_buf,
+        } = &self.phase
+        {
             if roman_buf.is_empty() {
                 if let Some(state) = &self.completion {
                     let display = match self.midashi_display_mode {
-                        KanaMode::Katakana  => hiragana_to_katakana(kana_buf),
+                        KanaMode::Katakana => hiragana_to_katakana(kana_buf),
                         KanaMode::HalfWidth => hiragana_to_halfwidth(kana_buf),
-                        KanaMode::Hiragana  => kana_buf.clone(),
+                        KanaMode::Hiragana => kana_buf.clone(),
                     };
                     // The ghost can only be shown as a suffix when preview starts with
                     // kana_buf.  After Tab cycling the next completion may start from
@@ -1972,18 +2137,29 @@ impl SkkEngine {
                         let inner = self.build_inner_preedit();
                         if let Some(frame) = self.register_stack.last() {
                             let depth = self.register_stack.len();
-                            let open  = "[".repeat(depth);
+                            let open = "[".repeat(depth);
                             let close = "]".repeat(depth);
-                            let midashi_disp = format!("{}{}",
-                                frame.midashi, frame.okuri_kana.as_deref().unwrap_or(""));
+                            let midashi_disp = format!(
+                                "{}{}",
+                                frame.midashi,
+                                frame.okuri_kana.as_deref().unwrap_or("")
+                            );
                             let before = &frame.committed[..frame.cursor];
-                            let after  = &frame.committed[frame.cursor..];
+                            let after = &frame.committed[frame.cursor..];
                             let prefix = format!("{}辞書登録{} {}: ", open, close, midashi_disp);
-                            let text   = format!("{}{}{}{}", prefix, before, inner, after);
+                            let text = format!("{}{}{}{}", prefix, before, inner, after);
                             let cursor = prefix.len() + before.len() + inner.len();
-                            return Preedit { text, cursor, ghost_start: None };
+                            return Preedit {
+                                text,
+                                cursor,
+                                ghost_start: None,
+                            };
                         }
-                        return Preedit { text: inner.clone(), cursor: inner.len(), ghost_start: None };
+                        return Preedit {
+                            text: inner.clone(),
+                            cursor: inner.len(),
+                            ghost_start: None,
+                        };
                     }
                     // "▽" is U+25BD = 3 UTF-8 bytes.
                     let ghost_suffix = &state.preview[kana_buf.len()..];
@@ -1992,7 +2168,7 @@ impl SkkEngine {
 
                     if let Some(frame) = self.register_stack.last() {
                         let depth = self.register_stack.len();
-                        let open  = "[".repeat(depth);
+                        let open = "[".repeat(depth);
                         let close = "]".repeat(depth);
                         let midashi_disp = format!(
                             "{}{}",
@@ -2000,15 +2176,23 @@ impl SkkEngine {
                             frame.okuri_kana.as_deref().unwrap_or("")
                         );
                         let before = &frame.committed[..frame.cursor];
-                        let after  = &frame.committed[frame.cursor..];
+                        let after = &frame.committed[frame.cursor..];
                         let prefix = format!("{}辞書登録{} {}: ", open, close, midashi_disp);
-                        let text   = format!("{}{}{}{}", prefix, before, inner, after);
+                        let text = format!("{}{}{}{}", prefix, before, inner, after);
                         let cursor = prefix.len() + before.len() + cursor_pos;
                         // ghost_start coincides with the cursor (cursor is positioned
                         // right at the boundary between user input and ghost text).
-                        return Preedit { text, cursor, ghost_start: Some(cursor) };
+                        return Preedit {
+                            text,
+                            cursor,
+                            ghost_start: Some(cursor),
+                        };
                     }
-                    return Preedit { text: inner, cursor: cursor_pos, ghost_start: Some(cursor_pos) };
+                    return Preedit {
+                        text: inner,
+                        cursor: cursor_pos,
+                        ghost_start: Some(cursor_pos),
+                    };
                 }
             }
         }
@@ -2018,7 +2202,7 @@ impl SkkEngine {
         if let Some(frame) = self.register_stack.last() {
             // Depth is shown as nested brackets: [辞書登録], [[辞書登録]], ...
             let depth = self.register_stack.len();
-            let open  = "[".repeat(depth);
+            let open = "[".repeat(depth);
             let close = "]".repeat(depth);
             let midashi_disp = format!(
                 "{}{}",
@@ -2028,17 +2212,25 @@ impl SkkEngine {
             // Split the committed text at the editing cursor so the IM cursor
             // is placed between `before` and `after` in the displayed preedit.
             let before = &frame.committed[..frame.cursor];
-            let after  = &frame.committed[frame.cursor..];
+            let after = &frame.committed[frame.cursor..];
             let prefix = format!("{}辞書登録{} {}: ", open, close, midashi_disp);
             // Layout: <prefix><before><inner_preedit><after>
             // IM cursor sits at the end of <inner_preedit>.
-            let text   = format!("{}{}{}{}", prefix, before, inner, after);
+            let text = format!("{}{}{}{}", prefix, before, inner, after);
             let cursor = prefix.len() + before.len() + inner.len();
-            return Preedit { text, cursor, ghost_start: None };
+            return Preedit {
+                text,
+                cursor,
+                ghost_start: None,
+            };
         }
 
         let cursor = inner.len();
-        Preedit { text: inner, cursor, ghost_start: None }
+        Preedit {
+            text: inner,
+            cursor,
+            ghost_start: None,
+        }
     }
 
     /// Returns the preedit text for the current phase, without any register prefix.
@@ -2056,18 +2248,30 @@ impl SkkEngine {
                 };
                 format!("{prefix_str}{buf}")
             }
-            SkkPhase::Midashi { kana_buf, roman_buf } => {
+            SkkPhase::Midashi {
+                kana_buf,
+                roman_buf,
+            } => {
                 let display = match self.midashi_display_mode {
-                    KanaMode::Katakana  => hiragana_to_katakana(kana_buf),
+                    KanaMode::Katakana => hiragana_to_katakana(kana_buf),
                     KanaMode::HalfWidth => hiragana_to_halfwidth(kana_buf),
-                    KanaMode::Hiragana  => kana_buf.clone(),
+                    KanaMode::Hiragana => kana_buf.clone(),
                 };
                 format!("▽{display}{roman_buf}")
             }
-            SkkPhase::Okuri { midashi, kana_buf, .. } => {
+            SkkPhase::Okuri {
+                midashi, kana_buf, ..
+            } => {
                 format!("▽{midashi}*{kana_buf}{}", self.kana_state)
             }
-            SkkPhase::Selecting { midashi: _, okuri, okuri_key: _, candidates, index, .. } => {
+            SkkPhase::Selecting {
+                midashi: _,
+                okuri,
+                okuri_key: _,
+                candidates,
+                index,
+                ..
+            } => {
                 let cand = &candidates[*index];
                 let ok = okuri.as_deref().unwrap_or("");
                 let trigger = self.conversion_trigger.as_deref().unwrap_or("");
@@ -2127,7 +2331,11 @@ fn decode_jis_code(hex: &str) -> Option<String> {
     // EUC-JP: add 0x80 to each byte
     let euc = [b1 + 0x80, b2 + 0x80];
     let (decoded, _, had_errors) = encoding_rs::EUC_JP.decode(&euc);
-    if had_errors { None } else { Some(decoded.into_owned()) }
+    if had_errors {
+        None
+    } else {
+        Some(decoded.into_owned())
+    }
 }
 
 /// Decodes a Unicode code point (1–6 hex digits) to a string.
@@ -2235,12 +2443,17 @@ mod tests {
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         // Confirm with Ctrl+j
         let actions = eng.process_key(&ctrl('j'));
-        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "阿")));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(s) if s == "阿")));
 
         // The user dict (highest priority) should now have learned "阿" for "あい"
         // ('A' → "あ", 'i' → "い" in midashi, so midashi is "あい")
         let result = eng.dict[0].lookup("あい", None);
-        assert!(result.is_some(), "UserDict should have learned '阿' for 'あい'");
+        assert!(
+            result.is_some(),
+            "UserDict should have learned '阿' for 'あい'"
+        );
         assert_eq!(result.unwrap().candidates[0].word, "阿");
     }
 
@@ -2279,7 +2492,9 @@ mod tests {
 
         // 'a' picks index 2 ("C")
         let actions = eng.process_key(&press('a'));
-        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "C")));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::Commit(s) if s == "C")));
         assert_eq!(eng.phase(), &SkkPhase::Hiragana);
     }
 
@@ -2308,7 +2523,10 @@ mod tests {
 
         // Space past the last page: enter registration mode (index=1+2=3 >= len=3)
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
-        assert!(!eng.register_stack.is_empty(), "should enter register mode after last candidate");
+        assert!(
+            !eng.register_stack.is_empty(),
+            "should enter register mode after last candidate"
+        );
         assert!(matches!(eng.phase(), SkkPhase::Hiragana));
     }
 
@@ -2393,13 +2611,16 @@ mod tests {
             fn lookup(&self, midashi: &str, _okuri: Option<&str>) -> Option<DictEntry> {
                 match midashi {
                     "ちょう>" => Some(DictEntry {
-                        midashi: midashi.to_string(), okuri: None,
+                        midashi: midashi.to_string(),
+                        okuri: None,
                         candidates: vec![Candidate::new("超")],
                     }),
                     _ => None,
                 }
             }
-            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> { Ok(()) }
+            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> {
+                Ok(())
+            }
         }
 
         let mut eng = engine();
@@ -2414,7 +2635,10 @@ mod tests {
 
         // Press '>' → should trigger conversion on "ちょう>" → Selecting with "超"
         eng.process_key(&press('>'));
-        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }), "should be Selecting after '>'");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Selecting { .. }),
+            "should be Selecting after '>'"
+        );
     }
 
     #[test]
@@ -2436,9 +2660,15 @@ mod tests {
 
         // Press '>' → commit "小林" and enter ▽> mode
         let actions = eng.process_key(&press('>'));
-        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(_))), "should commit");
+        assert!(
+            actions.iter().any(|a| matches!(a, EngineAction::Commit(_))),
+            "should commit"
+        );
         match eng.phase() {
-            SkkPhase::Midashi { kana_buf, roman_buf } => {
+            SkkPhase::Midashi {
+                kana_buf,
+                roman_buf,
+            } => {
                 assert_eq!(kana_buf, ">", "kana_buf should start with '>'");
                 assert!(roman_buf.is_empty());
             }
@@ -2455,13 +2685,20 @@ mod tests {
         eng.process_key(&press('A'));
         eng.process_key(&press('i'));
         let actions = eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
-        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }), "should be Selecting");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Selecting { .. }),
+            "should be Selecting"
+        );
         let _ = actions;
 
         // BackSpace in Selecting phase: should commit the current candidate
         // and pass BackSpace through so the application deletes the last character.
         let actions = eng.process_key(&backspace());
-        assert_eq!(eng.phase(), &SkkPhase::Hiragana, "should return to Hiragana after commit");
+        assert_eq!(
+            eng.phase(),
+            &SkkPhase::Hiragana,
+            "should return to Hiragana after commit"
+        );
         assert!(
             actions.iter().any(|a| matches!(a, EngineAction::Commit(_))),
             "should emit Commit"
@@ -2487,15 +2724,21 @@ mod tests {
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         // Now in registration mode.  Type some kana into the buffer.
-        eng.process_key(&press('u'));  // "う" → committed to reg buf
-        assert!(!eng.register_stack.is_empty(), "should be in registration mode");
+        eng.process_key(&press('u')); // "う" → committed to reg buf
+        assert!(
+            !eng.register_stack.is_empty(),
+            "should be in registration mode"
+        );
 
         // Start a sub-conversion inside the registration.
         eng.process_key(&press('A'));
         eng.process_key(&press('i'));
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
-        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }),
-            "should be Selecting: {:?}", eng.phase());
+        assert!(
+            matches!(eng.phase(), SkkPhase::Selecting { .. }),
+            "should be Selecting: {:?}",
+            eng.phase()
+        );
 
         // Record the buffer before Backspace.
         let buf_before = eng.register_stack.last().unwrap().committed.clone();
@@ -2527,10 +2770,16 @@ mod tests {
         let actions = eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         // Should have UpdatePreedit with registration prompt
         assert!(
-            actions.iter().any(|a| matches!(a, EngineAction::UpdatePreedit(p) if p.text.contains("辞書登録"))),
-            "should show registration prompt; got: {:?}", actions
+            actions.iter().any(
+                |a| matches!(a, EngineAction::UpdatePreedit(p) if p.text.contains("辞書登録"))
+            ),
+            "should show registration prompt; got: {:?}",
+            actions
         );
-        assert!(!eng.register_stack.is_empty(), "register_stack should be non-empty");
+        assert!(
+            !eng.register_stack.is_empty(),
+            "register_stack should be non-empty"
+        );
 
         // Type "か" via romaji "ka"
         eng.process_key(&press('k'));
@@ -2539,10 +2788,16 @@ mod tests {
         // RET → commit
         let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
         assert!(
-            actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "か")),
-            "should commit registered word; got: {:?}", actions
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::Commit(s) if s == "か")),
+            "should commit registered word; got: {:?}",
+            actions
         );
-        assert!(eng.register_stack.is_empty(), "register_stack should be empty after finalize");
+        assert!(
+            eng.register_stack.is_empty(),
+            "register_stack should be empty after finalize"
+        );
         assert_eq!(eng.phase(), &SkkPhase::Hiragana);
     }
 
@@ -2554,16 +2809,20 @@ mod tests {
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // enter register mode
 
         // C-g cancels → should return to ▽ midashi
-        let actions = eng.process_key(&KeyEvent::press(
-            Key::Char('g'), Modifiers::CTRL,
-        ));
+        let actions = eng.process_key(&KeyEvent::press(Key::Char('g'), Modifiers::CTRL));
         assert!(eng.register_stack.is_empty());
-        assert!(matches!(eng.phase(), SkkPhase::Midashi { kana_buf, .. } if kana_buf == "あい"),
-            "should return to midashi あい; phase: {:?}", eng.phase());
+        assert!(
+            matches!(eng.phase(), SkkPhase::Midashi { kana_buf, .. } if kana_buf == "あい"),
+            "should return to midashi あい; phase: {:?}",
+            eng.phase()
+        );
         // preedit should show ▽あい
         assert!(
-            actions.iter().any(|a| matches!(a, EngineAction::UpdatePreedit(p) if p.text.contains("▽あい"))),
-            "should update preedit to ▽あい; got: {:?}", actions
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::UpdatePreedit(p) if p.text.contains("▽あい"))),
+            "should update preedit to ▽あい; got: {:?}",
+            actions
         );
     }
 
@@ -2612,12 +2871,16 @@ mod tests {
         let mut eng = engine(); // no dict
 
         // Start outer conversion: さいきてき
-        for ch in ['S','a','i','k','i','t','e','k','i'] { eng.process_key(&press(ch)); }
+        for ch in ['S', 'a', 'i', 'k', 'i', 't', 'e', 'k', 'i'] {
+            eng.process_key(&press(ch));
+        }
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         assert_eq!(eng.register_stack.len(), 1, "should be in outer register");
 
         // Within registration, start inner conversion: さいき
-        for ch in ['S','a','i','k','i'] { eng.process_key(&press(ch)); }
+        for ch in ['S', 'a', 'i', 'k', 'i'] {
+            eng.process_key(&press(ch));
+        }
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         assert_eq!(eng.register_stack.len(), 2, "should be in nested register");
 
@@ -2625,7 +2888,11 @@ mod tests {
         eng.process_key(&press('k'));
         eng.process_key(&press('a'));
         eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
-        assert_eq!(eng.register_stack.len(), 1, "should be back in outer register");
+        assert_eq!(
+            eng.register_stack.len(),
+            1,
+            "should be back in outer register"
+        );
         // Outer committed buf should now contain "か"
         assert_eq!(eng.register_stack[0].committed, "か");
 
@@ -2635,8 +2902,11 @@ mod tests {
         let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
         assert!(eng.register_stack.is_empty());
         assert!(
-            actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "かき")),
-            "should commit かき; got: {:?}", actions
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::Commit(s) if s == "かき")),
+            "should commit かき; got: {:?}",
+            actions
         );
     }
 
@@ -2656,8 +2926,11 @@ mod tests {
         let actions = eng.process_key(&press('q'));
         assert!(matches!(eng.phase, SkkPhase::Hiragana));
         assert!(
-            actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "アイウ")),
-            "expected commit アイウ, got: {:?}", actions
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::Commit(s) if s == "アイウ")),
+            "expected commit アイウ, got: {:?}",
+            actions
         );
     }
 
@@ -2666,13 +2939,17 @@ mod tests {
         // \2422 + Enter → あ (JIS X 0208 code 0x2422 = あ)
         let mut eng = engine();
         eng.process_key(&press('\\'));
-        assert!(matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Jis));
+        assert!(
+            matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Jis)
+        );
         eng.process_key(&press('2'));
         eng.process_key(&press('4'));
         eng.process_key(&press('2'));
         eng.process_key(&press('2'));
         let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
-        assert!(actions.iter().any(|a| *a == EngineAction::Commit("あ".into())));
+        assert!(actions
+            .iter()
+            .any(|a| *a == EngineAction::Commit("あ".into())));
         assert!(matches!(eng.phase, SkkPhase::Hiragana));
     }
 
@@ -2682,13 +2959,17 @@ mod tests {
         let mut eng = engine();
         eng.process_key(&press('\\'));
         eng.process_key(&press('u'));
-        assert!(matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Unicode));
+        assert!(
+            matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Unicode)
+        );
         eng.process_key(&press('3'));
         eng.process_key(&press('0'));
         eng.process_key(&press('4'));
         eng.process_key(&press('2'));
         let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
-        assert!(actions.iter().any(|a| *a == EngineAction::Commit("あ".into())));
+        assert!(actions
+            .iter()
+            .any(|a| *a == EngineAction::Commit("あ".into())));
         assert!(matches!(eng.phase, SkkPhase::Hiragana));
     }
 
@@ -2698,9 +2979,13 @@ mod tests {
         let mut eng = engine();
         eng.process_key(&press('\\'));
         eng.process_key(&press('u'));
-        assert!(matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Unicode));
+        assert!(
+            matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Unicode)
+        );
         eng.process_key(&KeyEvent::press(Key::BackSpace, Modifiers::empty()));
-        assert!(matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Jis));
+        assert!(
+            matches!(eng.phase, SkkPhase::CodeInput { ref prefix, .. } if *prefix == CodeInputPrefix::Jis)
+        );
         eng.process_key(&KeyEvent::press(Key::BackSpace, Modifiers::empty()));
         assert!(matches!(eng.phase, SkkPhase::Hiragana));
     }
@@ -2710,11 +2995,11 @@ mod tests {
         // ▽ (empty) + q → stays in midashi (nothing to convert)
         let mut eng = engine();
         eng.process_key(&press('A')); // enter midashi with just 'a' typed via uppercase A
-        // Actually 'A' feeds 'a' into kana, resulting in "あ" in kana_buf.
-        // Use a letter with no output to get an empty midashi.
-        // Workaround: cancel and re-enter with Shift only conceptually impossible here.
-        // Just verify that 'q' on "あ" midashi works (already tested above).
-        // Test the empty case via Escape + re-enter:
+                                      // Actually 'A' feeds 'a' into kana, resulting in "あ" in kana_buf.
+                                      // Use a letter with no output to get an empty midashi.
+                                      // Workaround: cancel and re-enter with Shift only conceptually impossible here.
+                                      // Just verify that 'q' on "あ" midashi works (already tested above).
+                                      // Test the empty case via Escape + re-enter:
         eng.process_key(&KeyEvent::press(Key::Escape, Modifiers::empty()));
         // Re-enter midashi with uppercase that triggers pending roman only
         // Simplest: enter 'Q' in hiragana mode (no kana_buf) - but Q is not handled as
@@ -2744,9 +3029,13 @@ mod tests {
                 })
             }
         }
-        fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> { Ok(()) }
+        fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> {
+            Ok(())
+        }
         fn complete(&self, prefix: &str) -> Vec<String> {
-            let mut results: Vec<String> = self.completions.iter()
+            let mut results: Vec<String> = self
+                .completions
+                .iter()
                 .filter(|w| w.starts_with(prefix) && w.as_str() != prefix)
                 .cloned()
                 .collect();
@@ -2773,7 +3062,11 @@ mod tests {
 
         let preedit = eng.build_preedit();
         // text should be "▽か|らだ" — user typed "か", separator "|", ghost "らだ"
-        assert!(preedit.text.contains("|らだ"), "ghost text should contain separator+ghost: {:?}", preedit.text);
+        assert!(
+            preedit.text.contains("|らだ"),
+            "ghost text should contain separator+ghost: {:?}",
+            preedit.text
+        );
     }
 
     #[test]
@@ -2785,7 +3078,11 @@ mod tests {
 
         let preedit = eng.build_preedit();
         // "▽か" = 3 + 3 = 6 bytes
-        assert_eq!(preedit.cursor, 6, "cursor should be after ▽か, got {:?}", preedit);
+        assert_eq!(
+            preedit.cursor, 6,
+            "cursor should be after ▽か, got {:?}",
+            preedit
+        );
     }
 
     #[test]
@@ -2796,8 +3093,11 @@ mod tests {
 
         eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty()));
 
-        assert!(matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "からだ"),
-            "Tab should accept ghost: {:?}", eng.phase);
+        assert!(
+            matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "からだ"),
+            "Tab should accept ghost: {:?}",
+            eng.phase
+        );
     }
 
     #[test]
@@ -2810,14 +3110,21 @@ mod tests {
         // First Tab: accept "からだ"; next ghost "かわ" doesn't extend "からだ",
         // so it is stored in completion state but not visible in preedit.
         eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty()));
-        assert!(matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "からだ"),
-            "kana_buf should be 'からだ' after first tab");
-        assert!(eng.completion.is_some(), "completion state should hold next cycle entry");
+        assert!(
+            matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "からだ"),
+            "kana_buf should be 'からだ' after first tab"
+        );
+        assert!(
+            eng.completion.is_some(),
+            "completion state should hold next cycle entry"
+        );
 
         // Second Tab: accept "かわ" (next cycle entry replaces kana_buf entirely)
         eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty()));
-        assert!(matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "かわ"),
-            "kana_buf should be 'かわ' after second tab");
+        assert!(
+            matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "かわ"),
+            "kana_buf should be 'かわ' after second tab"
+        );
     }
 
     #[test]
@@ -2828,7 +3135,10 @@ mod tests {
         eng.process_key(&press('a'));
 
         eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty())); // accept "からだ"
-        assert!(eng.completion.is_none(), "no more completions after cycling through all");
+        assert!(
+            eng.completion.is_none(),
+            "no more completions after cycling through all"
+        );
     }
 
     #[test]
@@ -2844,14 +3154,24 @@ mod tests {
         // text = "▽か|らだ"  (separator "|" is first byte of ghost region)
         // cursor = "▽か".len() = 3 + 3 = 6
         // ghost_start = Some(6)  — points to "|"
-        assert!(preedit.ghost_start.is_some(), "ghost_start should be Some when completion is active");
+        assert!(
+            preedit.ghost_start.is_some(),
+            "ghost_start should be Some when completion is active"
+        );
         let gs = preedit.ghost_start.unwrap();
         // ghost_start should equal cursor (boundary between user input and ghost)
-        assert_eq!(gs, preedit.cursor,
-            "ghost_start should equal cursor; preedit={:?}", preedit);
+        assert_eq!(
+            gs, preedit.cursor,
+            "ghost_start should equal cursor; preedit={:?}",
+            preedit
+        );
         // Verify ghost region starts with the separator then the ghost suffix
-        assert_eq!(&preedit.text[gs..], "|らだ",
-            "ghost portion of preedit text should be '|らだ'; preedit={:?}", preedit);
+        assert_eq!(
+            &preedit.text[gs..],
+            "|らだ",
+            "ghost portion of preedit text should be '|らだ'; preedit={:?}",
+            preedit
+        );
     }
 
     #[test]
@@ -2862,8 +3182,11 @@ mod tests {
         eng.process_key(&press('a')); // kana_buf = "か"
 
         let preedit = eng.build_preedit();
-        assert!(preedit.ghost_start.is_none(),
-            "ghost_start should be None without completion: {:?}", preedit);
+        assert!(
+            preedit.ghost_start.is_none(),
+            "ghost_start should be None without completion: {:?}",
+            preedit
+        );
     }
 
     #[test]
@@ -2877,11 +3200,18 @@ mod tests {
         eng.process_key(&KeyEvent::press(Key::Tab, Modifiers::empty())); // accept, kana_buf="からだ"
         eng.process_key(&KeyEvent::press(Key::BackSpace, Modifiers::empty())); // pop → kana_buf="から"
 
-        assert!(matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "から"),
-            "kana_buf should be 'から' after backspace: {:?}", eng.phase);
+        assert!(
+            matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "から"),
+            "kana_buf should be 'から' after backspace: {:?}",
+            eng.phase
+        );
         // Ghost should now show a completion starting with "から"
         let preedit = eng.build_preedit();
-        assert!(preedit.text.starts_with("▽から"), "preedit should start with ▽から: {:?}", preedit.text);
+        assert!(
+            preedit.text.starts_with("▽から"),
+            "preedit should start with ▽から: {:?}",
+            preedit.text
+        );
     }
 
     #[test]
@@ -2894,7 +3224,11 @@ mod tests {
 
         let preedit = eng.build_preedit();
         // Should show "▽かk", no ghost suffix
-        assert_eq!(preedit.text, "▽かk", "no ghost when roman_buf non-empty: {:?}", preedit.text);
+        assert_eq!(
+            preedit.text, "▽かk",
+            "no ghost when roman_buf non-empty: {:?}",
+            preedit.text
+        );
     }
 
     // ── Conversion trigger tests ──────────────────────────────────────────────
@@ -2909,22 +3243,45 @@ mod tests {
         for ch in "akkou".chars() {
             eng.process_key(&press(ch));
         }
-        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }), "should be in Midashi");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Midashi { .. }),
+            "should be in Midashi"
+        );
 
         // Press '.' → should trigger conversion and enter Selecting mode
         let actions = eng.process_key(&press('.'));
         // '.' starts conversion: we should now be in Selecting mode
-        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }), "should enter Selecting after '.'");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Selecting { .. }),
+            "should enter Selecting after '.'"
+        );
         // No commit yet (still selecting)
-        assert!(!actions.iter().any(|a| matches!(a, EngineAction::Commit(_))), "no commit before selection");
+        assert!(
+            !actions.iter().any(|a| matches!(a, EngineAction::Commit(_))),
+            "no commit before selection"
+        );
 
         // Confirm with Ctrl+j → commits "学校" then "。" (kana table output for '.')
         let actions = eng.process_key(&ctrl('j'));
-        let commits: Vec<&str> = actions.iter().filter_map(|a| {
-            if let EngineAction::Commit(s) = a { Some(s.as_str()) } else { None }
-        }).collect();
-        assert_eq!(commits, vec!["学校", "。"], "should commit candidate then kana-table output for '.'");
-        assert!(matches!(eng.phase(), SkkPhase::Hiragana), "should return to Hiragana");
+        let commits: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| {
+                if let EngineAction::Commit(s) = a {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            commits,
+            vec!["学校", "。"],
+            "should commit candidate then kana-table output for '.'"
+        );
+        assert!(
+            matches!(eng.phase(), SkkPhase::Hiragana),
+            "should return to Hiragana"
+        );
     }
 
     #[test]
@@ -2941,14 +3298,28 @@ mod tests {
         // Type 'wo' → 'を' fires kana trigger
         eng.process_key(&press('w'));
         eng.process_key(&press('o'));
-        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }), "should enter Selecting after 'wo'");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Selecting { .. }),
+            "should enter Selecting after 'wo'"
+        );
 
         // Confirm with Ctrl+j
         let actions = eng.process_key(&ctrl('j'));
-        let commits: Vec<&str> = actions.iter().filter_map(|a| {
-            if let EngineAction::Commit(s) = a { Some(s.as_str()) } else { None }
-        }).collect();
-        assert_eq!(commits, vec!["学校", "を"], "should commit candidate then 'を'");
+        let commits: Vec<&str> = actions
+            .iter()
+            .filter_map(|a| {
+                if let EngineAction::Commit(s) = a {
+                    Some(s.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            commits,
+            vec!["学校", "を"],
+            "should commit candidate then 'を'"
+        );
     }
 
     #[test]
@@ -2960,14 +3331,24 @@ mod tests {
         eng.process_key(&press('B'));
         // BackSpace removes roman_buf → Midashi: kana_buf="", roman_buf=""
         eng.process_key(&KeyEvent::press(Key::BackSpace, Modifiers::empty()));
-        assert!(matches!(eng.phase(), SkkPhase::Midashi { ref kana_buf, ref roman_buf }
-            if kana_buf.is_empty() && roman_buf.is_empty()), "▽ with empty bufs");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Midashi { ref kana_buf, ref roman_buf }
+            if kana_buf.is_empty() && roman_buf.is_empty()),
+            "▽ with empty bufs"
+        );
 
         // Now press '.' → kana_buf is empty, so just output "。" (kana output) and exit ▽
         let actions = eng.process_key(&press('.'));
-        assert!(actions.iter().any(|a| matches!(a, EngineAction::Commit(s) if s == "。")),
-            "should commit kana output for '.' directly when kana_buf is empty");
-        assert!(matches!(eng.phase(), SkkPhase::Hiragana), "should exit ▽ mode");
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::Commit(s) if s == "。")),
+            "should commit kana output for '.' directly when kana_buf is empty"
+        );
+        assert!(
+            matches!(eng.phase(), SkkPhase::Hiragana),
+            "should exit ▽ mode"
+        );
     }
 
     #[test]
@@ -2984,26 +3365,42 @@ mod tests {
 
         // Escape → back to ▽ mode, no output
         let actions = eng.process_key(&KeyEvent::press(Key::Escape, Modifiers::empty()));
-        assert!(!actions.iter().any(|a| matches!(a, EngineAction::Commit(_))), "no commit on Escape");
-        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }), "back to Midashi");
+        assert!(
+            !actions.iter().any(|a| matches!(a, EngineAction::Commit(_))),
+            "no commit on Escape"
+        );
+        assert!(
+            matches!(eng.phase(), SkkPhase::Midashi { .. }),
+            "back to Midashi"
+        );
     }
 
     #[test]
     fn test_conversion_trigger_disabled() {
         // With empty conversion_trigger_chars, '.' in ▽ mode is ignored (not a trigger).
         let table = romaji_table();
-        let mut eng = SkkEngine::new(table, SkkKeybindings {
-            conversion_trigger_chars: vec![],
-            ..SkkKeybindings::default()
-        });
-        eng.add_dict(Box::new(StubDict(vec![Candidate { word: "学校".into(), annotation: None, lisp_form: None }])));
+        let mut eng = SkkEngine::new(
+            table,
+            SkkKeybindings {
+                conversion_trigger_chars: vec![],
+                ..SkkKeybindings::default()
+            },
+        );
+        eng.add_dict(Box::new(StubDict(vec![Candidate {
+            word: "学校".into(),
+            annotation: None,
+            lisp_form: None,
+        }])));
 
         eng.process_key(&press('G'));
         for ch in "akkou".chars() {
             eng.process_key(&press(ch));
         }
         eng.process_key(&press('.')); // should NOT trigger conversion
-        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }), "should stay in Midashi when triggers disabled");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Midashi { .. }),
+            "should stay in Midashi when triggers disabled"
+        );
     }
 
     // ── Purge confirmation tests ──────────────────────────────────────────────
@@ -3018,9 +3415,7 @@ mod tests {
     fn engine_in_selecting_with_user_dict(words: &[&str]) -> SkkEngine {
         use crate::dict::file::UserDict;
         let mut eng = engine();
-        let mut user_dict = UserDict::empty(std::path::PathBuf::from(
-            "/tmp/y2skk_test_purge.dict",
-        ));
+        let mut user_dict = UserDict::empty(std::path::PathBuf::from("/tmp/y2skk_test_purge.dict"));
         for w in words {
             user_dict
                 .learn(DictEntry {
@@ -3058,8 +3453,10 @@ mod tests {
         assert_eq!(eng.phase(), &SkkPhase::Hiragana);
 
         // The candidate "阿" must be gone from the user dict.
-        assert!(eng.dict[0].lookup("あい", None).is_none(),
-                "user dict entry should be purged");
+        assert!(
+            eng.dict[0].lookup("あい", None).is_none(),
+            "user dict entry should be purged"
+        );
     }
 
     #[test]
@@ -3075,8 +3472,10 @@ mod tests {
         // Selecting is restored with the same index.
         assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
         // User dict untouched.
-        assert!(eng.dict[0].lookup("あい", None).is_some(),
-                "user dict entry must remain");
+        assert!(
+            eng.dict[0].lookup("あい", None).is_some(),
+            "user dict entry must remain"
+        );
     }
 
     #[test]
@@ -3124,8 +3523,10 @@ mod tests {
 
         // 'X' in listing mode must NOT enter PurgeConfirm.
         eng.process_key(&press('X'));
-        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }),
-                "X must be ignored in listing mode");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }),
+            "X must be ignored in listing mode"
+        );
     }
 
     #[test]
@@ -3151,7 +3552,13 @@ mod tests {
 
     fn vi_escape_engine() -> SkkEngine {
         let table = romaji_table();
-        SkkEngine::new(table, SkkKeybindings { vi_escape: true, ..SkkKeybindings::default() })
+        SkkEngine::new(
+            table,
+            SkkKeybindings {
+                vi_escape: true,
+                ..SkkKeybindings::default()
+            },
+        )
     }
 
     fn esc() -> KeyEvent {
@@ -3231,11 +3638,16 @@ mod tests {
         let table = romaji_table();
         let mut eng = SkkEngine::new(
             table,
-            SkkKeybindings { vi_escape: true, ..SkkKeybindings::default() },
+            SkkKeybindings {
+                vi_escape: true,
+                ..SkkKeybindings::default()
+            },
         );
-        eng.add_dict(Box::new(StubDict(vec![
-            Candidate { word: "亜".into(), annotation: None, lisp_form: None },
-        ])));
+        eng.add_dict(Box::new(StubDict(vec![Candidate {
+            word: "亜".into(),
+            annotation: None,
+            lisp_form: None,
+        }])));
         eng.process_key(&press('A'));
         eng.process_key(&press('i'));
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
@@ -3250,11 +3662,14 @@ mod tests {
     struct KeyedStubDict(Vec<(String, Vec<Candidate>)>);
     impl DictionaryProvider for KeyedStubDict {
         fn lookup(&self, midashi: &str, _okuri: Option<&str>) -> Option<DictEntry> {
-            self.0.iter().find(|(k, _)| k == midashi).map(|(_, cands)| DictEntry {
-                midashi: midashi.to_string(),
-                okuri: None,
-                candidates: cands.clone(),
-            })
+            self.0
+                .iter()
+                .find(|(k, _)| k == midashi)
+                .map(|(_, cands)| DictEntry {
+                    midashi: midashi.to_string(),
+                    okuri: None,
+                    candidates: cands.clone(),
+                })
         }
         fn learn(&mut self, entry: DictEntry) -> Result<(), crate::dict::entry::DictError> {
             // Record to first matching key or insert.
@@ -3272,7 +3687,9 @@ mod tests {
         // Abbrev mode: /1234<SPC> should enter Selecting with synthetic candidates.
         let mut eng = engine();
         eng.process_key(&press('/'));
-        for ch in "1234".chars() { eng.process_key(&press(ch)); }
+        for ch in "1234".chars() {
+            eng.process_key(&press(ch));
+        }
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
 
         // Should be in Selecting with multiple candidates
@@ -3280,7 +3697,7 @@ mod tests {
             panic!("expected Selecting, got {:?}", eng.phase());
         };
         let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
-        assert!(words.contains(&"1234"),  "should have Raw (#0)");
+        assert!(words.contains(&"1234"), "should have Raw (#0)");
         assert!(words.contains(&"１２３４"), "should have Zenkaku (#1)");
         assert!(words.contains(&"一二三四"), "should have KanjiPos (#2)");
         assert!(words.contains(&"千二百三十四"), "should have KanjiSeq (#3)");
@@ -3298,7 +3715,9 @@ mod tests {
         // Start fresh with just digits
         let mut eng2 = engine();
         eng2.process_key(&KeyEvent::press(Key::Char('Q'), Modifiers::empty()));
-        for ch in "1234".chars() { eng2.process_key(&press(ch)); }
+        for ch in "1234".chars() {
+            eng2.process_key(&press(ch));
+        }
         let SkkPhase::Midashi { kana_buf, .. } = eng2.phase() else {
             panic!("expected Midashi, got {:?}", eng2.phase());
         };
@@ -3323,11 +3742,17 @@ mod tests {
         // Simpler: use abbrev mode with "だい12かい" not possible (abbrev is ASCII only).
         // Use midashi: Q d a i 1 2 k a i SPC
         eng.process_key(&KeyEvent::press(Key::Char('Q'), Modifiers::empty()));
-        for ch in "dai".chars() { eng.process_key(&press(ch)); }
+        for ch in "dai".chars() {
+            eng.process_key(&press(ch));
+        }
         // Now kana_buf = "だい"
-        for ch in "12".chars() { eng.process_key(&press(ch)); }
+        for ch in "12".chars() {
+            eng.process_key(&press(ch));
+        }
         // kana_buf = "だい12"
-        for ch in "kai".chars() { eng.process_key(&press(ch)); }
+        for ch in "kai".chars() {
+            eng.process_key(&press(ch));
+        }
         // kana_buf = "だい12かい"
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
 
@@ -3336,12 +3761,21 @@ mod tests {
         };
         let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
         // Dict candidates expanded
-        assert!(words.contains(&"12回"),   "should expand #0 → 12");
-        assert!(words.contains(&"１２回"),  "should expand #1 → full-width");
-        assert!(words.contains(&"十二回"), "should expand #3 → sequential kanji");
+        assert!(words.contains(&"12回"), "should expand #0 → 12");
+        assert!(words.contains(&"１２回"), "should expand #1 → full-width");
+        assert!(
+            words.contains(&"十二回"),
+            "should expand #3 → sequential kanji"
+        );
         // Synthetic candidates must NOT appear when dict candidates exist.
-        assert!(!words.contains(&"12"),  "bare digit synthetic should be absent when dict hits");
-        assert!(!words.contains(&"１２"), "bare zenkaku synthetic should be absent when dict hits");
+        assert!(
+            !words.contains(&"12"),
+            "bare digit synthetic should be absent when dict hits"
+        );
+        assert!(
+            !words.contains(&"１２"),
+            "bare zenkaku synthetic should be absent when dict hits"
+        );
         assert_eq!(words.len(), 3, "exactly the three expanded dict candidates");
     }
 
@@ -3355,7 +3789,9 @@ mod tests {
 
         // /1234<SPC> → Selecting; the first candidate is Raw "1234" (Synthetic).
         eng.process_key(&press('/'));
-        for ch in "1234".chars() { eng.process_key(&press(ch)); }
+        for ch in "1234".chars() {
+            eng.process_key(&press(ch));
+        }
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }));
 
@@ -3373,7 +3809,9 @@ mod tests {
         // Committing a dict-derived expanded candidate should record the template form.
         use crate::dict::file::UserDict;
         let mut eng = engine();
-        let user_dict = UserDict::empty(std::path::PathBuf::from("/tmp/y2skk_test_template_learn.dict"));
+        let user_dict = UserDict::empty(std::path::PathBuf::from(
+            "/tmp/y2skk_test_template_learn.dict",
+        ));
         eng.add_dict(Box::new(user_dict));
         eng.add_dict(Box::new(KeyedStubDict(vec![(
             "だい#かい".to_string(),
@@ -3382,7 +3820,9 @@ mod tests {
 
         // Midashi だい12かい → SPC → Selecting → Ctrl+j (first candidate = expanded "#1回")
         eng.process_key(&KeyEvent::press(Key::Char('Q'), Modifiers::empty()));
-        for ch in "dai12kai".chars() { eng.process_key(&press(ch)); }
+        for ch in "dai12kai".chars() {
+            eng.process_key(&press(ch));
+        }
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
 
         let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
@@ -3403,20 +3843,27 @@ mod tests {
         // When no candidates exist, registration mode should use the template midashi.
         let mut eng = engine(); // no dict → always no candidates
         eng.process_key(&press('/'));
-        for ch in "abc12def".chars() { eng.process_key(&press(ch)); }
+        for ch in "abc12def".chars() {
+            eng.process_key(&press(ch));
+        }
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         // Synthetic candidates exist (12 → "12", "１２", etc.), so this actually enters
         // Selecting. Let's exhaust all candidates to enter register.
         // Actually synthetic candidates are always present for digit runs, so instead
         // use a midashi with no digit run to test the registration path for template.
         // Re-test: use abbrev "abc" (no digits) to verify existing registration still works.
-        assert!(matches!(eng.phase(), SkkPhase::Selecting { .. }),
-            "digits produce synthetic candidates → Selecting, not register");
+        assert!(
+            matches!(eng.phase(), SkkPhase::Selecting { .. }),
+            "digits produce synthetic candidates → Selecting, not register"
+        );
 
         // Cancel: Escape from Selecting returns to Midashi (regardless of origin).
         eng.process_key(&KeyEvent::press(Key::Escape, Modifiers::empty()));
-        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }),
-            "Escape from Selecting should return to Midashi, got {:?}", eng.phase());
+        assert!(
+            matches!(eng.phase(), SkkPhase::Midashi { .. }),
+            "Escape from Selecting should return to Midashi, got {:?}",
+            eng.phase()
+        );
     }
 
     #[test]
@@ -3430,12 +3877,17 @@ mod tests {
         let mut eng = engine();
         // No dict → "/abc" exhausts immediately when pressing SPC.
         eng.process_key(&press('/'));
-        for ch in "abc".chars() { eng.process_key(&press(ch)); }
+        for ch in "abc".chars() {
+            eng.process_key(&press(ch));
+        }
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         // Should be in registration mode now.
         // Check we're in a register-related state (phase is Hiragana during registration).
-        assert!(matches!(eng.phase(), SkkPhase::Hiragana),
-            "should be in Hiragana (register mode), got {:?}", eng.phase());
+        assert!(
+            matches!(eng.phase(), SkkPhase::Hiragana),
+            "should be in Hiragana (register mode), got {:?}",
+            eng.phase()
+        );
         // Cancel
         eng.process_key(&KeyEvent::press(Key::Escape, Modifiers::empty()));
         // Restored to Abbrev with buf = "abc"
@@ -3517,7 +3969,9 @@ mod tests {
                     None
                 }
             }
-            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> { Ok(()) }
+            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> {
+                Ok(())
+            }
         }
 
         let mut eng = engine();
@@ -3527,7 +3981,10 @@ mod tests {
         let phase = start_conversion_phase(&mut eng, "てすと");
         if let SkkPhase::Selecting { candidates, .. } = phase {
             let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
-            assert!(!words.contains(&"テスト"), "テスト should be filtered by ignore directive");
+            assert!(
+                !words.contains(&"テスト"),
+                "テスト should be filtered by ignore directive"
+            );
             assert!(words.contains(&"試験"), "試験 should remain");
         } else {
             panic!("expected Selecting phase, got {phase:?}");
@@ -3559,21 +4016,29 @@ mod tests {
                     None
                 }
             }
-            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> { Ok(()) }
+            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> {
+                Ok(())
+            }
         }
 
-        let mut eng = SkkEngine::new(romaji_table(), SkkKeybindings::default())
-            .with_lisp_directives(false);
+        let mut eng =
+            SkkEngine::new(romaji_table(), SkkKeybindings::default()).with_lisp_directives(false);
         eng.add_dict(Box::new(IgnoreDict2));
 
         let phase = start_conversion_phase(&mut eng, "てすと");
         if let SkkPhase::Selecting { candidates, .. } = phase {
             let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
             // With lisp_directives=false the ignore directive has no effect.
-            assert!(words.contains(&"テスト"), "テスト should appear when lisp_directives=false");
+            assert!(
+                words.contains(&"テスト"),
+                "テスト should appear when lisp_directives=false"
+            );
             assert!(words.contains(&"試験"), "試験 should also appear");
             // The raw Lisp form itself should still not be displayed.
-            assert!(!words.iter().any(|w| w.starts_with('(')), "Lisp forms should never be displayed");
+            assert!(
+                !words.iter().any(|w| w.starts_with('(')),
+                "Lisp forms should never be displayed"
+            );
         } else {
             panic!("expected Selecting phase, got {phase:?}");
         }
@@ -3606,11 +4071,23 @@ mod tests {
         for &(input, expected_output) in cases {
             let mut eng = dvorakjp_engine();
             let actions = eng.process_key(&press(input));
-            let committed: Vec<&str> = actions.iter().filter_map(|a| {
-                if let EngineAction::Commit(s) = a { Some(s.as_str()) } else { None }
-            }).collect();
-            assert_eq!(committed, vec![expected_output],
-                "dvorakjp-us: pressing {:?} should commit {:?}", input, expected_output);
+            let committed: Vec<&str> = actions
+                .iter()
+                .filter_map(|a| {
+                    if let EngineAction::Commit(s) = a {
+                        Some(s.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(
+                committed,
+                vec![expected_output],
+                "dvorakjp-us: pressing {:?} should commit {:?}",
+                input,
+                expected_output
+            );
         }
     }
 }

@@ -1,7 +1,6 @@
 use crate::{
-    IpcAction, NO_GHOST,
-    ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
-    ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
+    IpcAction, ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
+    ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS, NO_GHOST,
 };
 
 /// Receiver of IME actions produced by dispatching a `Vec<IpcAction>`.
@@ -77,7 +76,10 @@ pub fn dispatch<S: ActionSink>(actions: &[IpcAction], sink: &mut S) -> DispatchR
         }
     }
 
-    DispatchResult { consumed, force_passthrough }
+    DispatchResult {
+        consumed,
+        force_passthrough,
+    }
 }
 
 #[cfg(test)]
@@ -136,7 +138,10 @@ mod tests {
     #[test]
     fn commit_with_passthrough() {
         let mut sink = MockSink::default();
-        let r = dispatch(&[IpcAction::commit("あ"), IpcAction::passthrough()], &mut sink);
+        let r = dispatch(
+            &[IpcAction::commit("あ"), IpcAction::passthrough()],
+            &mut sink,
+        );
         assert!(r.consumed);
         assert!(r.force_passthrough);
         assert_eq!(sink.committed, vec!["あ"]);
@@ -161,7 +166,10 @@ mod tests {
     #[test]
     fn preedit_ghost_preserved() {
         let mut sink = MockSink::default();
-        dispatch(&[IpcAction::update_preedit("かいかわらず", 3, 3)], &mut sink);
+        dispatch(
+            &[IpcAction::update_preedit("かいかわらず", 3, 3)],
+            &mut sink,
+        );
         assert_eq!(sink.preedit, Some(("かいかわらず".to_string(), 3, Some(3))));
     }
 

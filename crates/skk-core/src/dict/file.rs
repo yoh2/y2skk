@@ -63,11 +63,19 @@ pub struct FileDict {
 
 impl FileDict {
     /// Loads a dictionary file with the specified encoding.
-    pub fn load(path: impl AsRef<Path>, encoding: DictEncoding, priority: i32) -> Result<Self, DictError> {
+    pub fn load(
+        path: impl AsRef<Path>,
+        encoding: DictEncoding,
+        priority: i32,
+    ) -> Result<Self, DictError> {
         let path = path.as_ref().to_path_buf();
         let src = read_to_utf8(&path, encoding)?;
         let entries = parse_skk_dict(&src)?;
-        Ok(Self { path, entries, priority })
+        Ok(Self {
+            path,
+            entries,
+            priority,
+        })
     }
 
     pub fn path(&self) -> &Path {
@@ -98,7 +106,8 @@ impl DictionaryProvider for FileDict {
     /// Returns all okuri-nashi headwords starting with `prefix` (excluding
     /// `prefix` itself) in sorted order.
     fn complete(&self, prefix: &str) -> Vec<String> {
-        let mut results: Vec<String> = self.entries
+        let mut results: Vec<String> = self
+            .entries
             .iter()
             .filter(|(midashi, okuri_map)| {
                 midashi.starts_with(prefix)
@@ -130,7 +139,11 @@ pub struct UserDict {
 impl UserDict {
     /// Creates an empty in-memory user dict pointed at `path` (not yet saved).
     pub fn empty(path: PathBuf) -> Self {
-        Self { path, entries: IndexMap::new(), dirty: false }
+        Self {
+            path,
+            entries: IndexMap::new(),
+            dirty: false,
+        }
     }
 
     /// Loads the user dict from disk, creating an empty dict if the file does not exist.
@@ -142,7 +155,11 @@ impl UserDict {
         } else {
             IndexMap::new()
         };
-        Ok(Self { path, entries, dirty: false })
+        Ok(Self {
+            path,
+            entries,
+            dirty: false,
+        })
     }
 
     /// Persists any changes back to disk (UTF-8 SKK format).
@@ -186,12 +203,16 @@ impl DictionaryProvider for UserDict {
     /// entry whose list becomes empty is dropped entirely.
     fn learn(&mut self, entry: DictEntry) -> Result<(), DictError> {
         // Remove and re-insert at the end to record recency.
-        let mut okuri_map = self.entries.shift_remove(&entry.midashi)
+        let mut okuri_map = self
+            .entries
+            .shift_remove(&entry.midashi)
             .unwrap_or_default();
 
         // Collect the plain words being learned so we can remove them from any
         // skk-ignore-dic-word directives in the same bucket.
-        let learned_words: Vec<String> = entry.candidates.iter()
+        let learned_words: Vec<String> = entry
+            .candidates
+            .iter()
             .filter(|c| c.lisp_form.is_none())
             .map(|c| c.word.clone())
             .collect();
@@ -212,7 +233,9 @@ impl DictionaryProvider for UserDict {
                 cand.word = super::lisp::render_ignore_dic_word(words);
             }
         }
-        list.retain(|c| !matches!(&c.lisp_form, Some(LispForm::IgnoreDicWord(ws)) if ws.is_empty()));
+        list.retain(
+            |c| !matches!(&c.lisp_form, Some(LispForm::IgnoreDicWord(ws)) if ws.is_empty()),
+        );
 
         // Re-insert at the end (= most recently used position).
         self.entries.insert(entry.midashi, okuri_map);
@@ -223,12 +246,7 @@ impl DictionaryProvider for UserDict {
     /// Removes the candidate whose word equals `word` from the user dict.
     /// Cleans up empty okuri buckets and empty midashi entries so the on-disk
     /// representation stays compact after `save()`.
-    fn purge(
-        &mut self,
-        midashi: &str,
-        okuri: Option<&str>,
-        word: &str,
-    ) -> Result<bool, DictError> {
+    fn purge(&mut self, midashi: &str, okuri: Option<&str>, word: &str) -> Result<bool, DictError> {
         let Some(okuri_map) = self.entries.get_mut(midashi) else {
             return Ok(false);
         };
@@ -418,8 +436,9 @@ fn serialize_user_dict(map: &UserEntryMap) -> String {
                     if let Some(form) = &c.lisp_form {
                         use crate::dict::entry::LispForm;
                         match form {
-                            LispForm::IgnoreDicWord(words) =>
-                                crate::dict::lisp::render_ignore_dic_word(words),
+                            LispForm::IgnoreDicWord(words) => {
+                                crate::dict::lisp::render_ignore_dic_word(words)
+                            }
                             LispForm::Unknown => c.word.clone(),
                         }
                     } else if let Some(ann) = &c.annotation {
@@ -506,19 +525,23 @@ mod tests {
             dirty: false,
         };
 
-        udict.learn(DictEntry {
-            midashi: "あ".into(),
-            okuri: Some("k".into()),
-            candidates: vec![Candidate::new("明")],
-        }).unwrap();
+        udict
+            .learn(DictEntry {
+                midashi: "あ".into(),
+                okuri: Some("k".into()),
+                candidates: vec![Candidate::new("明")],
+            })
+            .unwrap();
         assert!(udict.dirty);
 
         // Learning again promotes to front
-        udict.learn(DictEntry {
-            midashi: "あ".into(),
-            okuri: Some("k".into()),
-            candidates: vec![Candidate::new("空")],
-        }).unwrap();
+        udict
+            .learn(DictEntry {
+                midashi: "あ".into(),
+                okuri: Some("k".into()),
+                candidates: vec![Candidate::new("空")],
+            })
+            .unwrap();
 
         let entry = udict.lookup("あ", Some("k")).unwrap();
         assert_eq!(entry.candidates[0].word, "空");
@@ -557,17 +580,21 @@ mod tests {
         };
 
         // Learn one of the ignored words.
-        udict.learn(DictEntry {
-            midashi: "むし".into(),
-            okuri: None,
-            candidates: vec![Candidate::new("無視")],
-        }).unwrap();
+        udict
+            .learn(DictEntry {
+                midashi: "むし".into(),
+                okuri: None,
+                candidates: vec![Candidate::new("無視")],
+            })
+            .unwrap();
 
         let entry = udict.lookup("むし", None).unwrap();
         // "無視" should now be at the front.
         assert_eq!(entry.candidates[0].word, "無視");
         // The ignore directive should still exist but without "無視".
-        let ignore = entry.candidates.iter()
+        let ignore = entry
+            .candidates
+            .iter()
             .find(|c| matches!(&c.lisp_form, Some(LispForm::IgnoreDicWord(_))));
         let ignore = ignore.expect("IgnoreDicWord entry should still exist");
         if let Some(LispForm::IgnoreDicWord(ws)) = &ignore.lisp_form {
@@ -594,11 +621,13 @@ mod tests {
             dirty: false,
         };
 
-        udict.learn(DictEntry {
-            midashi: "ゆいいつ".into(),
-            okuri: None,
-            candidates: vec![Candidate::new("唯一")],
-        }).unwrap();
+        udict
+            .learn(DictEntry {
+                midashi: "ゆいいつ".into(),
+                okuri: None,
+                candidates: vec![Candidate::new("唯一")],
+            })
+            .unwrap();
 
         let entry = udict.lookup("ゆいいつ", None).unwrap();
         // The ignore directive should be gone.

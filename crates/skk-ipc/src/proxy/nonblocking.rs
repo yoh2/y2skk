@@ -6,9 +6,9 @@
 //! [`super::blocking::DaemonProxy`] so callers can pick a variant based on
 //! their runtime without learning two APIs.
 
+use zbus::zvariant::OwnedObjectPath;
 use zbus::Connection;
 use zbus::Proxy;
-use zbus::zvariant::OwnedObjectPath;
 
 use crate::{IpcAction, SessionId};
 

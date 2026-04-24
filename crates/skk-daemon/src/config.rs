@@ -1,6 +1,6 @@
+use std::env;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
-use std::env;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -23,9 +23,15 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("I/O error reading {path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("TOML parse error in {path}: {source}")]
-    Toml { path: PathBuf, source: toml::de::Error },
+    Toml {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
 }
 
 // ── Top-level config ──────────────────────────────────────────────────────────
@@ -153,7 +159,10 @@ pub struct IndicatorConfig {
 
 impl Default for IndicatorConfig {
     fn default() -> Self {
-        Self { enabled: true, timeout_ms: 2000 }
+        Self {
+            enabled: true,
+            timeout_ms: 2000,
+        }
     }
 }
 
@@ -187,7 +196,9 @@ pub struct DaemonConfig {
 
 impl Default for DaemonConfig {
     fn default() -> Self {
-        Self { log_level: "info".into() }
+        Self {
+            log_level: "info".into(),
+        }
     }
 }
 
@@ -245,7 +256,10 @@ pub enum KanaTableResolveError {
     #[error("kana table path {path} does not exist")]
     ExplicitPathNotFound { path: PathBuf },
     #[error("failed to parse kana table {path}: {source}")]
-    Parse { path: PathBuf, source: skk_core::kana::parser::KanaTableError },
+    Parse {
+        path: PathBuf,
+        source: skk_core::kana::parser::KanaTableError,
+    },
 }
 
 /// Returns XDG-based directories in which to search for kana table files.
@@ -291,13 +305,18 @@ pub fn load_kana_table(
 
     let path = if let Some(explicit) = &input.kana_table {
         if !explicit.exists() {
-            return Err(KanaTableResolveError::ExplicitPathNotFound { path: explicit.clone() });
+            return Err(KanaTableResolveError::ExplicitPathNotFound {
+                path: explicit.clone(),
+            });
         }
         explicit.clone()
     } else {
         let filename = format!("{}.txt", input.kana_layout);
         let search_dirs = kana_table_search_dirs();
-        let found = search_dirs.iter().map(|d| d.join(&filename)).find(|p| p.exists());
+        let found = search_dirs
+            .iter()
+            .map(|d| d.join(&filename))
+            .find(|p| p.exists());
         match found {
             Some(p) => p,
             None => {
@@ -314,7 +333,10 @@ pub fn load_kana_table(
         }
     };
 
-    load_table(&path).map_err(|e| KanaTableResolveError::Parse { path: path.clone(), source: e })
+    load_table(&path).map_err(|e| KanaTableResolveError::Parse {
+        path: path.clone(),
+        source: e,
+    })
 }
 
 /// Returns the default config file path: `$XDG_CONFIG_HOME/y2skk/config.toml`.
@@ -353,40 +375,50 @@ pub fn parse_default_mode(name: &str) -> Result<skk_core::engine::SkkPhase, Conf
         "half-width-katakana" | "halfwidth-katakana" => Ok(SkkPhase::HalfWidthKatakana),
         "wide-ascii" | "wideascii" | "zenkaku" => Ok(SkkPhase::WideAscii),
         "ascii" | "latin" => Ok(SkkPhase::Ascii),
-        other => Err(ConfigValidationError::InvalidDefaultMode { value: other.to_string() }),
+        other => Err(ConfigValidationError::InvalidDefaultMode {
+            value: other.to_string(),
+        }),
     }
 }
 
 /// Parses a toggle key string strictly, returning `Err` for unrecognised values.
-pub fn parse_toggle_key(s: &str) -> Result<(skk_core::key::Key, skk_core::key::Modifiers), ConfigValidationError> {
+pub fn parse_toggle_key(
+    s: &str,
+) -> Result<(skk_core::key::Key, skk_core::key::Modifiers), ConfigValidationError> {
     use skk_core::key::{Key, Modifiers};
     let parts: Vec<&str> = s.split('+').collect();
-    let key_str = parts.last().ok_or_else(|| ConfigValidationError::InvalidToggleKey {
-        value: s.to_string(),
-        reason: "empty string".to_string(),
-    })?;
-    let key = match key_str.to_lowercase().as_str() {
-        "space"           => Key::Space,
-        "return" | "enter" => Key::Return,
-        "tab"             => Key::Tab,
-        "escape" | "esc"  => Key::Escape,
-        k if k.chars().count() == 1 => Key::Char(k.chars().next().unwrap()),
-        _ => return Err(ConfigValidationError::InvalidToggleKey {
+    let key_str = parts
+        .last()
+        .ok_or_else(|| ConfigValidationError::InvalidToggleKey {
             value: s.to_string(),
-            reason: format!("unrecognised key name {:?}", key_str),
-        }),
+            reason: "empty string".to_string(),
+        })?;
+    let key = match key_str.to_lowercase().as_str() {
+        "space" => Key::Space,
+        "return" | "enter" => Key::Return,
+        "tab" => Key::Tab,
+        "escape" | "esc" => Key::Escape,
+        k if k.chars().count() == 1 => Key::Char(k.chars().next().unwrap()),
+        _ => {
+            return Err(ConfigValidationError::InvalidToggleKey {
+                value: s.to_string(),
+                reason: format!("unrecognised key name {:?}", key_str),
+            })
+        }
     };
     let mut mods = Modifiers::empty();
     for mod_str in &parts[..parts.len() - 1] {
         match mod_str.to_lowercase().as_str() {
-            "shift"          => mods |= Modifiers::SHIFT,
-            "ctrl"|"control" => mods |= Modifiers::CTRL,
-            "alt"            => mods |= Modifiers::ALT,
-            "meta"|"super"   => mods |= Modifiers::META,
-            other => return Err(ConfigValidationError::InvalidToggleKey {
-                value: s.to_string(),
-                reason: format!("unrecognised modifier {:?}", other),
-            }),
+            "shift" => mods |= Modifiers::SHIFT,
+            "ctrl" | "control" => mods |= Modifiers::CTRL,
+            "alt" => mods |= Modifiers::ALT,
+            "meta" | "super" => mods |= Modifiers::META,
+            other => {
+                return Err(ConfigValidationError::InvalidToggleKey {
+                    value: s.to_string(),
+                    reason: format!("unrecognised modifier {:?}", other),
+                })
+            }
         }
     }
     Ok((key, mods))
@@ -408,7 +440,9 @@ pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
     for entry in &config.input.conversion_trigger_chars {
         let mut chars = entry.chars();
         if chars.next().is_none() || chars.next().is_some() {
-            return Err(ConfigValidationError::InvalidConversionTriggerChar { value: entry.clone() });
+            return Err(ConfigValidationError::InvalidConversionTriggerChar {
+                value: entry.clone(),
+            });
         }
     }
 
@@ -418,7 +452,9 @@ pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
     // 5. dict sources — each path must exist
     for source in &config.dict.sources {
         if !source.path.exists() {
-            return Err(ConfigValidationError::DictPathNotFound { path: source.path.clone() });
+            return Err(ConfigValidationError::DictPathNotFound {
+                path: source.path.clone(),
+            });
         }
     }
 
@@ -426,7 +462,9 @@ pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
     let user_dict_path = config.user_dict.effective_path();
     if let Some(parent) = user_dict_path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
-            return Err(ConfigValidationError::UserDictParentNotFound { path: parent.to_path_buf() });
+            return Err(ConfigValidationError::UserDictParentNotFound {
+                path: parent.to_path_buf(),
+            });
         }
     }
 
@@ -486,10 +524,7 @@ priority = 0
 "#;
             let config: Config = toml::from_str(toml).unwrap();
             let config = config.normalize();
-            assert_eq!(
-                config.dict.sources[0].path,
-                home.join("dicts/SKK-JISYO.L"),
-            );
+            assert_eq!(config.dict.sources[0].path, home.join("dicts/SKK-JISYO.L"),);
         }
     }
 
@@ -507,20 +542,29 @@ priority = 0
         let _guard2 = EnvGuard::set("XDG_CONFIG_HOME", "/nonexistent");
         let _guard3 = EnvGuard::set("XDG_DATA_DIRS", "/nonexistent");
 
-        let input = InputConfig { kana_layout: "romaji".into(), ..InputConfig::default() };
+        let input = InputConfig {
+            kana_layout: "romaji".into(),
+            ..InputConfig::default()
+        };
         let result = load_kana_table(&input);
         assert!(result.is_ok(), "expected Ok, got {result:?}");
     }
 
     #[test]
     fn resolve_kana_table_not_found() {
-        let _guard  = EnvGuard::set("XDG_DATA_HOME",   "/nonexistent");
+        let _guard = EnvGuard::set("XDG_DATA_HOME", "/nonexistent");
         let _guard2 = EnvGuard::set("XDG_CONFIG_HOME", "/nonexistent");
-        let _guard3 = EnvGuard::set("XDG_DATA_DIRS",   "/nonexistent");
+        let _guard3 = EnvGuard::set("XDG_DATA_DIRS", "/nonexistent");
 
-        let input = InputConfig { kana_layout: "romaji".into(), ..InputConfig::default() };
+        let input = InputConfig {
+            kana_layout: "romaji".into(),
+            ..InputConfig::default()
+        };
         let result = load_kana_table(&input);
-        assert!(matches!(result, Err(KanaTableResolveError::NotFound { .. })));
+        assert!(matches!(
+            result,
+            Err(KanaTableResolveError::NotFound { .. })
+        ));
     }
 
     #[test]
@@ -545,7 +589,10 @@ priority = 0
             ..InputConfig::default()
         };
         let result = load_kana_table(&input);
-        assert!(matches!(result, Err(KanaTableResolveError::ExplicitPathNotFound { .. })));
+        assert!(matches!(
+            result,
+            Err(KanaTableResolveError::ExplicitPathNotFound { .. })
+        ));
     }
 
     // ── Validation tests ─────────────────────────────────────────────────────
@@ -560,12 +607,21 @@ priority = 0
     #[test]
     fn validate_invalid_default_mode() {
         let result = parse_default_mode("bar");
-        assert!(matches!(result, Err(ConfigValidationError::InvalidDefaultMode { .. })));
+        assert!(matches!(
+            result,
+            Err(ConfigValidationError::InvalidDefaultMode { .. })
+        ));
     }
 
     #[test]
     fn validate_valid_default_modes() {
-        for mode in &["ascii", "hiragana", "katakana", "half-width-katakana", "wide-ascii"] {
+        for mode in &[
+            "ascii",
+            "hiragana",
+            "katakana",
+            "half-width-katakana",
+            "wide-ascii",
+        ] {
             assert!(parse_default_mode(mode).is_ok(), "expected Ok for {mode}");
         }
     }
@@ -573,13 +629,19 @@ priority = 0
     #[test]
     fn validate_invalid_toggle_key_modifier() {
         let result = parse_toggle_key("bogusmod+space");
-        assert!(matches!(result, Err(ConfigValidationError::InvalidToggleKey { .. })));
+        assert!(matches!(
+            result,
+            Err(ConfigValidationError::InvalidToggleKey { .. })
+        ));
     }
 
     #[test]
     fn validate_invalid_toggle_key_name() {
         let result = parse_toggle_key("shift+boguskey");
-        assert!(matches!(result, Err(ConfigValidationError::InvalidToggleKey { .. })));
+        assert!(matches!(
+            result,
+            Err(ConfigValidationError::InvalidToggleKey { .. })
+        ));
     }
 
     #[test]
@@ -601,7 +663,10 @@ priority = 0
             ..Config::default()
         };
         let result = validate(&config);
-        assert!(matches!(result, Err(ConfigValidationError::InvalidConversionTriggerChar { .. })));
+        assert!(matches!(
+            result,
+            Err(ConfigValidationError::InvalidConversionTriggerChar { .. })
+        ));
     }
 
     #[test]
@@ -624,7 +689,10 @@ priority = 0
             ..Config::default()
         };
         let result = validate(&config);
-        assert!(matches!(result, Err(ConfigValidationError::DictPathNotFound { .. })));
+        assert!(matches!(
+            result,
+            Err(ConfigValidationError::DictPathNotFound { .. })
+        ));
     }
 
     // ── Helper: temporarily override an environment variable ─────────────────
@@ -638,7 +706,10 @@ priority = 0
             let original = env::var_os(key);
             // SAFETY: tests run single-threaded (each test in its own process in cargo test).
             unsafe { env::set_var(key, val) };
-            Self { key: key.to_string(), original }
+            Self {
+                key: key.to_string(),
+                original,
+            }
         }
     }
     impl Drop for EnvGuard {
@@ -646,7 +717,7 @@ priority = 0
             // SAFETY: same as in EnvGuard::set.
             match &self.original {
                 Some(v) => unsafe { env::set_var(&self.key, v) },
-                None    => unsafe { env::remove_var(&self.key) },
+                None => unsafe { env::remove_var(&self.key) },
             }
         }
     }

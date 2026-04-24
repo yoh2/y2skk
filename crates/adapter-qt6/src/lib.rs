@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::sync::OnceLock;
 
-use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
+use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink};
 use skk_ipc::proxy::reconnect::ReconnectingClient;
 use skk_ipc::NO_GHOST;
 
@@ -15,7 +15,8 @@ pub struct Y2skkCallbacks {
     /// text, cursor (byte offset), ghost_start (byte offset; u32::MAX = no ghost)
     pub update_preedit: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint, c_uint),
     pub clear_preedit: unsafe extern "C" fn(*mut c_void),
-    pub show_candidates: unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
+    pub show_candidates:
+        unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
     pub update_status: unsafe extern "C" fn(*mut c_void, *const c_char),
 }
@@ -46,8 +47,10 @@ impl ActionSink for CallbackSink {
     }
 
     fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
-        let cstrings: Vec<CString> =
-            candidates.iter().filter_map(|w| CString::new(w.as_str()).ok()).collect();
+        let cstrings: Vec<CString> = candidates
+            .iter()
+            .filter_map(|w| CString::new(w.as_str()).ok())
+            .collect();
         let ptrs: Vec<*const c_char> = cstrings
             .iter()
             .map(|s| s.as_ptr())
@@ -148,7 +151,11 @@ pub unsafe extern "C" fn y2skk_process_key(
 
     let mut sink = CallbackSink { ctx, cbs };
     let result = dispatch_actions(&actions, &mut sink);
-    if result.consumed && !result.force_passthrough { 1 } else { 0 }
+    if result.consumed && !result.force_passthrough {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
@@ -171,10 +178,18 @@ pub extern "C" fn y2skk_reset(session_id: c_uint) {
 /// Converts Qt::KeyboardModifiers to the X11 modifier bitmask used by skk-ipc.
 fn qt_mods_to_x11(qt_mods: u32) -> u32 {
     let mut x11 = 0u32;
-    if qt_mods & 0x02000000 != 0 { x11 |= 0x01; } // Shift
-    if qt_mods & 0x04000000 != 0 { x11 |= 0x04; } // Ctrl
-    if qt_mods & 0x08000000 != 0 { x11 |= 0x08; } // Alt
-    if qt_mods & 0x10000000 != 0 { x11 |= 0x40; } // Meta
+    if qt_mods & 0x02000000 != 0 {
+        x11 |= 0x01;
+    } // Shift
+    if qt_mods & 0x04000000 != 0 {
+        x11 |= 0x04;
+    } // Ctrl
+    if qt_mods & 0x08000000 != 0 {
+        x11 |= 0x08;
+    } // Alt
+    if qt_mods & 0x10000000 != 0 {
+        x11 |= 0x40;
+    } // Meta
     x11
 }
 

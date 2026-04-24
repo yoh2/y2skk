@@ -2,11 +2,10 @@ mod candidate_window;
 mod keymap;
 mod server;
 
-use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 fn main() -> anyhow::Result<()> {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Send events to both stderr (useful when run directly in a terminal) and
     // the systemd journal (useful when KWin launches us via the virtual-keyboard

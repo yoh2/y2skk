@@ -42,8 +42,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Initialise logging; RUST_LOG overrides the config value.
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(&cfg.daemon.log_level));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cfg.daemon.log_level));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     dbus::run(cfg, config_path).await

@@ -147,7 +147,12 @@ impl PreeditWindow {
     /// If `spot` is provided, the window is placed at the cursor position
     /// (over-the-spot).  Otherwise it falls back to the bottom-left of the
     /// screen.
-    pub fn update(&mut self, text: &str, ghost_start: Option<usize>, spot: Option<&SpotHint>) -> Result<()> {
+    pub fn update(
+        &mut self,
+        text: &str,
+        ghost_start: Option<usize>,
+        spot: Option<&SpotHint>,
+    ) -> Result<()> {
         if text.is_empty() {
             return self.hide();
         }
@@ -220,7 +225,8 @@ impl PreeditWindow {
 
             // Draw user-typed portion in normal colour.
             if !input_chars.is_empty() {
-                self.conn.image_text16(self.win, self.gc, PADDING, baseline_y, input_chars)?;
+                self.conn
+                    .image_text16(self.win, self.gc, PADDING, baseline_y, input_chars)?;
             }
 
             // Draw ghost portion in grey, offset by the width of the input part.
@@ -244,7 +250,8 @@ impl PreeditWindow {
             }
         } else {
             // No ghost: draw everything in normal colour.
-            self.conn.image_text16(self.win, self.gc, PADDING, baseline_y, &all_chars)?;
+            self.conn
+                .image_text16(self.win, self.gc, PADDING, baseline_y, &all_chars)?;
         }
 
         // Raise to top.
@@ -275,7 +282,8 @@ impl PreeditWindow {
     fn fallback_position(&self, win_height: u16) -> (i32, i32) {
         (
             0,
-            self.screen_height.saturating_sub(win_height + BORDER_WIDTH * 2) as i32,
+            self.screen_height
+                .saturating_sub(win_height + BORDER_WIDTH * 2) as i32,
         )
     }
 }

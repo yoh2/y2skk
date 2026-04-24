@@ -1,6 +1,6 @@
-pub mod key;
-pub mod kana;
+pub mod config;
 pub mod dict;
 pub mod engine;
-pub mod config;
+pub mod kana;
+pub mod key;
 pub mod num;

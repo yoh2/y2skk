@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    Char2b, ChangeGCAux, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux,
+    ChangeGCAux, Char2b, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux,
     EventMask, Fontable, Rectangle, Screen, StackMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
@@ -173,8 +173,18 @@ impl CandidateWindow {
         let (abs_x, abs_y) = self.compute_position(spot, win_width, win_height)?;
 
         // Clamp to screen bounds.
-        let abs_x = abs_x.min(self.screen_width.saturating_sub(win_width + BORDER_WIDTH * 2) as i32).max(0);
-        let abs_y = abs_y.min(self.screen_height.saturating_sub(win_height + BORDER_WIDTH * 2) as i32).max(0);
+        let abs_x = abs_x
+            .min(
+                self.screen_width
+                    .saturating_sub(win_width + BORDER_WIDTH * 2) as i32,
+            )
+            .max(0);
+        let abs_y = abs_y
+            .min(
+                self.screen_height
+                    .saturating_sub(win_height + BORDER_WIDTH * 2) as i32,
+            )
+            .max(0);
 
         let config = ConfigureWindowAux::new()
             .x(abs_x)
@@ -189,7 +199,8 @@ impl CandidateWindow {
         }
 
         // Clear the window.
-        self.conn.clear_area(true, self.win, 0, 0, win_width, win_height)?;
+        self.conn
+            .clear_area(true, self.win, 0, 0, win_width, win_height)?;
 
         // Draw each row.
         for (i, row) in rows.iter().enumerate() {
@@ -224,9 +235,7 @@ impl CandidateWindow {
             } else {
                 self.conn.change_gc(
                     self.gc,
-                    &ChangeGCAux::new()
-                        .foreground(FG_COLOR)
-                        .background(BG_COLOR),
+                    &ChangeGCAux::new().foreground(FG_COLOR).background(BG_COLOR),
                 )?;
             }
 
@@ -287,12 +296,17 @@ impl CandidateWindow {
         let _ = (win_width, win_height);
         Ok((
             0,
-            self.screen_height.saturating_sub(win_height + BORDER_WIDTH * 2) as i32,
+            self.screen_height
+                .saturating_sub(win_height + BORDER_WIDTH * 2) as i32,
         ))
     }
 
     fn root_window(&self) -> Result<Window> {
-        let geom = self.conn.get_geometry(self.win)?.reply().context("get_geometry")?;
+        let geom = self
+            .conn
+            .get_geometry(self.win)?
+            .reply()
+            .context("get_geometry")?;
         Ok(geom.root)
     }
 }
@@ -309,7 +323,11 @@ impl Drop for CandidateWindow {
 fn str_to_char2b(s: &str) -> Vec<Char2b> {
     s.chars()
         .map(|c| {
-            let cp = if (c as u32) <= 0xFFFF { c as u32 } else { 0xFFFD };
+            let cp = if (c as u32) <= 0xFFFF {
+                c as u32
+            } else {
+                0xFFFD
+            };
             Char2b {
                 byte1: ((cp >> 8) & 0xFF) as u8,
                 byte2: (cp & 0xFF) as u8,

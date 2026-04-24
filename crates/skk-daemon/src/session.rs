@@ -111,7 +111,9 @@ impl SessionManager {
         let event = skk_ipc::convert::key_event_from_raw(key_sym, modifiers, is_press);
         let actions: Vec<EngineAction> = engine.process_key(&event);
         let timeout_ms = self.indicator_timeout_ms;
-        let ipc_actions: Vec<IpcAction> = actions.into_iter().map(IpcAction::from)
+        let ipc_actions: Vec<IpcAction> = actions
+            .into_iter()
+            .map(IpcAction::from)
             .filter(|a| {
                 // Drop UpdateStatus when the indicator is disabled (timeout_ms == 0
                 // means disabled; adapters would show without ever hiding it).
@@ -166,7 +168,11 @@ fn load_dicts(config: &Config) -> (Vec<Arc<dyn DictionaryProvider>>, Arc<Mutex<U
         let encoding = DictEncoding::from_str(&source.encoding);
         match FileDict::load(&source.path, encoding, source.priority) {
             Ok(d) => {
-                tracing::info!("Loaded dict {} (priority {})", source.path.display(), source.priority);
+                tracing::info!(
+                    "Loaded dict {} (priority {})",
+                    source.path.display(),
+                    source.priority
+                );
                 dicts.push(Arc::new(d));
             }
             Err(e) => {
@@ -205,7 +211,6 @@ fn keybindings_from_config(config: &Config) -> SkkKeybindings {
     }
 }
 
-
 // ── Arc wrappers so shared dicts satisfy DictionaryProvider ──────────────────
 
 /// Wraps a shared read-only dict behind Arc for use in multiple engines.
@@ -215,7 +220,10 @@ impl DictionaryProvider for SharedDict {
     fn lookup(&self, midashi: &str, okuri: Option<&str>) -> Option<skk_core::dict::DictEntry> {
         self.0.lookup(midashi, okuri)
     }
-    fn learn(&mut self, _entry: skk_core::dict::DictEntry) -> Result<(), skk_core::dict::DictError> {
+    fn learn(
+        &mut self,
+        _entry: skk_core::dict::DictEntry,
+    ) -> Result<(), skk_core::dict::DictError> {
         Err(skk_core::dict::DictError::ReadOnly)
     }
     fn priority(&self) -> i32 {
@@ -234,7 +242,8 @@ impl DictionaryProvider for SharedUserDict {
         self.0.lock().ok()?.lookup(midashi, okuri)
     }
     fn learn(&mut self, entry: skk_core::dict::DictEntry) -> Result<(), skk_core::dict::DictError> {
-        self.0.lock()
+        self.0
+            .lock()
             .map_err(|_| skk_core::dict::DictError::ReadOnly)?
             .learn(entry)
     }
@@ -244,7 +253,8 @@ impl DictionaryProvider for SharedUserDict {
         okuri: Option<&str>,
         word: &str,
     ) -> Result<bool, skk_core::dict::DictError> {
-        self.0.lock()
+        self.0
+            .lock()
             .map_err(|_| skk_core::dict::DictError::ReadOnly)?
             .purge(midashi, okuri, word)
     }
@@ -252,6 +262,9 @@ impl DictionaryProvider for SharedUserDict {
         i32::MAX
     }
     fn complete(&self, prefix: &str) -> Vec<String> {
-        self.0.lock().map(|ud| ud.complete(prefix)).unwrap_or_default()
+        self.0
+            .lock()
+            .map(|ud| ud.complete(prefix))
+            .unwrap_or_default()
     }
 }

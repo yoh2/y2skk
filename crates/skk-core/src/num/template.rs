@@ -157,31 +157,16 @@ mod tests {
     #[test]
     fn expand_single_type() {
         let (_, runs) = scan("だい12かい");
-        assert_eq!(
-            expand("第#1回", &runs),
-            Some("第１２回".to_string())
-        );
-        assert_eq!(
-            expand("第#0回", &runs),
-            Some("第12回".to_string())
-        );
-        assert_eq!(
-            expand("第#3回", &runs),
-            Some("第十二回".to_string())
-        );
+        assert_eq!(expand("第#1回", &runs), Some("第１２回".to_string()));
+        assert_eq!(expand("第#0回", &runs), Some("第12回".to_string()));
+        assert_eq!(expand("第#3回", &runs), Some("第十二回".to_string()));
     }
 
     #[test]
     fn expand_multiple_runs() {
         let (_, runs) = scan("2がつ25にち");
-        assert_eq!(
-            expand("#0年#2月", &runs),
-            Some("2年二五月".to_string())
-        );
-        assert_eq!(
-            expand("#1月#1日", &runs),
-            Some("２月２５日".to_string())
-        );
+        assert_eq!(expand("#0年#2月", &runs), Some("2年二五月".to_string()));
+        assert_eq!(expand("#1月#1日", &runs), Some("２月２５日".to_string()));
     }
 
     #[test]
@@ -207,7 +192,10 @@ mod tests {
     fn synthesize_single_run() {
         let (_, runs) = scan("12");
         let candidates = synthesize(&runs, &[NumType::Raw, NumType::Zenkaku, NumType::KanjiSeq]);
-        assert_eq!(candidates, vec!["12".to_string(), "１２".to_string(), "十二".to_string()]);
+        assert_eq!(
+            candidates,
+            vec!["12".to_string(), "１２".to_string(), "十二".to_string()]
+        );
     }
 
     #[test]

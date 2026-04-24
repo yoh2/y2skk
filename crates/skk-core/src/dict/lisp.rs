@@ -78,10 +78,13 @@ fn parse_ignore_dic_word(s: &str) -> Option<Vec<String>> {
 /// Renders a `LispForm::IgnoreDicWord` back to its S-expression string.
 /// Used when re-serializing a user dictionary that contains such an entry.
 pub fn render_ignore_dic_word(words: &[String]) -> String {
-    let quoted: Vec<String> = words.iter().map(|w| {
-        let escaped = w.replace('\\', "\\\\").replace('"', "\\\"");
-        format!("\"{escaped}\"")
-    }).collect();
+    let quoted: Vec<String> = words
+        .iter()
+        .map(|w| {
+            let escaped = w.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{escaped}\"")
+        })
+        .collect();
     format!("(skk-ignore-dic-word {})", quoted.join(" "))
 }
 
@@ -105,26 +108,35 @@ mod tests {
     #[test]
     fn test_classify_ignore_dic_word_single() {
         let form = classify("(skk-ignore-dic-word \"無視\")");
-        assert_eq!(form, Some(LispForm::IgnoreDicWord(vec!["無視".to_string()])));
+        assert_eq!(
+            form,
+            Some(LispForm::IgnoreDicWord(vec!["無視".to_string()]))
+        );
     }
 
     #[test]
     fn test_classify_ignore_dic_word_multiple() {
         let form = classify("(skk-ignore-dic-word \"foo\" \"bar\" \"baz\")");
-        assert_eq!(form, Some(LispForm::IgnoreDicWord(vec![
-            "foo".to_string(),
-            "bar".to_string(),
-            "baz".to_string(),
-        ])));
+        assert_eq!(
+            form,
+            Some(LispForm::IgnoreDicWord(vec![
+                "foo".to_string(),
+                "bar".to_string(),
+                "baz".to_string(),
+            ]))
+        );
     }
 
     #[test]
     fn test_classify_ignore_dic_word_escape() {
         let form = classify("(skk-ignore-dic-word \"say \\\"hi\\\"\" \"back\\\\slash\")");
-        assert_eq!(form, Some(LispForm::IgnoreDicWord(vec![
-            "say \"hi\"".to_string(),
-            "back\\slash".to_string(),
-        ])));
+        assert_eq!(
+            form,
+            Some(LispForm::IgnoreDicWord(vec![
+                "say \"hi\"".to_string(),
+                "back\\slash".to_string(),
+            ]))
+        );
     }
 
     #[test]
@@ -160,6 +172,9 @@ mod tests {
     fn test_render_escaping() {
         let words = vec!["say \"hi\"".to_string(), "back\\slash".to_string()];
         let rendered = render_ignore_dic_word(&words);
-        assert_eq!(rendered, "(skk-ignore-dic-word \"say \\\"hi\\\"\" \"back\\\\slash\")");
+        assert_eq!(
+            rendered,
+            "(skk-ignore-dic-word \"say \\\"hi\\\"\" \"back\\\\slash\")"
+        );
     }
 }
