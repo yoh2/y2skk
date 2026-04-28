@@ -44,17 +44,21 @@ Three install modes are available.
 cargo xtask install
 ```
 
-All components install under `~/.local/`.
+The default install builds the daemon, the XIM server, and the GTK3 / Qt6 adapters
+under `~/.local/`. The experimental Wayland adapter is **not** installed by default;
+add `--wayland` to opt in (see [Install specific components only](#install-specific-components-only)).
 The GTK3 and Qt6 adapters require additional environment variables (printed at the end of install).
 
 | Component | Installed path |
 |-----------|---------------|
 | `y2skk-daemon` | `~/.local/bin/y2skk-daemon` |
 | `y2skk-xim` | `~/.local/bin/y2skk-xim` |
+| `y2skk-wayland` (with `--wayland`) | `~/.local/bin/y2skk-wayland` |
 | Kana tables | `~/.local/share/y2skk/tables/` |
 | GTK3 IM module | `~/.local/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `~/.local/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
+| KDE Virtual Keyboard entry (with `--wayland`) | `~/.local/share/applications/y2skk-wayland.desktop` |
 
 Also updates the GTK3 user module cache (`~/.config/gtk-3.0/gtk.immodules`).
 
@@ -72,10 +76,12 @@ No extra environment variables are needed after this.
 |-----------|---------------|
 | `y2skk-daemon` | `/usr/local/bin/y2skk-daemon` |
 | `y2skk-xim` | `/usr/local/bin/y2skk-xim` |
+| `y2skk-wayland` (with `--wayland`) | `/usr/local/bin/y2skk-wayland` |
 | Kana tables | `/usr/local/share/y2skk/tables/` |
 | GTK3 IM module | `<pkg-config libdir>/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `<qmake QT_INSTALL_PLUGINS>/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
+| KDE Virtual Keyboard entry (with `--wayland`) | `~/.local/share/applications/y2skk-wayland.desktop` |
 
 ### Install specific components only
 
@@ -86,7 +92,13 @@ cargo xtask install --system --xim    # XIM server to system path (sudo)
 cargo xtask install --gtk3            # GTK3 IM module only (user-local)
 cargo xtask install --system --gtk3   # GTK3 to system path (sudo)
 cargo xtask install --qt6             # Qt6 plugin only (user-local)
+cargo xtask install --wayland         # Wayland adapter + KDE Virtual Keyboard entry
 ```
+
+> **Note:** the Wayland adapter is **highly experimental** and KWin-only — see
+> [README.md](README.md#wayland-support-very-early-stage) for known issues.
+> It is opt-in for that reason. Activate it under
+> *System Settings → Keyboard → Virtual Keyboard → y2skk* after install.
 
 ### Packaging
 
@@ -101,11 +113,13 @@ cargo xtask install --prefix /path/to/staging/usr
 |-----------|---------------|
 | `y2skk-daemon` | `<prefix>/bin/y2skk-daemon` |
 | `y2skk-xim` | `<prefix>/bin/y2skk-xim` |
+| `y2skk-wayland` (with `--wayland`) | `<prefix>/bin/y2skk-wayland` |
 | Kana tables | `<prefix>/share/y2skk/tables/` |
 | GTK3 IM module | `<prefix>/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | Qt6 IM plugin | `<prefix>/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 
-The systemd service file is **not** installed in packaging mode.
+The systemd service file and the KDE Virtual Keyboard `.desktop` entry are **not**
+installed in packaging mode.
 
 ---
 
@@ -171,6 +185,11 @@ systemctl --user enable --now y2skk-xim
 
 `y2skk-daemon` handles all input processing and dictionary lookups.
 `y2skk-xim` is the XIM server for legacy X11 clients (xterm, Chromium, etc.); it connects to the daemon via D-Bus.
+
+The experimental Wayland adapter `y2skk-wayland` is **not** a systemd service.
+KWin starts it on demand via the Virtual Keyboard mechanism; enable it under
+*System Settings → Keyboard → Virtual Keyboard → y2skk*. (KDE remembers the
+selection across sessions.)
 
 Check the status:
 
@@ -325,6 +344,31 @@ kana_table = "~/.config/y2skk/tables/my-layout.txt"
    ```sh
    journalctl --user -u y2skk-xim -n 50
    ```
+
+### Wayland adapter does not work (KDE Plasma, experimental)
+
+The Wayland adapter is **at a very early experimental stage**; see
+[README.md](README.md#wayland-support-very-early-stage) for known issues.
+Some basic checks:
+
+1. Confirm you are running on KWin (KDE Plasma 5/6) under a Wayland session.
+   Other compositors are not supported.
+2. Verify the binary is installed: `ls ~/.local/bin/y2skk-wayland` (or
+   `/usr/local/bin/y2skk-wayland` for a system install).
+3. Verify the Virtual Keyboard entry is present:
+   ```sh
+   ls ~/.local/share/applications/y2skk-wayland.desktop
+   ```
+   If missing, re-run `cargo xtask install --wayland`.
+4. In *System Settings → Keyboard → Virtual Keyboard*, make sure **y2skk** is
+   selected, then log out and back in.
+5. Check the daemon log — `y2skk-wayland` connects through it:
+   ```sh
+   journalctl --user -u y2skk-daemon -f
+   ```
+6. `y2skk-wayland` itself is launched by KWin; its stderr/stdout is captured by the
+   compositor, so consult `journalctl --user -b` or
+   `journalctl --user-unit plasma-kwin_wayland.service -f` if available.
 
 ### Reload configuration
 

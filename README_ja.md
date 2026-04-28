@@ -9,7 +9,7 @@
 Linux 向けの SKK 日本語入力メソッドです。Rust で実装しています。
 
 y2skk はデーモン (`y2skk-daemon`) として動作し、D-Bus 経由で機能を提供します。
-GTK3 / Qt6 / XIM それぞれのアダプターがデーモンに接続する設計なので、
+GTK3 / Qt6 / XIM / Wayland それぞれのアダプターがデーモンに接続する設計なので、
 辞書やセッション状態はすべてのアプリケーションで共有されます。
 
 ---
@@ -22,7 +22,24 @@ GTK3 / Qt6 / XIM それぞれのアダプターがデーモンに接続する設
 | Qt6 アプリケーション | ✅ 動作確認済み |
 | XIM クライアント（xterm 等） | ✅ 動作確認済み（`y2skk-xim` 経由） |
 | KDE Plasma（X11） | ✅ 主要ターゲット |
-| Wayland / GTK4 | 🚧 未対応 |
+| KDE Plasma（Wayland） | 🧪 **極めて初期段階／実験的** — 下記注意参照 |
+| GTK4 | 🚧 未対応 |
+
+### Wayland サポートについて（極めて初期段階）
+
+Wayland アダプター（`y2skk-wayland`）は **極めて初期の実験段階** であり、常用に
+耐える状態ではありません。KDE 独自の `zwp_input_method_v1` 拡張をベースにしている
+ため、現時点では KWin（KDE Plasma 5/6）でしか動作せず、他の Wayland コンポジタへの
+移植性はありません。執筆時点で判明している既知の不具合：
+
+- `--ozone-platform=wayland` で起動した Chromium 系アプリで入力イベントが正しく
+  処理されない（一部のテキスト入力欄でバックスペースが 2 回に 1 回しか効かない等）
+- `zwp_input_method_v2` / `text-input-v3` には未対応のため、KDE 以外のコンポジタ
+  （GNOME、Sway 等）では動作しない
+- ドキュメント・パッケージング・安定性のいずれも未整備
+
+常用には引き続き X11 経路（XIM + GTK3 + Qt6 アダプター）を使用してください。
+Wayland アダプターはあくまでプレビューと位置付けています。
 
 ---
 
@@ -32,6 +49,9 @@ GTK3 / Qt6 / XIM それぞれのアダプターがデーモンに接続する設
 - **かな入力テーブル** — ローマ字、AZIK（US / JP）、DvorakJP（US / JP）
 - **辞書対応** — UTF-8 / EUC-JP / EUC-JISX0213 辞書、複数辞書・優先度指定
 - **ユーザー辞書** — 単語登録（`▼` モード）、確定時に自動保存
+- **数値変換** — DDSKK 標準の `#0`–`#3` / `#5` / `#9` に加え、y2skk 独自拡張の
+  `#6` / `#7` / `#a` / `#b` / `#c` に対応。辞書にエントリーが無いテンプレート
+  見出しでも合成候補を生成
 - **候補選択** — インライン表示（件数設定可）後、リストモードに移行
 - **タブ補完** — `▽` モードでのゴーストテキスト補完（uim-skk 準拠）
 - **IME トグル** — Shift+Space でひらがな ↔ 半角英数を切り替え（設定変更可）
@@ -40,6 +60,10 @@ GTK3 / Qt6 / XIM それぞれのアダプターがデーモンに接続する設
 - **Abbrev モード** — ローマ字で直接辞書検索（`/` キー）
 - **vi 互換 Esc** — オプション機能。通常入力フェーズで Esc を押すと ASCII モードに切り替わる（設定変更可）
 - **XIM サーバー** — D-Bus 経由でデーモンに接続する独立バイナリ `y2skk-xim`
+- **Wayland アダプター（実験的）** — `zwp_input_method_v1` ベースの独立バイナリ
+  `y2skk-wayland`（KDE 限定）。上の警告を参照
+- **デーモン再接続・フェイルオープン** — デーモン再起動中もアダプターは動作を継続。
+  D-Bus エラー発生時は UI をブロックせず passthrough にフォールバック
 - **設定検証** — `y2skk-daemon --check-config [--config <PATH>]` で設定ファイルの妥当性を検証してデーモンを起動せずに終了する
 
 ---
@@ -80,7 +104,15 @@ y2skk を使うには SKK 辞書が最低 1 つ必要です。
 cargo xtask install
 ```
 
-全コンポーネントをビルドして `~/.local/` 以下にインストールします。
+このコマンドは daemon / XIM サーバー / GTK3 / Qt6 をビルドして `~/.local/` 以下に
+インストールします。実験的な Wayland アダプターは **デフォルトではインストール
+されません**。明示的に有効化するには `--wayland` を指定します：
+
+```sh
+cargo xtask install --wayland         # Wayland アダプターのみ
+cargo xtask install --daemon --xim --gtk3 --qt6 --wayland   # 全部入り
+```
+
 詳細やオプション・システム全体へのインストール方法は [INSTALL.md](INSTALL.md) を参照してください。
 
 ### 2. 環境変数の設定
@@ -123,6 +155,11 @@ systemctl --user enable --now y2skk-xim
 journalctl --user -u y2skk-daemon -f
 journalctl --user -u y2skk-xim -f
 ```
+
+> Wayland アダプター（`y2skk-wayland`）は systemd サービスではなく、KWin の
+> Virtual Keyboard 機構から起動されます。`cargo xtask install --wayland` でインストール
+> したあと、*システム設定 → 入力デバイス → 仮想キーボード → y2skk* を選択して
+> 有効化してください。
 
 ---
 
