@@ -19,12 +19,12 @@ use x11rb::COPY_DEPTH_FROM_PARENT;
 use crate::preedit::{SpotHint, FONT_CANDIDATES};
 
 /// Normal row: light yellow background, black text.
-const BG_COLOR: u32 = 0xFFFF_E0;
-const FG_COLOR: u32 = 0x0000_00;
+const BG_COLOR: u32 = 0xFF_FF_E0;
+const FG_COLOR: u32 = 0x00_00_00;
 /// Focused row: blue background, white text.
-const FOCUS_BG_COLOR: u32 = 0x4444_AA;
-const FOCUS_FG_COLOR: u32 = 0xFFFF_FF;
-const BORDER_COLOR: u32 = 0x6060_60;
+const FOCUS_BG_COLOR: u32 = 0x44_44_AA;
+const FOCUS_FG_COLOR: u32 = 0xFF_FF_FF;
+const BORDER_COLOR: u32 = 0x60_60_60;
 
 const PADDING_X: i16 = 6;
 const PADDING_Y: i16 = 3;
@@ -63,8 +63,8 @@ impl CandidateWindow {
         }
 
         let font_info = conn.query_font(font_id)?.reply()?;
-        let font_ascent = font_info.font_ascent as i16;
-        let font_descent = font_info.font_descent as i16;
+        let font_ascent = font_info.font_ascent;
+        let font_descent = font_info.font_descent;
         let font_height = font_ascent + font_descent;
 
         let win = conn.generate_id()?;

@@ -26,10 +26,10 @@ pub const FONT_CANDIDATES: &[&str] = &[
 ];
 
 /// Background / foreground colours for the preedit window.
-const BG_COLOR: u32 = 0xFFFF_E0; // light yellow
-const FG_COLOR: u32 = 0x0000_00; // black
-const GHOST_FG_COLOR: u32 = 0x8080_80; // grey for completion ghost text
-const BORDER_COLOR: u32 = 0x6060_60; // dark grey
+const BG_COLOR: u32 = 0xFF_FF_E0; // light yellow
+const FG_COLOR: u32 = 0x00_00_00; // black
+const GHOST_FG_COLOR: u32 = 0x80_80_80; // grey for completion ghost text
+const BORDER_COLOR: u32 = 0x60_60_60; // dark grey
 
 const PADDING: i16 = 4;
 const BORDER_WIDTH: u16 = 1;
@@ -81,8 +81,8 @@ impl PreeditWindow {
 
         // Get font metrics.
         let font_info = conn.query_font(font_id)?.reply()?;
-        let font_ascent = font_info.font_ascent as i16;
-        let font_descent = font_info.font_descent as i16;
+        let font_ascent = font_info.font_ascent;
+        let font_descent = font_info.font_descent;
 
         // Create the preedit window (override-redirect, unmapped).
         let win = conn.generate_id()?;
