@@ -536,9 +536,10 @@ priority = 0
 
         // Override XDG_DATA_HOME so the search finds our temp dir.
         // Also clear XDG_CONFIG_HOME to avoid any accidental match there.
-        let _guard = EnvGuard::set("XDG_DATA_HOME", tmp.path().to_str().unwrap());
-        let _guard2 = EnvGuard::set("XDG_CONFIG_HOME", "/nonexistent");
-        let _guard3 = EnvGuard::set("XDG_DATA_DIRS", "/nonexistent");
+        let provider = env_guard::Provider::get();
+        let _guard = provider.set("XDG_DATA_HOME", tmp.path().to_str().unwrap());
+        let _guard2 = provider.set("XDG_CONFIG_HOME", "/nonexistent");
+        let _guard3 = provider.set("XDG_DATA_DIRS", "/nonexistent");
 
         let input = InputConfig {
             kana_layout: "romaji".into(),
@@ -550,9 +551,10 @@ priority = 0
 
     #[test]
     fn resolve_kana_table_not_found() {
-        let _guard = EnvGuard::set("XDG_DATA_HOME", "/nonexistent");
-        let _guard2 = EnvGuard::set("XDG_CONFIG_HOME", "/nonexistent");
-        let _guard3 = EnvGuard::set("XDG_DATA_DIRS", "/nonexistent");
+        let provider = env_guard::Provider::get();
+        let _guard = provider.set("XDG_DATA_HOME", "/nonexistent");
+        let _guard2 = provider.set("XDG_CONFIG_HOME", "/nonexistent");
+        let _guard3 = provider.set("XDG_DATA_DIRS", "/nonexistent");
 
         let input = InputConfig {
             kana_layout: "romaji".into(),
@@ -695,27 +697,51 @@ priority = 0
 
     // ── Helper: temporarily override an environment variable ─────────────────
 
-    struct EnvGuard {
-        key: String,
-        original: Option<std::ffi::OsString>,
-    }
-    impl EnvGuard {
-        fn set(key: &str, val: &str) -> Self {
-            let original = env::var_os(key);
-            // SAFETY: tests run single-threaded (each test in its own process in cargo test).
-            unsafe { env::set_var(key, val) };
-            Self {
-                key: key.to_string(),
-                original,
+    mod env_guard {
+        use std::{
+            env,
+            sync::{Mutex, MutexGuard},
+        };
+
+        pub struct Provider;
+
+        impl Provider {
+            pub fn get() -> MutexGuard<'static, Self> {
+                ENV_GUARD_PROVIDER_MUTEX
+                    .lock()
+                    .expect("should be able to lock mutex")
+            }
+
+            pub fn set(&self, key: &str, val: &str) -> EnvGuard {
+                EnvGuard::set(key, val)
             }
         }
-    }
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            // SAFETY: same as in EnvGuard::set.
-            match &self.original {
-                Some(v) => unsafe { env::set_var(&self.key, v) },
-                None => unsafe { env::remove_var(&self.key) },
+
+        static ENV_GUARD_PROVIDER_MUTEX: Mutex<Provider> = Mutex::new(Provider);
+
+        pub struct EnvGuard {
+            key: String,
+            original: Option<std::ffi::OsString>,
+        }
+        impl EnvGuard {
+            fn set(key: &str, val: &str) -> Self {
+                let original = env::var_os(key);
+                // SAFETY: this method called only via Provider::set, which requires locking the
+                // mutex, so concurrent calls are prevented.
+                unsafe { env::set_var(key, val) };
+                Self {
+                    key: key.to_string(),
+                    original,
+                }
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                // SAFETY: same as in EnvGuard::set.
+                match &self.original {
+                    Some(v) => unsafe { env::set_var(&self.key, v) },
+                    None => unsafe { env::remove_var(&self.key) },
+                }
             }
         }
     }
