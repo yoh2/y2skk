@@ -217,6 +217,7 @@ fn render_status(fd: &OwnedFd, font: &Font, indicator: &str) {
     unsafe { munmap(ptr as *mut _, size).expect("munmap") };
 }
 
+// TODO: reduce the number of function arguments
 fn draw_text(
     pixels: &mut [u8],
     font: &Font,
@@ -235,7 +236,7 @@ fn draw_text(
         let (metrics, bitmap) = font.rasterize(ch, FONT_SIZE);
         // Bitmap top-left in screen coords: x = pen + xmin, y = baseline - ymin - height
         let glyph_x = pen_x as i32 + metrics.xmin;
-        let glyph_y = baseline_y - metrics.ymin as i32 - metrics.height as i32;
+        let glyph_y = baseline_y - metrics.ymin - metrics.height as i32;
 
         for by in 0..metrics.height {
             for bx in 0..metrics.width {
@@ -245,7 +246,7 @@ fn draw_text(
                 }
                 let px = glyph_x + bx as i32;
                 let py = glyph_y + by as i32;
-                if px < 0 || px >= CANVAS_W || py < 0 || py >= canvas_h {
+                if !(0..CANVAS_W).contains(&px) || !(0..canvas_h).contains(&py) {
                     continue;
                 }
                 let off = (py * stride_px * 4 + px * 4) as usize;
@@ -277,11 +278,11 @@ fn draw_filled_rect(
     stride_px: i32,
 ) {
     for row in y..(y + h) {
-        if row < 0 || row >= CANVAS_H {
+        if !(0..CANVAS_H).contains(&row) {
             continue;
         }
         for col in x..(x + w) {
-            if col < 0 || col >= CANVAS_W {
+            if !(0..CANVAS_W).contains(&col) {
                 continue;
             }
             let off = (row * stride_px * 4 + col * 4) as usize;
@@ -293,13 +294,13 @@ fn draw_filled_rect(
 fn draw_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4], stride_px: i32) {
     // Top and bottom edges.
     for col in x..(x + w) {
-        if col >= 0 && col < CANVAS_W {
-            if y >= 0 && y < CANVAS_H {
+        if (0..CANVAS_W).contains(&col) {
+            if (0..CANVAS_H).contains(&y) {
                 let off = (y * stride_px * 4 + col * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
             let by = y + h - 1;
-            if by >= 0 && by < CANVAS_H {
+            if (0..CANVAS_H).contains(&by) {
                 let off = (by * stride_px * 4 + col * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
@@ -307,13 +308,13 @@ fn draw_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4], 
     }
     // Left and right edges.
     for row in y..(y + h) {
-        if row >= 0 && row < CANVAS_H {
-            if x >= 0 && x < CANVAS_W {
+        if (0..CANVAS_H).contains(&row) {
+            if (0..CANVAS_W).contains(&x) {
                 let off = (row * stride_px * 4 + x * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
             let rx = x + w - 1;
-            if rx >= 0 && rx < CANVAS_W {
+            if (0..CANVAS_W).contains(&rx) {
                 let off = (row * stride_px * 4 + rx * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
