@@ -5,7 +5,6 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 use skk_core::dict::DictEncoding;
-use thiserror::Error;
 
 /// Expands a leading `~` component to the user's home directory.
 /// Returns the path unchanged if it does not start with `~` or if the home
@@ -22,7 +21,7 @@ fn expand_tilde(path: PathBuf) -> PathBuf {
     path
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("I/O error reading {path}: {source}")]
     Io {
@@ -679,7 +678,7 @@ priority = 0
                 ..InputConfig::default()
             },
             dict: DictConfig {
-                sources: vec![crate::config::DictSource {
+                sources: vec![DictSource {
                     path: PathBuf::from("/nonexistent/SKK-JISYO.L"),
                     encoding: DictEncoding::Utf8,
                     priority: 0,
