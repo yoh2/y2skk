@@ -16,6 +16,11 @@ extern "C" {
     fn _y2skk_im_module_create(context_id: *const c_char) -> *mut c_void;
 }
 
+/// # Safety
+///
+/// This function is called by the GTK3 C shim with pointers to internal data structures.
+/// The caller must ensure that the pointers are valid and that the function is called
+/// in the correct context during module initialization.
 #[no_mangle]
 pub unsafe extern "C" fn im_module_list(
     contexts: *mut *const *const c_void,
@@ -24,16 +29,29 @@ pub unsafe extern "C" fn im_module_list(
     _y2skk_im_module_list(contexts, n_contexts);
 }
 
+/// # Safety
+///
+/// This function is called by the GTK3 C shim during module initialization with a pointer
+/// to the module instance.
 #[no_mangle]
 pub unsafe extern "C" fn im_module_init(module: *mut c_void) {
     _y2skk_im_module_init(module);
 }
 
+/// # Safety
+///
+/// This function is called by the GTK3 C shim during module cleanup.
+/// It should only be called once when the module is unloaded.
 #[no_mangle]
 pub extern "C" fn im_module_exit() {
     unsafe { _y2skk_im_module_exit() };
 }
 
+/// # Safety
+///
+/// This function is called by the GTK3 C shim to create a new IME session for a given context ID.
+/// The caller must ensure that `context_id` is a valid null-terminated C string and that
+/// the returned pointer is properly managed and freed by the caller when no longer needed.
 #[no_mangle]
 pub unsafe extern "C" fn im_module_create(context_id: *const c_char) -> *mut c_void {
     _y2skk_im_module_create(context_id)
@@ -140,12 +158,16 @@ pub extern "C" fn y2skk_fini() {
 }
 
 /// Allocates a new IME session and returns a local handle (0 on failure).
+///
+/// # Safety
+///
+/// `app_id` must be a valid C string or NULL.
 #[no_mangle]
-pub extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
+pub unsafe extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
     let label = if app_id.is_null() {
         "gtk3".to_string()
     } else {
-        unsafe { CStr::from_ptr(app_id).to_string_lossy().into_owned() }
+        CStr::from_ptr(app_id).to_string_lossy().into_owned()
     };
 
     match client() {
@@ -167,6 +189,10 @@ pub extern "C" fn y2skk_destroy_session(handle: c_uint) {
 
 /// Processes a key event, dispatching engine actions via `cbs`.
 /// Returns 1 if the key was consumed by the IME, 0 for passthrough.
+///
+/// # Safety
+///
+/// `cbs` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn y2skk_process_key(
     handle: c_uint,
