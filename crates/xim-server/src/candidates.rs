@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    Char2b, ChangeGCAux, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux,
+    ChangeGCAux, Char2b, ConfigureWindowAux, ConnectionExt, CreateGCAux, CreateWindowAux,
     EventMask, Fontable, Rectangle, Screen, StackMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
@@ -19,12 +19,12 @@ use x11rb::COPY_DEPTH_FROM_PARENT;
 use crate::preedit::{SpotHint, FONT_CANDIDATES};
 
 /// Normal row: light yellow background, black text.
-const BG_COLOR: u32 = 0xFFFF_E0;
-const FG_COLOR: u32 = 0x0000_00;
+const BG_COLOR: u32 = 0xFF_FF_E0;
+const FG_COLOR: u32 = 0x00_00_00;
 /// Focused row: blue background, white text.
-const FOCUS_BG_COLOR: u32 = 0x4444_AA;
-const FOCUS_FG_COLOR: u32 = 0xFFFF_FF;
-const BORDER_COLOR: u32 = 0x6060_60;
+const FOCUS_BG_COLOR: u32 = 0x44_44_AA;
+const FOCUS_FG_COLOR: u32 = 0xFF_FF_FF;
+const BORDER_COLOR: u32 = 0x60_60_60;
 
 const PADDING_X: i16 = 6;
 const PADDING_Y: i16 = 3;
@@ -63,8 +63,8 @@ impl CandidateWindow {
         }
 
         let font_info = conn.query_font(font_id)?.reply()?;
-        let font_ascent = font_info.font_ascent as i16;
-        let font_descent = font_info.font_descent as i16;
+        let font_ascent = font_info.font_ascent;
+        let font_descent = font_info.font_descent;
         let font_height = font_ascent + font_descent;
 
         let win = conn.generate_id()?;
@@ -173,8 +173,18 @@ impl CandidateWindow {
         let (abs_x, abs_y) = self.compute_position(spot, win_width, win_height)?;
 
         // Clamp to screen bounds.
-        let abs_x = abs_x.min(self.screen_width.saturating_sub(win_width + BORDER_WIDTH * 2) as i32).max(0);
-        let abs_y = abs_y.min(self.screen_height.saturating_sub(win_height + BORDER_WIDTH * 2) as i32).max(0);
+        let abs_x = abs_x
+            .min(
+                self.screen_width
+                    .saturating_sub(win_width + BORDER_WIDTH * 2) as i32,
+            )
+            .max(0);
+        let abs_y = abs_y
+            .min(
+                self.screen_height
+                    .saturating_sub(win_height + BORDER_WIDTH * 2) as i32,
+            )
+            .max(0);
 
         let config = ConfigureWindowAux::new()
             .x(abs_x)
@@ -189,7 +199,8 @@ impl CandidateWindow {
         }
 
         // Clear the window.
-        self.conn.clear_area(true, self.win, 0, 0, win_width, win_height)?;
+        self.conn
+            .clear_area(true, self.win, 0, 0, win_width, win_height)?;
 
         // Draw each row.
         for (i, row) in rows.iter().enumerate() {
@@ -224,9 +235,7 @@ impl CandidateWindow {
             } else {
                 self.conn.change_gc(
                     self.gc,
-                    &ChangeGCAux::new()
-                        .foreground(FG_COLOR)
-                        .background(BG_COLOR),
+                    &ChangeGCAux::new().foreground(FG_COLOR).background(BG_COLOR),
                 )?;
             }
 
@@ -287,12 +296,17 @@ impl CandidateWindow {
         let _ = (win_width, win_height);
         Ok((
             0,
-            self.screen_height.saturating_sub(win_height + BORDER_WIDTH * 2) as i32,
+            self.screen_height
+                .saturating_sub(win_height + BORDER_WIDTH * 2) as i32,
         ))
     }
 
     fn root_window(&self) -> Result<Window> {
-        let geom = self.conn.get_geometry(self.win)?.reply().context("get_geometry")?;
+        let geom = self
+            .conn
+            .get_geometry(self.win)?
+            .reply()
+            .context("get_geometry")?;
         Ok(geom.root)
     }
 }
@@ -309,7 +323,11 @@ impl Drop for CandidateWindow {
 fn str_to_char2b(s: &str) -> Vec<Char2b> {
     s.chars()
         .map(|c| {
-            let cp = if (c as u32) <= 0xFFFF { c as u32 } else { 0xFFFD };
+            let cp = if (c as u32) <= 0xFFFF {
+                c as u32
+            } else {
+                0xFFFD
+            };
             Char2b {
                 byte1: ((cp >> 8) & 0xFF) as u8,
                 byte2: (cp & 0xFF) as u8,

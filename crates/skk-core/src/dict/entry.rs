@@ -37,17 +37,29 @@ pub enum LispForm {
 
 impl Candidate {
     pub fn new(word: impl Into<String>) -> Self {
-        Self { word: word.into(), annotation: None, lisp_form: None }
+        Self {
+            word: word.into(),
+            annotation: None,
+            lisp_form: None,
+        }
     }
 
     pub fn with_annotation(word: impl Into<String>, annotation: impl Into<String>) -> Self {
-        Self { word: word.into(), annotation: Some(annotation.into()), lisp_form: None }
+        Self {
+            word: word.into(),
+            annotation: Some(annotation.into()),
+            lisp_form: None,
+        }
     }
 
     /// Creates a Lisp-form candidate.  `raw` is the full S-expression string;
     /// it is stored in `word` for round-trip serialization.
     pub fn lisp(raw: impl Into<String>, form: LispForm) -> Self {
-        Self { word: raw.into(), annotation: None, lisp_form: Some(form) }
+        Self {
+            word: raw.into(),
+            annotation: None,
+            lisp_form: Some(form),
+        }
     }
 
     /// Returns `true` if this candidate should be displayed to the user.
@@ -61,8 +73,8 @@ impl Candidate {
 pub enum DictError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("encoding error: {0}")]
-    Encoding(String),
+    #[error("unknown encoding: {0}")]
+    UnknownEncoding(String),
     #[error("parse error at line {line}: {message}")]
     Parse { line: usize, message: String },
     #[error("dictionary is read-only")]

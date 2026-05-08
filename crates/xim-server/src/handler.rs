@@ -9,7 +9,7 @@ use tracing::{debug, error, info, warn};
 use x11rb::protocol::xproto::KeyPressEvent;
 use xim::{InputStyle, Server, ServerError, ServerHandler, UserInputContext};
 
-use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
+use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink};
 use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
 
 use crate::candidates::CandidateWindow;
@@ -37,7 +37,12 @@ impl Handler {
         preedit: PreeditWindow,
         candidates: CandidateWindow,
     ) -> Self {
-        Self { client, keymap, preedit, candidates }
+        Self {
+            client,
+            keymap,
+            preedit,
+            candidates,
+        }
     }
 }
 
@@ -77,7 +82,10 @@ impl<S: Server<XEvent = KeyPressEvent>> ActionSink for IcSink<'_, S> {
     }
 
     fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
-        if let Err(e) = self.candidates.show(candidates, sel_keys, focused, self.spot.as_ref()) {
+        if let Err(e) = self
+            .candidates
+            .show(candidates, sel_keys, focused, self.spot.as_ref())
+        {
             warn!(handle = self.handle, "candidate show failed: {e}");
         }
     }
@@ -223,7 +231,11 @@ impl<S: Server<XEvent = KeyPressEvent>> ServerHandler<S> for Handler {
                 .app_focus_win()
                 .or(user_ic.ic.app_win())
                 .map(|w| w.get());
-            focus_win.map(|fw| SpotHint { x: spot.x, y: spot.y, focus_win: fw })
+            focus_win.map(|fw| SpotHint {
+                x: spot.x,
+                y: spot.y,
+                focus_win: fw,
+            })
         };
 
         let mut sink = IcSink {

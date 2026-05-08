@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use zbus::blocking::{Connection, Proxy, connection::Builder};
+use zbus::blocking::{connection::Builder, Connection, Proxy};
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::{IpcAction, SessionId};

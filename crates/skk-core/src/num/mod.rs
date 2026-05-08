@@ -1,10 +1,10 @@
-pub mod types;
 pub mod convert;
 pub mod template;
+pub mod types;
 
-pub use types::NumType;
 pub use convert::convert;
-pub use template::{scan, expand, synthesize};
+pub use template::{expand, scan, synthesize};
+pub use types::NumType;
 
 /// Returns true if `midashi` contains at least one ASCII decimal digit run.
 pub fn has_digit_run(midashi: &str) -> bool {

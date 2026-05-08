@@ -20,8 +20,8 @@
 //!   call (one D-Bus timeout), never again until the daemon recovers.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -316,10 +316,7 @@ impl ReconnectingClient {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /// Returns the daemon session ID for `handle`, creating one if needed.
-    fn ensure_daemon_session(
-        &self,
-        handle: LocalHandle,
-    ) -> Result<SessionId, ProcessKeyError> {
+    fn ensure_daemon_session(&self, handle: LocalHandle) -> Result<SessionId, ProcessKeyError> {
         let mut sessions = self.shared.sessions.lock().unwrap();
         let entry = sessions
             .get_mut(&handle)
@@ -456,12 +453,18 @@ mod tests {
             } else {
                 match self.transport.create_session() {
                     Ok(id) => id,
-                    Err(_) => { self.mark_failed(); 0 }
+                    Err(_) => {
+                        self.mark_failed();
+                        0
+                    }
                 }
             };
             self.sessions.lock().unwrap().insert(
                 handle,
-                SessionEntry { app_id: app_id.to_string(), daemon_session_id },
+                SessionEntry {
+                    app_id: app_id.to_string(),
+                    daemon_session_id,
+                },
             );
             handle
         }
@@ -498,7 +501,9 @@ mod tests {
 
         fn ensure_daemon_session(&self, handle: LocalHandle) -> Result<SessionId, ProcessKeyError> {
             let mut sessions = self.sessions.lock().unwrap();
-            let entry = sessions.get_mut(&handle).ok_or(ProcessKeyError::UnknownHandle)?;
+            let entry = sessions
+                .get_mut(&handle)
+                .ok_or(ProcessKeyError::UnknownHandle)?;
             if entry.daemon_session_id != 0 {
                 return Ok(entry.daemon_session_id);
             }
@@ -506,7 +511,12 @@ mod tests {
             drop(sessions);
             match self.transport.create_session() {
                 Ok(id) => {
-                    self.sessions.lock().unwrap().get_mut(&handle).unwrap().daemon_session_id = id;
+                    self.sessions
+                        .lock()
+                        .unwrap()
+                        .get_mut(&handle)
+                        .unwrap()
+                        .daemon_session_id = id;
                     Ok(id)
                 }
                 Err(_) => {
@@ -537,20 +547,40 @@ mod tests {
                 Ok(actions) if actions.iter().any(|a| a.kind == ACTION_SESSION_INVALID) => {
                     match self.recreate_daemon_session(handle) {
                         Some(_) => match self.transport.process_key() {
-                            Ok(a) => { self.mark_recovered(); Ok(a) }
-                            Err(_) => { self.mark_failed(); Err(ProcessKeyError::Unavailable) }
+                            Ok(a) => {
+                                self.mark_recovered();
+                                Ok(a)
+                            }
+                            Err(_) => {
+                                self.mark_failed();
+                                Err(ProcessKeyError::Unavailable)
+                            }
                         },
-                        None => { self.mark_failed(); Err(ProcessKeyError::Unavailable) }
+                        None => {
+                            self.mark_failed();
+                            Err(ProcessKeyError::Unavailable)
+                        }
                     }
                 }
-                Ok(actions) => { self.mark_recovered(); Ok(actions) }
+                Ok(actions) => {
+                    self.mark_recovered();
+                    Ok(actions)
+                }
                 // Fail-fast: no recreate on plain D-Bus error.
-                Err(_) => { self.mark_failed(); Err(ProcessKeyError::Unavailable) }
+                Err(_) => {
+                    self.mark_failed();
+                    Err(ProcessKeyError::Unavailable)
+                }
             }
         }
 
         fn daemon_session_id(&self, handle: LocalHandle) -> SessionId {
-            self.sessions.lock().unwrap().get(&handle).map(|e| e.daemon_session_id).unwrap_or(0)
+            self.sessions
+                .lock()
+                .unwrap()
+                .get(&handle)
+                .map(|e| e.daemon_session_id)
+                .unwrap_or(0)
         }
     }
 

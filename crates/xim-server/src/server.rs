@@ -46,8 +46,8 @@ pub fn run() -> Result<()> {
 
     // Create preedit and candidate windows.
     let screen = &conn.setup().roots[screen_num];
-    let preedit = PreeditWindow::new(Arc::clone(&conn), screen)
-        .context("failed to create preedit window")?;
+    let preedit =
+        PreeditWindow::new(Arc::clone(&conn), screen).context("failed to create preedit window")?;
     info!("preedit window ready");
 
     // Initialise XIM server — creates the server window, acquires the
@@ -66,9 +66,7 @@ pub fn run() -> Result<()> {
 
     // Blocking event loop — runs until the X connection drops or a fatal error.
     loop {
-        let event = conn
-            .wait_for_event()
-            .context("X11 wait_for_event failed")?;
+        let event = conn.wait_for_event().context("X11 wait_for_event failed")?;
         if let Err(e) = server.filter_event(&event, &mut connections, &mut handler) {
             tracing::warn!("XIM filter_event error: {e}");
         }

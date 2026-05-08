@@ -41,11 +41,19 @@ pub struct KeyEvent {
 
 impl KeyEvent {
     pub fn press(key: Key, modifiers: Modifiers) -> Self {
-        Self { key, modifiers, is_press: true }
+        Self {
+            key,
+            modifiers,
+            is_press: true,
+        }
     }
 
     pub fn release(key: Key, modifiers: Modifiers) -> Self {
-        Self { key, modifiers, is_press: false }
+        Self {
+            key,
+            modifiers,
+            is_press: false,
+        }
     }
 
     /// Returns the printable character for this event, if any (without Shift consideration).

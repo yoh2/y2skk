@@ -28,7 +28,11 @@ impl DaemonInterface {
         config: Arc<Mutex<Config>>,
         config_path: PathBuf,
     ) -> Self {
-        Self { sessions, config, config_path }
+        Self {
+            sessions,
+            config,
+            config_path,
+        }
     }
 }
 

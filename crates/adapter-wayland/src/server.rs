@@ -1,11 +1,10 @@
 use std::collections::HashSet;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use wayland_client::{
-    Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
     protocol::{
         wl_compositor::WlCompositor,
         wl_keyboard::{self, WlKeyboard},
@@ -14,6 +13,7 @@ use wayland_client::{
         wl_seat::{self, WlSeat},
         wl_shm::WlShm,
     },
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
 };
 use wayland_protocols::wp::input_method::zv1::client::{
     zwp_input_method_context_v1::{self, ZwpInputMethodContextV1},
@@ -21,7 +21,7 @@ use wayland_protocols::wp::input_method::zv1::client::{
 };
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 
-use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
+use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink};
 use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
 
 use crate::candidate_window::{self, CandidateWindow};
@@ -188,7 +188,10 @@ impl WaylandState {
         };
         let cancel = Arc::new(AtomicBool::new(false));
         self.repeat_active = Some(RepeatActive {
-            keycode, keysym, consumed, cancel: cancel.clone(),
+            keycode,
+            keysym,
+            consumed,
+            cancel: cancel.clone(),
         });
 
         let delay_ms = self.repeat_delay as u64;
@@ -203,7 +206,9 @@ impl WaylandState {
             let mut ticks = 0u32;
             while !cancel.load(Ordering::Relaxed) {
                 match rustix::io::write(&fd, &[TAG_KEY_REPEAT]) {
-                    Ok(_) => { ticks += 1; }
+                    Ok(_) => {
+                        ticks += 1;
+                    }
                     Err(e) => {
                         tracing::debug!("repeat thread exit on write error: {e:?}");
                         break;
@@ -258,7 +263,9 @@ impl WaylandState {
             return;
         };
 
-        let Some(font) = candidate_window::load_font() else { return };
+        let Some(font) = candidate_window::load_font() else {
+            return;
+        };
         let font = Arc::new(font);
 
         let outputs: Vec<Option<WlOutput>> = if self.outputs.is_empty() {
@@ -280,7 +287,10 @@ impl WaylandState {
             self.candidate_windows.push(cw);
         }
 
-        tracing::info!("created {} candidate window(s)", self.candidate_windows.len());
+        tracing::info!(
+            "created {} candidate window(s)",
+            self.candidate_windows.len()
+        );
     }
 
     /// Returns true if the IM consumed the key (no forwarding happened).
@@ -330,7 +340,11 @@ impl WaylandState {
         let consumed = result.consumed && !result.force_passthrough;
         if !consumed {
             let state_val: u32 = if is_press { 1 } else { 0 };
-            self.active.as_ref().unwrap().context.key(serial, 0, keycode, state_val);
+            self.active
+                .as_ref()
+                .unwrap()
+                .context
+                .key(serial, 0, keycode, state_val);
         }
         consumed
     }
@@ -355,11 +369,13 @@ impl ActionSink for ContextSink<'_> {
 
     fn update_preedit(&mut self, text: &str, cursor: u32, _ghost_start: Option<u32>) {
         self.context.preedit_cursor(cursor as i32);
-        self.context.preedit_string(self.serial, text.to_string(), String::new());
+        self.context
+            .preedit_string(self.serial, text.to_string(), String::new());
     }
 
     fn clear_preedit(&mut self) {
-        self.context.preedit_string(self.serial, String::new(), String::new());
+        self.context
+            .preedit_string(self.serial, String::new(), String::new());
     }
 
     fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
@@ -421,7 +437,12 @@ impl Dispatch<WlRegistry, ()> for WaylandState {
         _conn: &Connection,
         qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global { name, interface, version } = event {
+        if let wl_registry::Event::Global {
+            name,
+            interface,
+            version,
+        } = event
+        {
             match interface.as_str() {
                 i if i == ZwpInputMethodV1::interface().name => {
                     tracing::info!("found zwp_input_method_v1 (version {version})");
@@ -521,7 +542,9 @@ impl Dispatch<ZwpInputMethodContextV1, ()> for WaylandState {
             }
             zwp_input_method_context_v1::Event::Reset => {
                 if let Some(active) = state.active.as_ref() {
-                    active.context.preedit_string(active.serial, String::new(), String::new());
+                    active
+                        .context
+                        .preedit_string(active.serial, String::new(), String::new());
                 }
             }
             _ => {}
@@ -553,7 +576,12 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                     Err(e) => tracing::error!("failed to load XKB keymap: {e}"),
                 }
             }
-            wl_keyboard::Event::Key { serial: _, time: _, key, state: key_state } => {
+            wl_keyboard::Event::Key {
+                serial: _,
+                time: _,
+                key,
+                state: key_state,
+            } => {
                 let is_press = matches!(key_state, WEnum::Value(wl_keyboard::KeyState::Pressed));
 
                 if is_press {
@@ -565,8 +593,8 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                         // during that grace window is a rapid re-tap of the
                         // same key — close out the old repeat cleanly and
                         // treat the event as a fresh press.
-                        let is_repeating = state.repeat_active.as_ref()
-                            .map(|r| r.keycode) == Some(key);
+                        let is_repeating =
+                            state.repeat_active.as_ref().map(|r| r.keycode) == Some(key);
                         if is_repeating && state.pending_stop_release.is_some() {
                             tracing::debug!("rapid re-tap of {key} during repeat grace");
                             state.stop_all_repeat();
@@ -581,8 +609,7 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                     // immediately.  KWin emits synthetic release events at the
                     // repeat cadence after commit_string; only a pause in the
                     // release stream indicates a real user release.
-                    let is_repeating = state.repeat_active.as_ref()
-                        .map(|r| r.keycode) == Some(key);
+                    let is_repeating = state.repeat_active.as_ref().map(|r| r.keycode) == Some(key);
                     if is_repeating {
                         let grace = state.repeat_stop_grace();
                         state.pending_stop_release = Some(Instant::now() + grace);
@@ -598,11 +625,15 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                     }
                 }
 
-                let keysym = state.active.as_ref()
+                let keysym = state
+                    .active
+                    .as_ref()
                     .and_then(|a| a.xkb_state.as_ref())
                     .map(|s| s.key_get_one_sym(key))
                     .unwrap_or(0);
-                let xkb_allows_repeat = state.active.as_ref()
+                let xkb_allows_repeat = state
+                    .active
+                    .as_ref()
                     .and_then(|a| a.xkb_state.as_ref())
                     .map(|s| s.key_repeats(key))
                     .unwrap_or(false);
@@ -624,7 +655,8 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                 state.repeat_delay = delay.max(0) as u32;
                 tracing::info!(
                     "key repeat info: rate={}/s, delay={}ms",
-                    state.repeat_rate, state.repeat_delay,
+                    state.repeat_rate,
+                    state.repeat_delay,
                 );
             }
             wl_keyboard::Event::Modifiers {
@@ -690,7 +722,8 @@ impl Dispatch<WlKeyboard, SeatKbd> for WaylandState {
             state.repeat_delay = delay.max(0) as u32;
             tracing::info!(
                 "key repeat info (seat): rate={}/s, delay={}ms",
-                state.repeat_rate, state.repeat_delay,
+                state.repeat_rate,
+                state.repeat_delay,
             );
         }
         // Other events (Keymap, Enter/Leave, Key, Modifiers) are handled via
@@ -736,7 +769,7 @@ pub fn run() -> anyhow::Result<()> {
     tracing::info!("y2skk-wayland ready");
 
     // Main loop: poll both the Wayland socket and the status timer pipe.
-    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    use rustix::event::{poll, PollFd, PollFlags, Timespec};
 
     loop {
         // If a repeat-stop is pending and its grace period has elapsed, act.
@@ -784,7 +817,8 @@ pub fn run() -> anyhow::Result<()> {
             tracing::debug!("main loop: {repeat_ticks} repeat tick(s) to process");
         }
         for _ in 0..repeat_ticks {
-            let Some((keycode, keysym, was_consumed)) = state.repeat_active
+            let Some((keycode, keysym, was_consumed)) = state
+                .repeat_active
                 .as_ref()
                 .map(|ra| (ra.keycode, ra.keysym, ra.consumed))
             else {
@@ -806,7 +840,9 @@ pub fn run() -> anyhow::Result<()> {
         let _ = event_queue.flush();
 
         // Wait for the next event (Wayland socket or timer pipe).
-        let Some(guard) = event_queue.prepare_read() else { continue };
+        let Some(guard) = event_queue.prepare_read() else {
+            continue;
+        };
         let wayland_fd = guard.connection_fd();
         let timer_fd = timer_read.as_fd();
         let mut fds = [

@@ -53,8 +53,8 @@ impl Mode {
 
     fn daemon_prefix(&self) -> PathBuf {
         match self {
-            Mode::UserLocal    => home_dir().join(".local"),
-            Mode::System       => PathBuf::from("/usr/local"),
+            Mode::UserLocal => home_dir().join(".local"),
+            Mode::System => PathBuf::from("/usr/local"),
             Mode::Packaging(p) => p.clone(),
         }
     }
@@ -89,15 +89,32 @@ impl Opts {
             match arg.as_str() {
                 "--system" => system = true,
                 "--prefix" => {
-                    let val = iter.next().unwrap_or_else(|| die("--prefix requires a path"));
+                    let val = iter
+                        .next()
+                        .unwrap_or_else(|| die("--prefix requires a path"));
                     prefix = Some(PathBuf::from(val));
                 }
-                "--daemon"   => { daemon   = true; component_flag = true; }
-                "--xim"      => { xim      = true; component_flag = true; }
-                "--gtk3"     => { gtk3     = true; component_flag = true; }
-                "--qt6"      => { qt6      = true; component_flag = true; }
-                "--wayland"  => { wayland  = true; component_flag = true; }
-                "--restart"  => restart = true,
+                "--daemon" => {
+                    daemon = true;
+                    component_flag = true;
+                }
+                "--xim" => {
+                    xim = true;
+                    component_flag = true;
+                }
+                "--gtk3" => {
+                    gtk3 = true;
+                    component_flag = true;
+                }
+                "--qt6" => {
+                    qt6 = true;
+                    component_flag = true;
+                }
+                "--wayland" => {
+                    wayland = true;
+                    component_flag = true;
+                }
+                "--restart" => restart = true,
                 other => die(&format!("Unknown option: {other}")),
             }
         }
@@ -107,10 +124,10 @@ impl Opts {
         }
 
         if !component_flag {
-            daemon  = true;
-            xim     = true;
-            gtk3    = true;
-            qt6     = true;
+            daemon = true;
+            xim = true;
+            gtk3 = true;
+            qt6 = true;
             wayland = true;
         }
 
@@ -122,7 +139,15 @@ impl Opts {
             Mode::UserLocal
         };
 
-        Self { mode, daemon, xim, gtk3, qt6, wayland, restart }
+        Self {
+            mode,
+            daemon,
+            xim,
+            gtk3,
+            qt6,
+            wayland,
+            restart,
+        }
     }
 }
 
@@ -131,7 +156,7 @@ impl Opts {
 fn main() {
     let argv: Vec<String> = env::args().collect();
     match argv.get(1).map(String::as_str) {
-        Some("install")   => cmd_install(Opts::parse(&argv[2..])),
+        Some("install") => cmd_install(Opts::parse(&argv[2..])),
         Some("uninstall") => cmd_uninstall(Opts::parse(&argv[2..])),
         _ => {
             eprintln!("y2skk build helper");
@@ -206,8 +231,14 @@ fn cmd_install(opts: Opts) {
     // mechanism, so it has no systemd unit to restart.
     let did_restart = if opts.restart && !opts.mode.is_packaging() {
         let mut any = false;
-        if opts.daemon { systemctl_try_restart("y2skk-daemon"); any = true; }
-        if opts.xim    { systemctl_try_restart("y2skk-xim");    any = true; }
+        if opts.daemon {
+            systemctl_try_restart("y2skk-daemon");
+            any = true;
+        }
+        if opts.xim {
+            systemctl_try_restart("y2skk-xim");
+            any = true;
+        }
         any
     } else {
         false
@@ -221,28 +252,40 @@ fn cmd_install(opts: Opts) {
             if (opts.daemon || opts.xim) && !did_restart {
                 println!();
                 println!("First-time setup (enable & start the service):");
-                if opts.daemon  { println!("  systemctl --user enable --now y2skk-daemon"); }
-                if opts.xim     { println!("  systemctl --user enable --now y2skk-xim"); }
+                if opts.daemon {
+                    println!("  systemctl --user enable --now y2skk-daemon");
+                }
+                if opts.xim {
+                    println!("  systemctl --user enable --now y2skk-xim");
+                }
                 println!();
                 println!("Already enabled?  Apply this update by restarting:");
                 let mut units = String::new();
-                if opts.daemon  { units.push_str("y2skk-daemon ");  }
-                if opts.xim     { units.push_str("y2skk-xim ");     }
+                if opts.daemon {
+                    units.push_str("y2skk-daemon ");
+                }
+                if opts.xim {
+                    units.push_str("y2skk-xim ");
+                }
                 println!("  systemctl --user try-restart {}", units.trim_end());
                 println!("  (or re-run `cargo xtask install` with --restart)");
             }
             if matches!(opts.mode, Mode::UserLocal) {
                 // Remind the user which extra env vars are needed for user-local adapters.
                 let need_gtk3_env = opts.gtk3 && pkg_config_exists("gtk+-3.0");
-                let need_qt6_env  = opts.qt6;
+                let need_qt6_env = opts.qt6;
                 if need_gtk3_env || need_qt6_env {
                     println!();
                     println!("Add the following to your shell profile or session startup script:");
                     if need_gtk3_env {
-                        println!(r#"  export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules""#);
+                        println!(
+                            r#"  export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules""#
+                        );
                     }
                     if need_qt6_env {
-                        println!(r#"  export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH""#);
+                        println!(
+                            r#"  export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH""#
+                        );
                     }
                 }
             }
@@ -275,7 +318,7 @@ fn install_daemon(ws: &Path, mode: &Mode) {
         .args(["build", "--release", "-p", "skk-daemon"])
         .current_dir(ws));
 
-    let src  = ws.join("target/release/y2skk-daemon");
+    let src = ws.join("target/release/y2skk-daemon");
     let dest = mode.daemon_prefix().join("bin/y2skk-daemon");
     let use_sudo = matches!(mode, Mode::System);
     install_file(&src, &dest, use_sudo);
@@ -297,8 +340,8 @@ fn install_tables(ws: &Path, mode: &Mode) {
         }
     });
 
-    for entry in fs::read_dir(&src_dir)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", src_dir.display()))
+    for entry in
+        fs::read_dir(&src_dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", src_dir.display()))
     {
         let entry = entry.unwrap();
         let src = entry.path();
@@ -318,7 +361,7 @@ fn install_xim(ws: &Path, mode: &Mode) {
         .args(["build", "--release", "-p", "xim-server"])
         .current_dir(ws));
 
-    let src  = ws.join("target/release/y2skk-xim");
+    let src = ws.join("target/release/y2skk-xim");
     let dest = mode.daemon_prefix().join("bin/y2skk-xim");
     let use_sudo = matches!(mode, Mode::System);
     install_file(&src, &dest, use_sudo);
@@ -333,7 +376,7 @@ fn install_wayland(ws: &Path, mode: &Mode) {
         .args(["build", "--release", "-p", "adapter-wayland"])
         .current_dir(ws));
 
-    let src  = ws.join("target/release/y2skk-wayland");
+    let src = ws.join("target/release/y2skk-wayland");
     let dest = mode.daemon_prefix().join("bin/y2skk-wayland");
     let use_sudo = matches!(mode, Mode::System);
     install_file(&src, &dest, use_sudo);
@@ -365,8 +408,7 @@ fn write_user_file(dest: &Path, content: &str) {
         fs::create_dir_all(parent)
             .unwrap_or_else(|e| die(&format!("create dir {}: {e}", parent.display())));
     }
-    fs::write(dest, content)
-        .unwrap_or_else(|e| die(&format!("write {}: {e}", dest.display())));
+    fs::write(dest, content).unwrap_or_else(|e| die(&format!("write {}: {e}", dest.display())));
 }
 
 // ── GTK3 adapter ───────────────────────────────────────────────────────────────
@@ -381,11 +423,15 @@ fn install_gtk3(ws: &Path, mode: &Mode) {
 
     match mode {
         Mode::UserLocal => install_gtk3_user(ws),
-        Mode::System    => install_gtk3_cmake(ws, None, true),
+        Mode::System => install_gtk3_cmake(ws, None, true),
         Mode::Packaging(prefix) => {
             let bin_ver = pkg_config_var("gtk+-3.0", "gtk_binary_version")
                 .unwrap_or_else(|| "3.0.0".to_string());
-            let module_dir = prefix.join("lib").join("gtk-3.0").join(&bin_ver).join("immodules");
+            let module_dir = prefix
+                .join("lib")
+                .join("gtk-3.0")
+                .join(&bin_ver)
+                .join("immodules");
             install_gtk3_cmake(ws, Some(&module_dir), false);
         }
     }
@@ -399,8 +445,8 @@ fn install_gtk3_user(ws: &Path) {
         .current_dir(ws));
 
     let src = ws.join("target/release/libadapter_gtk3.so");
-    let bin_ver = pkg_config_var("gtk+-3.0", "gtk_binary_version")
-        .unwrap_or_else(|| "3.0.0".to_string());
+    let bin_ver =
+        pkg_config_var("gtk+-3.0", "gtk_binary_version").unwrap_or_else(|| "3.0.0".to_string());
     let dest = home_dir()
         .join(".local/lib/gtk-3.0")
         .join(&bin_ver)
@@ -413,21 +459,30 @@ fn install_gtk3_user(ws: &Path) {
 /// Update ~/.config/gtk-3.0/gtk.immodules by running gtk-query-immodules-3.0
 /// with the installed .so path so GTK3 can discover the module.
 fn update_gtk3_user_cache(so_path: &Path) {
-    let cache_dir  = home_dir().join(".config/gtk-3.0");
+    let cache_dir = home_dir().join(".config/gtk-3.0");
     let cache_file = cache_dir.join("gtk.immodules");
 
-    println!("    Updating GTK3 user module cache -> {}", cache_file.display());
+    println!(
+        "    Updating GTK3 user module cache -> {}",
+        cache_file.display()
+    );
     fs::create_dir_all(&cache_dir).ok();
 
     // Pass the .so path directly so gtk-query-immodules-3.0 generates an entry
     // with the full absolute path — no GTK_PATH setup needed.
-    match Command::new("gtk-query-immodules-3.0").arg(so_path).output() {
+    match Command::new("gtk-query-immodules-3.0")
+        .arg(so_path)
+        .output()
+    {
         Ok(o) if o.status.success() => {
             fs::write(&cache_file, &o.stdout)
                 .unwrap_or_else(|e| eprintln!("    Warning: could not write cache: {e}"));
         }
         Ok(o) => {
-            eprintln!("    Warning: gtk-query-immodules-3.0 exited with {:?}", o.status.code());
+            eprintln!(
+                "    Warning: gtk-query-immodules-3.0 exited with {:?}",
+                o.status.code()
+            );
         }
         Err(e) => {
             eprintln!("    Warning: gtk-query-immodules-3.0 not found: {e}");
@@ -446,7 +501,7 @@ fn install_gtk3_cmake(ws: &Path, module_dir: Option<&Path>, use_sudo: bool) {
     }
 
     let build_dir = ws.join("target/xtask-build/gtk3");
-    let src_dir   = ws.join("shim/gtk3");
+    let src_dir = ws.join("shim/gtk3");
 
     // Explicitly pass GTK3_UPDATE_IMMODULE_CACHE so stale cmake cache entries are
     // overridden.  Only pass GTK3_IM_MODULE_DIR when a non-default path is needed;
@@ -454,8 +509,10 @@ fn install_gtk3_cmake(ws: &Path, module_dir: Option<&Path>, use_sudo: bool) {
     let update_cache = if use_sudo { "ON" } else { "OFF" };
 
     let mut cmake_args: Vec<String> = vec![
-        "-S".into(), src_dir.to_str().unwrap().into(),
-        "-B".into(), build_dir.to_str().unwrap().into(),
+        "-S".into(),
+        src_dir.to_str().unwrap().into(),
+        "-B".into(),
+        build_dir.to_str().unwrap().into(),
         "-DCMAKE_BUILD_TYPE=Release".into(),
         format!("-DGTK3_UPDATE_IMMODULE_CACHE={update_cache}"),
     ];
@@ -477,8 +534,7 @@ fn install_gtk3_cmake(ws: &Path, module_dir: Option<&Path>, use_sudo: bool) {
 
     println!("    Building...");
     let jobs = parallelism();
-    run(Command::new("cmake")
-        .args(["--build", build_dir.to_str().unwrap(), "--parallel", &jobs]));
+    run(Command::new("cmake").args(["--build", build_dir.to_str().unwrap(), "--parallel", &jobs]));
 
     println!("    Installing{}...", if use_sudo { " (sudo)" } else { "" });
     let install_args = ["--install", build_dir.to_str().unwrap()];
@@ -516,16 +572,19 @@ fn install_qt6(ws: &Path, mode: &Mode) {
 
 fn install_qt6_cmake(ws: &Path, plugin_dir: Option<&Path>, use_sudo: bool) {
     let build_dir = ws.join("target/xtask-build/qt6");
-    let src_dir   = ws.join("shim/qt6");
+    let src_dir = ws.join("shim/qt6");
 
-    let plugin_dir_str = plugin_dir.map(|p| p.to_str().unwrap().to_string())
+    let plugin_dir_str = plugin_dir
+        .map(|p| p.to_str().unwrap().to_string())
         .unwrap_or_default();
 
     println!("    Configuring...");
     let ok = Command::new("cmake")
         .args([
-            "-S", src_dir.to_str().unwrap(),
-            "-B", build_dir.to_str().unwrap(),
+            "-S",
+            src_dir.to_str().unwrap(),
+            "-B",
+            build_dir.to_str().unwrap(),
             "-DCMAKE_BUILD_TYPE=Release",
             &format!("-DY2SKK_QT6_PLUGIN_DIR={plugin_dir_str}"),
         ])
@@ -540,8 +599,7 @@ fn install_qt6_cmake(ws: &Path, plugin_dir: Option<&Path>, use_sudo: bool) {
 
     println!("    Building...");
     let jobs = parallelism();
-    run(Command::new("cmake")
-        .args(["--build", build_dir.to_str().unwrap(), "--parallel", &jobs]));
+    run(Command::new("cmake").args(["--build", build_dir.to_str().unwrap(), "--parallel", &jobs]));
 
     println!("    Installing{}...", if use_sudo { " (sudo)" } else { "" });
     let install_args = ["--install", build_dir.to_str().unwrap()];
@@ -558,12 +616,9 @@ fn install_daemon_service(ws: &Path, prefix: &Path) {
     let src = ws.join("dist/systemd/y2skk-daemon.service");
     let bin_path = prefix.join("bin/y2skk-daemon");
 
-    let content = fs::read_to_string(&src)
-        .unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
-    let content = content.replace(
-        "%h/.cargo/bin/y2skk-daemon",
-        bin_path.to_str().unwrap(),
-    );
+    let content =
+        fs::read_to_string(&src).unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
+    let content = content.replace("%h/.cargo/bin/y2skk-daemon", bin_path.to_str().unwrap());
 
     install_systemd_unit("y2skk-daemon.service", &content);
 }
@@ -572,27 +627,25 @@ fn install_xim_service(ws: &Path, prefix: &Path) {
     let src = ws.join("dist/systemd/y2skk-xim.service");
     let bin_path = prefix.join("bin/y2skk-xim");
 
-    let content = fs::read_to_string(&src)
-        .unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
-    let content = content.replace(
-        "%h/.cargo/bin/y2skk-xim",
-        bin_path.to_str().unwrap(),
-    );
+    let content =
+        fs::read_to_string(&src).unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
+    let content = content.replace("%h/.cargo/bin/y2skk-xim", bin_path.to_str().unwrap());
 
     install_systemd_unit("y2skk-xim.service", &content);
 }
 
 fn install_systemd_unit(filename: &str, content: &str) {
     let dest_dir = home_dir().join(".config/systemd/user");
-    let dest     = dest_dir.join(filename);
+    let dest = dest_dir.join(filename);
 
     println!("==> Installing systemd user service -> {}", dest.display());
     fs::create_dir_all(&dest_dir)
         .unwrap_or_else(|e| die(&format!("create {}: {e}", dest_dir.display())));
-    fs::write(&dest, content)
-        .unwrap_or_else(|e| die(&format!("write {filename}: {e}")));
+    fs::write(&dest, content).unwrap_or_else(|e| die(&format!("write {filename}: {e}")));
 
-    let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+    let _ = Command::new("systemctl")
+        .args(["--user", "daemon-reload"])
+        .status();
 }
 
 // ── D-Bus activation ──────────────────────────────────────────────────────────
@@ -601,22 +654,18 @@ fn install_dbus_activation(ws: &Path, prefix: &Path) {
     let src = ws.join("dist/dbus/org.y2skk.Daemon.service");
     let bin_path = prefix.join("bin/y2skk-daemon");
 
-    let content = fs::read_to_string(&src)
-        .unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
+    let content =
+        fs::read_to_string(&src).unwrap_or_else(|e| die(&format!("read {}: {e}", src.display())));
     // Replace the placeholder binary path with the actual installed path.
-    let content = content.replace(
-        "%h/.local/bin/y2skk-daemon",
-        bin_path.to_str().unwrap(),
-    );
+    let content = content.replace("%h/.local/bin/y2skk-daemon", bin_path.to_str().unwrap());
 
     let dest_dir = home_dir().join(".local/share/dbus-1/services");
-    let dest     = dest_dir.join("org.y2skk.Daemon.service");
+    let dest = dest_dir.join("org.y2skk.Daemon.service");
 
     println!("==> Installing D-Bus activation file -> {}", dest.display());
     fs::create_dir_all(&dest_dir)
         .unwrap_or_else(|e| die(&format!("create {}: {e}", dest_dir.display())));
-    fs::write(&dest, content)
-        .unwrap_or_else(|e| die(&format!("write D-Bus activation: {e}")));
+    fs::write(&dest, content).unwrap_or_else(|e| die(&format!("write D-Bus activation: {e}")));
 }
 
 // ── uninstall ─────────────────────────────────────────────────────────────────
@@ -633,8 +682,8 @@ fn cmd_uninstall(opts: Opts) {
     }
 
     // GTK3 module.
-    let bin_ver = pkg_config_var("gtk+-3.0", "gtk_binary_version")
-        .unwrap_or_else(|| "3.0.0".to_string());
+    let bin_ver =
+        pkg_config_var("gtk+-3.0", "gtk_binary_version").unwrap_or_else(|| "3.0.0".to_string());
     let gtk3_path = match &opts.mode {
         Mode::UserLocal => home_dir()
             .join(".local/lib/gtk-3.0")
@@ -663,11 +712,13 @@ fn cmd_uninstall(opts: Opts) {
 
     // Qt6 plugin.
     let qt6_path = match &opts.mode {
-        Mode::UserLocal => home_dir()
-            .join(".local/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so"),
+        Mode::UserLocal => {
+            home_dir().join(".local/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so")
+        }
         Mode::System => qt6_system_plugin_path(),
-        Mode::Packaging(prefix) => prefix
-            .join("lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so"),
+        Mode::Packaging(prefix) => {
+            prefix.join("lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so")
+        }
     };
     if qt6_path.exists() {
         println!("  Removing Qt6 plugin: {}", qt6_path.display());
@@ -710,7 +761,10 @@ fn cmd_uninstall(opts: Opts) {
     if tables_dir.exists() {
         println!("  Removing kana tables: {}", tables_dir.display());
         if matches!(opts.mode, Mode::System) {
-            let _ = Command::new("sudo").args(["rm", "-rf"]).arg(&tables_dir).status();
+            let _ = Command::new("sudo")
+                .args(["rm", "-rf"])
+                .arg(&tables_dir)
+                .status();
         } else {
             fs::remove_dir_all(&tables_dir).unwrap_or_else(|e| eprintln!("  Warning: {e}"));
         }
@@ -722,7 +776,11 @@ fn cmd_uninstall(opts: Opts) {
     // now launched by KWin's virtual-keyboard machinery instead.  Clean up
     // the file if it's left over from a previous install.
     let mut need_reload = false;
-    for name in &["y2skk-daemon.service", "y2skk-xim.service", "y2skk-wayland.service"] {
+    for name in &[
+        "y2skk-daemon.service",
+        "y2skk-xim.service",
+        "y2skk-wayland.service",
+    ] {
         let service = home_dir().join(".config/systemd/user").join(name);
         if service.exists() {
             println!("  Removing systemd service: {}", service.display());
@@ -732,7 +790,9 @@ fn cmd_uninstall(opts: Opts) {
         }
     }
     if need_reload {
-        let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
+        let _ = Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .status();
     }
 
     // D-Bus activation file (always user-local).
@@ -751,16 +811,18 @@ fn cmd_uninstall(opts: Opts) {
 }
 
 fn gtk3_system_module_path() -> PathBuf {
-    let libdir  = pkg_config_var("gtk+-3.0", "libdir").unwrap_or_else(|| "/usr/lib".to_string());
-    let bin_ver = pkg_config_var("gtk+-3.0", "gtk_binary_version")
-        .unwrap_or_else(|| "3.0.0".to_string());
+    let libdir = pkg_config_var("gtk+-3.0", "libdir").unwrap_or_else(|| "/usr/lib".to_string());
+    let bin_ver =
+        pkg_config_var("gtk+-3.0", "gtk_binary_version").unwrap_or_else(|| "3.0.0".to_string());
     PathBuf::from(libdir)
-        .join("gtk-3.0").join(&bin_ver).join("immodules/im-y2skk.so")
+        .join("gtk-3.0")
+        .join(&bin_ver)
+        .join("immodules/im-y2skk.so")
 }
 
 fn qt6_system_plugin_path() -> PathBuf {
-    let base = qmake_query("QT_INSTALL_PLUGINS")
-        .unwrap_or_else(|| "/usr/lib/qt6/plugins".to_string());
+    let base =
+        qmake_query("QT_INSTALL_PLUGINS").unwrap_or_else(|| "/usr/lib/qt6/plugins".to_string());
     PathBuf::from(base).join("platforminputcontexts/libqy2skk-qt6-plugin.so")
 }
 
@@ -789,18 +851,19 @@ fn install_file(src: &Path, dest: &Path, use_sudo: bool) {
 
     if use_sudo {
         // `install -D` creates parent dirs and sets mode in one shot.
-        run_as_root(Command::new("install")
-            .args(["-D", "-m", "755",
-                   src.to_str().unwrap(),
-                   tmp.to_str().unwrap()]));
+        run_as_root(Command::new("install").args([
+            "-D",
+            "-m",
+            "755",
+            src.to_str().unwrap(),
+            tmp.to_str().unwrap(),
+        ]));
         // Atomic replace.  `mv -f` succeeds whether or not `dest` exists.
-        run_as_root(Command::new("mv")
-            .args(["-f", tmp.to_str().unwrap(), dest.to_str().unwrap()]));
+        run_as_root(Command::new("mv").args(["-f", tmp.to_str().unwrap(), dest.to_str().unwrap()]));
     } else {
         fs::create_dir_all(dest_dir)
             .unwrap_or_else(|e| die(&format!("create {}: {e}", dest_dir.display())));
-        fs::copy(src, &tmp)
-            .unwrap_or_else(|e| die(&format!("copy to {}: {e}", tmp.display())));
+        fs::copy(src, &tmp).unwrap_or_else(|e| die(&format!("copy to {}: {e}", tmp.display())));
         set_executable(&tmp);
         fs::rename(&tmp, dest)
             .unwrap_or_else(|e| die(&format!("rename to {}: {e}", dest.display())));
@@ -809,7 +872,8 @@ fn install_file(src: &Path, dest: &Path, use_sudo: bool) {
 
 fn run(cmd: &mut Command) {
     let prog = cmd.get_program().to_string_lossy().to_string();
-    let status = cmd.status()
+    let status = cmd
+        .status()
         .unwrap_or_else(|e| die(&format!("failed to run {prog}: {e}")));
     if !status.success() {
         die(&format!("{prog} exited with {status}"));

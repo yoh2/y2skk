@@ -89,9 +89,9 @@ const DAIJI_DIGITS: &[char] = &['零', '壱', '弐', '参', '四', '伍', '六',
 /// Large-unit separators (万, 億, 兆, 京).  Each value is exactly 10^4, 10^8, 10^12, 10^16.
 const LARGE_UNITS: &[(u64, &str)] = &[
     (10_000_000_000_000_000, "京"), // 10^16
-    (1_000_000_000_000,      "兆"), // 10^12
-    (100_000_000,            "億"), // 10^8
-    (10_000,                 "万"), // 10^4
+    (1_000_000_000_000, "兆"),      // 10^12
+    (100_000_000, "億"),            // 10^8
+    (10_000, "万"),                 // 10^4
 ];
 
 /// Small-unit separators within a group of up to 9999 for standard kanji.
@@ -105,7 +105,12 @@ const DAIJI_SMALL_UNITS: &[(u64, &str)] = &[(1_000, "阡"), (100, "百"), (10, "
 /// Within each group, `small_units` provides the place-name strings (千/阡, 百, 十/拾).
 /// When `omit_leading_one` is true, a coefficient of 1 before a small-unit place name
 /// is suppressed (standard kanji: 千 not 一千, but 一万 is kept because 万 is a large unit).
-fn kanji_number(n: u64, digit_chars: &[char], small_units: &[(u64, &str)], omit_leading_one: bool) -> String {
+fn kanji_number(
+    n: u64,
+    digit_chars: &[char],
+    small_units: &[(u64, &str)],
+    omit_leading_one: bool,
+) -> String {
     if n == 0 {
         return digit_chars[0].to_string();
     }
@@ -117,7 +122,12 @@ fn kanji_number(n: u64, digit_chars: &[char], small_units: &[(u64, &str)], omit_
         let group = rem / unit_val;
         if group > 0 {
             // The coefficient before the large unit is always written out (no omission).
-            result.push_str(&kanji_group(group, digit_chars, small_units, omit_leading_one));
+            result.push_str(&kanji_group(
+                group,
+                digit_chars,
+                small_units,
+                omit_leading_one,
+            ));
             result.push_str(unit_name);
             rem -= group * unit_val;
         }
@@ -125,13 +135,23 @@ fn kanji_number(n: u64, digit_chars: &[char], small_units: &[(u64, &str)], omit_
 
     // Remaining value (< 10000).
     if rem > 0 {
-        result.push_str(&kanji_group(rem, digit_chars, small_units, omit_leading_one));
+        result.push_str(&kanji_group(
+            rem,
+            digit_chars,
+            small_units,
+            omit_leading_one,
+        ));
     }
     result
 }
 
 /// Converts a number 1–9999 to its kanji representation within a group.
-fn kanji_group(n: u64, digit_chars: &[char], small_units: &[(u64, &str)], omit_leading_one: bool) -> String {
+fn kanji_group(
+    n: u64,
+    digit_chars: &[char],
+    small_units: &[(u64, &str)],
+    omit_leading_one: bool,
+) -> String {
     let mut result = String::new();
     let mut rem = n;
     for &(place_val, place_name) in small_units {
@@ -289,7 +309,10 @@ mod tests {
 
     #[test]
     fn kanji_sequential() {
-        assert_eq!(convert("1234", NumType::KanjiSeq), Some("千二百三十四".into()));
+        assert_eq!(
+            convert("1234", NumType::KanjiSeq),
+            Some("千二百三十四".into())
+        );
         assert_eq!(convert("5500", NumType::KanjiSeq), Some("五千五百".into()));
         assert_eq!(convert("10", NumType::KanjiSeq), Some("十".into()));
         assert_eq!(convert("100", NumType::KanjiSeq), Some("百".into()));
@@ -305,8 +328,14 @@ mod tests {
 
     #[test]
     fn daiji() {
-        assert_eq!(convert("1995", NumType::Daiji), Some("壱阡九百九拾伍".into()));
-        assert_eq!(convert("1234", NumType::Daiji), Some("壱阡弐百参拾四".into()));
+        assert_eq!(
+            convert("1995", NumType::Daiji),
+            Some("壱阡九百九拾伍".into())
+        );
+        assert_eq!(
+            convert("1234", NumType::Daiji),
+            Some("壱阡弐百参拾四".into())
+        );
         assert_eq!(convert("0", NumType::Daiji), Some("零".into()));
     }
 
@@ -342,7 +371,10 @@ mod tests {
             convert("1234", NumType::RomanLowerAscii),
             Some("mccxxxiv".into())
         );
-        assert_eq!(convert("3999", NumType::RomanUpperAscii), Some("MMMCMXCIX".into()));
+        assert_eq!(
+            convert("3999", NumType::RomanUpperAscii),
+            Some("MMMCMXCIX".into())
+        );
         assert_eq!(convert("4000", NumType::RomanUpperAscii), None);
     }
 

@@ -3,7 +3,7 @@
 use skk_core::engine::{EngineAction, Preedit};
 use skk_core::key::{Key, KeyEvent, Modifiers};
 
-use crate::{IpcAction, NO_GHOST, keysym};
+use crate::{keysym, IpcAction, NO_GHOST};
 
 // ── EngineAction → IpcAction ──────────────────────────────────────────────────
 
@@ -11,7 +11,11 @@ impl From<EngineAction> for IpcAction {
     fn from(action: EngineAction) -> Self {
         match action {
             EngineAction::Commit(text) => IpcAction::commit(text),
-            EngineAction::UpdatePreedit(Preedit { text, cursor, ghost_start }) => {
+            EngineAction::UpdatePreedit(Preedit {
+                text,
+                cursor,
+                ghost_start,
+            }) => {
                 let gs = ghost_start.map(|n| n as u32).unwrap_or(NO_GHOST);
                 IpcAction::update_preedit(text, cursor as u32, gs)
             }
@@ -100,10 +104,18 @@ fn keysym_to_key(sym: u32) -> Key {
 
 fn modifiers_from_raw(raw: u32) -> Modifiers {
     let mut m = Modifiers::empty();
-    if raw & 0x01 != 0 { m |= Modifiers::SHIFT; }
-    if raw & 0x04 != 0 { m |= Modifiers::CTRL; }
-    if raw & 0x08 != 0 { m |= Modifiers::ALT; }
-    if raw & 0x40 != 0 { m |= Modifiers::META; }
+    if raw & 0x01 != 0 {
+        m |= Modifiers::SHIFT;
+    }
+    if raw & 0x04 != 0 {
+        m |= Modifiers::CTRL;
+    }
+    if raw & 0x08 != 0 {
+        m |= Modifiers::ALT;
+    }
+    if raw & 0x40 != 0 {
+        m |= Modifiers::META;
+    }
     m
 }
 

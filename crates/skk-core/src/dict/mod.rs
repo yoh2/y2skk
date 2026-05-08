@@ -1,8 +1,8 @@
-pub mod traits;
-pub mod file;
 pub mod entry;
+pub mod file;
 pub mod lisp;
+pub mod traits;
 
-pub use traits::{DictionaryProvider, AsyncDictionaryProvider};
-pub use entry::{DictEntry, Candidate, LispForm, DictError};
-pub use file::{FileDict, UserDict, DictEncoding};
+pub use entry::{Candidate, DictEntry, DictError, LispForm};
+pub use file::{DictEncoding, FileDict, UserDict};
+pub use traits::{AsyncDictionaryProvider, DictionaryProvider};

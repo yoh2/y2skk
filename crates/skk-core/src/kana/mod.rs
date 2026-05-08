@@ -1,4 +1,7 @@
-pub mod table;
 pub mod parser;
+pub mod table;
 
-pub use table::{KanaTable, KanaTransition, KanaMode, TransitionResult, hiragana_to_katakana, hiragana_to_halfwidth};
+pub use table::{
+    hiragana_to_halfwidth, hiragana_to_katakana, KanaMode, KanaTable, KanaTransition,
+    TransitionResult,
+};

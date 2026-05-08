@@ -16,6 +16,11 @@ extern "C" {
     fn _y2skk_im_module_create(context_id: *const c_char) -> *mut c_void;
 }
 
+/// # Safety
+///
+/// This function is called by the GTK3 C shim with pointers to internal data structures.
+/// The caller must ensure that the pointers are valid and that the function is called
+/// in the correct context during module initialization.
 #[no_mangle]
 pub unsafe extern "C" fn im_module_list(
     contexts: *mut *const *const c_void,
@@ -24,22 +29,35 @@ pub unsafe extern "C" fn im_module_list(
     _y2skk_im_module_list(contexts, n_contexts);
 }
 
+/// # Safety
+///
+/// This function is called by the GTK3 C shim during module initialization with a pointer
+/// to the module instance.
 #[no_mangle]
 pub unsafe extern "C" fn im_module_init(module: *mut c_void) {
     _y2skk_im_module_init(module);
 }
 
+/// # Safety
+///
+/// This function is called by the GTK3 C shim during module cleanup.
+/// It should only be called once when the module is unloaded.
 #[no_mangle]
 pub extern "C" fn im_module_exit() {
     unsafe { _y2skk_im_module_exit() };
 }
 
+/// # Safety
+///
+/// This function is called by the GTK3 C shim to create a new IME session for a given context ID.
+/// The caller must ensure that `context_id` is a valid null-terminated C string and that
+/// the returned pointer is properly managed and freed by the caller when no longer needed.
 #[no_mangle]
 pub unsafe extern "C" fn im_module_create(context_id: *const c_char) -> *mut c_void {
     _y2skk_im_module_create(context_id)
 }
 
-use skk_ipc::dispatch::{ActionSink, dispatch as dispatch_actions};
+use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink};
 use skk_ipc::proxy::reconnect::ReconnectingClient;
 use skk_ipc::NO_GHOST;
 
@@ -51,7 +69,8 @@ pub struct Y2skkCallbacks {
     pub commit: unsafe extern "C" fn(*mut c_void, *const c_char),
     pub update_preedit: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint, c_uint),
     pub clear_preedit: unsafe extern "C" fn(*mut c_void),
-    pub show_candidates: unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
+    pub show_candidates:
+        unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
     pub update_status: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint),
 }
@@ -82,8 +101,10 @@ impl ActionSink for CallbackSink {
     }
 
     fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
-        let cstrings: Vec<CString> =
-            candidates.iter().filter_map(|w| CString::new(w.as_str()).ok()).collect();
+        let cstrings: Vec<CString> = candidates
+            .iter()
+            .filter_map(|w| CString::new(w.as_str()).ok())
+            .collect();
         let ptrs: Vec<*const c_char> = cstrings
             .iter()
             .map(|s| s.as_ptr())
@@ -137,12 +158,16 @@ pub extern "C" fn y2skk_fini() {
 }
 
 /// Allocates a new IME session and returns a local handle (0 on failure).
+///
+/// # Safety
+///
+/// `app_id` must be a valid C string or NULL.
 #[no_mangle]
-pub extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
+pub unsafe extern "C" fn y2skk_create_session(app_id: *const c_char) -> c_uint {
     let label = if app_id.is_null() {
         "gtk3".to_string()
     } else {
-        unsafe { CStr::from_ptr(app_id).to_string_lossy().into_owned() }
+        CStr::from_ptr(app_id).to_string_lossy().into_owned()
     };
 
     match client() {
@@ -164,6 +189,10 @@ pub extern "C" fn y2skk_destroy_session(handle: c_uint) {
 
 /// Processes a key event, dispatching engine actions via `cbs`.
 /// Returns 1 if the key was consumed by the IME, 0 for passthrough.
+///
+/// # Safety
+///
+/// `cbs` must be a valid pointer
 #[no_mangle]
 pub unsafe extern "C" fn y2skk_process_key(
     handle: c_uint,
@@ -182,7 +211,11 @@ pub unsafe extern "C" fn y2skk_process_key(
 
     let mut sink = CallbackSink { ctx, cbs };
     let result = dispatch_actions(&actions, &mut sink);
-    if result.consumed && !result.force_passthrough { 1 } else { 0 }
+    if result.consumed && !result.force_passthrough {
+        1
+    } else {
+        0
+    }
 }
 
 /// Notifies the daemon that the context gained focus.

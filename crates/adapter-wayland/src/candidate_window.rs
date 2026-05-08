@@ -4,10 +4,8 @@ use std::sync::Arc;
 
 use fontdue::Font;
 use wayland_client::{
+    protocol::{wl_buffer, wl_compositor, wl_output, wl_shm, wl_shm_pool, wl_surface},
     Connection, Dispatch, Proxy, QueueHandle,
-    protocol::{
-        wl_buffer, wl_compositor, wl_output, wl_shm, wl_shm_pool, wl_surface,
-    },
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
@@ -31,11 +29,11 @@ const CANVAS_W: i32 = 380;
 const CANVAS_H: i32 = LINE_H * MAX_ROWS as i32 + ROW_PAD * 2;
 
 // ARGB8888 little-endian: memory bytes are [B, G, R, A].
-const BG_COLOR: [u8; 4]       = [0xE0, 0xFF, 0xFF, 0xFF]; // #FFFFE0 — light yellow
-const FOCUS_BG: [u8; 4]       = [0xCC, 0xCC, 0xFF, 0xFF]; // #FFCCCC — light red/pink
-const TEXT_COLOR: [u8; 4]     = [0x00, 0x00, 0x00, 0xFF]; // black
-const BORDER_COLOR: [u8; 4]   = [0x80, 0x80, 0x80, 0xFF]; // grey border
-const TRANSPARENT: [u8; 4]    = [0x00, 0x00, 0x00, 0x00]; // fully transparent
+const BG_COLOR: [u8; 4] = [0xE0, 0xFF, 0xFF, 0xFF]; // #FFFFE0 — light yellow
+const FOCUS_BG: [u8; 4] = [0xCC, 0xCC, 0xFF, 0xFF]; // #FFCCCC — light red/pink
+const TEXT_COLOR: [u8; 4] = [0x00, 0x00, 0x00, 0xFF]; // black
+const BORDER_COLOR: [u8; 4] = [0x80, 0x80, 0x80, 0xFF]; // grey border
+const TRANSPARENT: [u8; 4] = [0x00, 0x00, 0x00, 0x00]; // fully transparent
 
 // ── Font discovery ────────────────────────────────────────────────────────────
 
@@ -127,7 +125,15 @@ fn render_candidates(
     // Draw 1-pixel grey border.
     draw_rect(pixels, 0, 0, CANVAS_W, content_h, BORDER_COLOR, CANVAS_W);
     // Fill interior background.
-    draw_filled_rect(pixels, 1, 1, CANVAS_W - 2, content_h - 2, BG_COLOR, CANVAS_W);
+    draw_filled_rect(
+        pixels,
+        1,
+        1,
+        CANVAS_W - 2,
+        content_h - 2,
+        BG_COLOR,
+        CANVAS_W,
+    );
 
     let baseline_offset = FONT_SIZE as i32 + ROW_PAD;
 
@@ -147,7 +153,9 @@ fn render_candidates(
         };
 
         let baseline_y = row_y + baseline_offset;
-        draw_text(pixels, font, &text, H_MARGIN, baseline_y, TEXT_COLOR, CANVAS_W, CANVAS_H);
+        draw_text(
+            pixels, font, &text, H_MARGIN, baseline_y, TEXT_COLOR, CANVAS_W, CANVAS_H,
+        );
     }
 
     unsafe { munmap(ptr as *mut _, size).expect("munmap") };
@@ -186,8 +194,10 @@ fn render_status(fd: &OwnedFd, font: &Font, indicator: &str) {
     draw_rect(pixels, box_x, box_y, box_w, box_h, BORDER_COLOR, CANVAS_W);
     draw_filled_rect(
         pixels,
-        box_x + 1, box_y + 1,
-        box_w - 2, box_h - 2,
+        box_x + 1,
+        box_y + 1,
+        box_w - 2,
+        box_h - 2,
         BG_COLOR,
         CANVAS_W,
     );
@@ -207,6 +217,7 @@ fn render_status(fd: &OwnedFd, font: &Font, indicator: &str) {
     unsafe { munmap(ptr as *mut _, size).expect("munmap") };
 }
 
+// TODO: reduce the number of function arguments
 fn draw_text(
     pixels: &mut [u8],
     font: &Font,
@@ -225,7 +236,7 @@ fn draw_text(
         let (metrics, bitmap) = font.rasterize(ch, FONT_SIZE);
         // Bitmap top-left in screen coords: x = pen + xmin, y = baseline - ymin - height
         let glyph_x = pen_x as i32 + metrics.xmin;
-        let glyph_y = baseline_y - metrics.ymin as i32 - metrics.height as i32;
+        let glyph_y = baseline_y - metrics.ymin - metrics.height as i32;
 
         for by in 0..metrics.height {
             for bx in 0..metrics.width {
@@ -235,7 +246,7 @@ fn draw_text(
                 }
                 let px = glyph_x + bx as i32;
                 let py = glyph_y + by as i32;
-                if px < 0 || px >= CANVAS_W || py < 0 || py >= canvas_h {
+                if !(0..CANVAS_W).contains(&px) || !(0..canvas_h).contains(&py) {
                     continue;
                 }
                 let off = (py * stride_px * 4 + px * 4) as usize;
@@ -259,35 +270,37 @@ fn blend_pixel(dst: &mut [u8], fg: [u8; 4], coverage: u8) {
 
 fn draw_filled_rect(
     pixels: &mut [u8],
-    x: i32, y: i32, w: i32, h: i32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
     color: [u8; 4],
     stride_px: i32,
 ) {
     for row in y..(y + h) {
-        if row < 0 || row >= CANVAS_H { continue; }
+        if !(0..CANVAS_H).contains(&row) {
+            continue;
+        }
         for col in x..(x + w) {
-            if col < 0 || col >= CANVAS_W { continue; }
+            if !(0..CANVAS_W).contains(&col) {
+                continue;
+            }
             let off = (row * stride_px * 4 + col * 4) as usize;
             pixels[off..off + 4].copy_from_slice(&color);
         }
     }
 }
 
-fn draw_rect(
-    pixels: &mut [u8],
-    x: i32, y: i32, w: i32, h: i32,
-    color: [u8; 4],
-    stride_px: i32,
-) {
+fn draw_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4], stride_px: i32) {
     // Top and bottom edges.
     for col in x..(x + w) {
-        if col >= 0 && col < CANVAS_W {
-            if y >= 0 && y < CANVAS_H {
+        if (0..CANVAS_W).contains(&col) {
+            if (0..CANVAS_H).contains(&y) {
                 let off = (y * stride_px * 4 + col * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
             let by = y + h - 1;
-            if by >= 0 && by < CANVAS_H {
+            if (0..CANVAS_H).contains(&by) {
                 let off = (by * stride_px * 4 + col * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
@@ -295,13 +308,13 @@ fn draw_rect(
     }
     // Left and right edges.
     for row in y..(y + h) {
-        if row >= 0 && row < CANVAS_H {
-            if x >= 0 && x < CANVAS_W {
+        if (0..CANVAS_H).contains(&row) {
+            if (0..CANVAS_W).contains(&x) {
                 let off = (row * stride_px * 4 + x * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
             let rx = x + w - 1;
-            if rx >= 0 && rx < CANVAS_W {
+            if (0..CANVAS_W).contains(&rx) {
                 let off = (row * stride_px * 4 + rx * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
@@ -313,8 +326,14 @@ fn draw_rect(
 
 /// Pending draw queued while the layer surface is not yet configured.
 enum PendingDraw {
-    Candidates { candidates: Vec<String>, focused: u32, sel_keys: String },
-    Status { indicator: String },
+    Candidates {
+        candidates: Vec<String>,
+        focused: u32,
+        sel_keys: String,
+    },
+    Status {
+        indicator: String,
+    },
 }
 
 /// What's currently on the surface.
@@ -417,7 +436,9 @@ impl CandidateWindow {
             return;
         }
         if !self.configured {
-            self.pending = Some(PendingDraw::Status { indicator: indicator.to_string() });
+            self.pending = Some(PendingDraw::Status {
+                indicator: indicator.to_string(),
+            });
             return;
         }
         self.do_draw_status(indicator, qh);
@@ -453,10 +474,12 @@ impl CandidateWindow {
         let size = (CANVAS_W * CANVAS_H * 4) as usize;
         let ptr = unsafe {
             mmap(
-                ptr::null_mut(), size,
+                ptr::null_mut(),
+                size,
                 ProtFlags::READ | ProtFlags::WRITE,
                 MapFlags::SHARED,
-                &buf.fd, 0,
+                &buf.fd,
+                0,
             )? as *mut u8
         };
         let pixels = unsafe { std::slice::from_raw_parts_mut(ptr, size) };
@@ -474,7 +497,9 @@ impl CandidateWindow {
         sel_keys: &str,
         qh: &QueueHandle<WaylandState>,
     ) {
-        if !self.ensure_buffer(qh) { return; }
+        if !self.ensure_buffer(qh) {
+            return;
+        }
         render_candidates(
             &self.buf.as_ref().unwrap().fd,
             &self.font,
@@ -486,7 +511,9 @@ impl CandidateWindow {
     }
 
     fn do_draw_status(&mut self, indicator: &str, qh: &QueueHandle<WaylandState>) {
-        if !self.ensure_buffer(qh) { return; }
+        if !self.ensure_buffer(qh) {
+            return;
+        }
         render_status(&self.buf.as_ref().unwrap().fd, &self.font, indicator);
         self.commit_buffer();
     }
@@ -517,16 +544,16 @@ impl CandidateWindow {
     }
 
     /// Called by the event dispatcher when a configure event is received.
-    pub fn handle_configure(
-        &mut self,
-        serial: u32,
-        qh: &QueueHandle<WaylandState>,
-    ) {
+    pub fn handle_configure(&mut self, serial: u32, qh: &QueueHandle<WaylandState>) {
         self.layer_surface.ack_configure(serial);
         self.configured = true;
 
         match self.pending.take() {
-            Some(PendingDraw::Candidates { candidates, focused, sel_keys }) => {
+            Some(PendingDraw::Candidates {
+                candidates,
+                focused,
+                sel_keys,
+            }) => {
                 self.do_draw_candidates(&candidates, focused, &sel_keys, qh);
                 self.state = DisplayState::Candidates;
             }
@@ -551,7 +578,11 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylandState {
         qh: &QueueHandle<Self>,
     ) {
         match event {
-            zwlr_layer_surface_v1::Event::Configure { serial, width: _, height: _ } => {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width: _,
+                height: _,
+            } => {
                 for cw in &mut state.candidate_windows {
                     if cw.owns_layer_surface(proxy) {
                         cw.handle_configure(serial, qh);
@@ -561,7 +592,9 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylandState {
             }
             zwlr_layer_surface_v1::Event::Closed => {
                 tracing::warn!("layer surface closed — removing window for that output");
-                state.candidate_windows.retain(|cw| !cw.owns_layer_surface(proxy));
+                state
+                    .candidate_windows
+                    .retain(|cw| !cw.owns_layer_surface(proxy));
             }
             _ => {}
         }
@@ -570,56 +603,84 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for WaylandState {
 
 impl Dispatch<wl_output::WlOutput, ()> for WaylandState {
     fn event(
-        _: &mut Self, _: &wl_output::WlOutput,
+        _: &mut Self,
+        _: &wl_output::WlOutput,
         _: wl_output::Event,
-        _: &(), _: &Connection, _: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<ZwlrLayerShellV1, ()> for WaylandState {
     fn event(
-        _state: &mut Self, _proxy: &ZwlrLayerShellV1,
+        _state: &mut Self,
+        _proxy: &ZwlrLayerShellV1,
         _event: zwlr_layer_shell_v1::Event,
-        _: &(), _conn: &Connection, _qh: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<wl_surface::WlSurface, ()> for WaylandState {
     fn event(
-        _state: &mut Self, _proxy: &wl_surface::WlSurface,
+        _state: &mut Self,
+        _proxy: &wl_surface::WlSurface,
         _event: wl_surface::Event,
-        _: &(), _conn: &Connection, _qh: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<wl_compositor::WlCompositor, ()> for WaylandState {
     fn event(
-        _state: &mut Self, _proxy: &wl_compositor::WlCompositor,
+        _state: &mut Self,
+        _proxy: &wl_compositor::WlCompositor,
         _event: wl_compositor::Event,
-        _: &(), _conn: &Connection, _qh: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<wl_shm::WlShm, ()> for WaylandState {
     fn event(
-        _state: &mut Self, _proxy: &wl_shm::WlShm,
+        _state: &mut Self,
+        _proxy: &wl_shm::WlShm,
         _event: wl_shm::Event,
-        _: &(), _conn: &Connection, _qh: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<wl_shm_pool::WlShmPool, ()> for WaylandState {
     fn event(
-        _state: &mut Self, _proxy: &wl_shm_pool::WlShmPool,
+        _state: &mut Self,
+        _proxy: &wl_shm_pool::WlShmPool,
         _event: wl_shm_pool::Event,
-        _: &(), _conn: &Connection, _qh: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<wl_buffer::WlBuffer, ()> for WaylandState {
     fn event(
-        _state: &mut Self, _proxy: &wl_buffer::WlBuffer,
+        _state: &mut Self,
+        _proxy: &wl_buffer::WlBuffer,
         _event: wl_buffer::Event,
-        _: &(), _conn: &Connection, _qh: &QueueHandle<Self>,
-    ) {}
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
 }

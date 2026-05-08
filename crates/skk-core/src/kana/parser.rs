@@ -38,7 +38,7 @@ pub fn parse_table(src: &str) -> Result<KanaTable, KanaTableError> {
             Some(pos) => &raw[..pos],
             None => raw,
         };
-        let line = line.trim_end_matches(|c: char| matches!(c, ' ' | '\t' | '\r' | '\n'));
+        let line = line.trim_end_matches(|c| [' ', '\t', '\r', '\n'].contains(&c));
 
         if line.is_empty() {
             continue;
@@ -47,10 +47,22 @@ pub fn parse_table(src: &str) -> Result<KanaTable, KanaTableError> {
         // Section headers
         if line.starts_with('[') {
             match line {
-                "[meta]" => { section = Section::Meta; continue; }
-                "[trans]" => { section = Section::Trans; continue; }
-                "[trans.katakana]" => { section = Section::TransKatakana; continue; }
-                "[okuri_alias]" => { section = Section::OkuriAlias; continue; }
+                "[meta]" => {
+                    section = Section::Meta;
+                    continue;
+                }
+                "[trans]" => {
+                    section = Section::Trans;
+                    continue;
+                }
+                "[trans.katakana]" => {
+                    section = Section::TransKatakana;
+                    continue;
+                }
+                "[okuri_alias]" => {
+                    section = Section::OkuriAlias;
+                    continue;
+                }
                 other => {
                     return Err(KanaTableError::Parse {
                         line: line_num,
@@ -161,7 +173,9 @@ fn parse_input_spec(s: &str, line_num: usize) -> Result<KanaInput, KanaTableErro
     let mut chars = unescaped.chars();
     let c = chars.next().ok_or_else(|| err("input field is empty"))?;
     if chars.next().is_some() {
-        return Err(err(&format!("input field must be a single character, got: {s:?}")));
+        return Err(err(&format!(
+            "input field must be a single character, got: {s:?}"
+        )));
     }
     Ok(KanaInput::Char(c))
 }
@@ -203,7 +217,12 @@ fn parse_trans_line(line: &str, line_num: usize) -> Result<KanaTransition, KanaT
     let to = unescape(fields[2], line_num)?;
     let output = unescape(fields.get(3).copied().unwrap_or(""), line_num)?;
 
-    Ok(KanaTransition { from, input, to, output })
+    Ok(KanaTransition {
+        from,
+        input,
+        to,
+        output,
+    })
 }
 
 /// Parses a single line from `[okuri_alias]`.
@@ -256,7 +275,10 @@ c\tk
         let table = parse_table(SIMPLE_TABLE).unwrap();
 
         let r = table.transition("", 'k', super::super::table::KanaMode::Hiragana);
-        assert!(matches!(r, super::super::table::TransitionResult::Ok { .. }));
+        assert!(matches!(
+            r,
+            super::super::table::TransitionResult::Ok { .. }
+        ));
 
         assert_eq!(table.okuri_key('c'), 'k');
         assert_eq!(table.okuri_key('k'), 'k');
@@ -269,17 +291,23 @@ c\tk
 
         // n + a → な (exact match takes priority over wildcard)
         let r = table.transition("n", 'a', KanaMode::Hiragana);
-        assert_eq!(r, super::super::table::TransitionResult::Ok {
-            output: "な".into(),
-            next_state: "".into(),
-        });
+        assert_eq!(
+            r,
+            super::super::table::TransitionResult::Ok {
+                output: "な".into(),
+                next_state: "".into(),
+            }
+        );
 
         // n + k → ん via wildcard; 'k' is retried from the start state (OkRetry)
         let r = table.transition("n", 'k', KanaMode::Hiragana);
-        assert_eq!(r, super::super::table::TransitionResult::OkRetry {
-            output: "ん".into(),
-            retry: 'k',
-        });
+        assert_eq!(
+            r,
+            super::super::table::TransitionResult::OkRetry {
+                output: "ん".into(),
+                retry: 'k',
+            }
+        );
     }
 
     #[test]
@@ -288,10 +316,13 @@ c\tk
         let table = parse_table(src).unwrap();
         use super::super::table::KanaMode;
         let r = table.transition("", '#', KanaMode::Hiragana);
-        assert_eq!(r, super::super::table::TransitionResult::Ok {
-            output: "＃".into(),
-            next_state: "".into(),
-        });
+        assert_eq!(
+            r,
+            super::super::table::TransitionResult::Ok {
+                output: "＃".into(),
+                next_state: "".into(),
+            }
+        );
     }
 
     #[test]
@@ -301,16 +332,22 @@ c\tk
         use super::super::table::KanaMode;
         // '\*' is now a literal '*', not a wildcard — 'x' should be NoMatch
         let r = table.transition("", 'x', KanaMode::Hiragana);
-        assert_eq!(r, super::super::table::TransitionResult::NoMatch {
-            flush: "".into(),
-            retry: None,
-        });
+        assert_eq!(
+            r,
+            super::super::table::TransitionResult::NoMatch {
+                flush: "".into(),
+                retry: None,
+            }
+        );
         // '*' key itself should produce "＊"
         let r = table.transition("", '*', KanaMode::Hiragana);
-        assert_eq!(r, super::super::table::TransitionResult::Ok {
-            output: "＊".into(),
-            next_state: "".into(),
-        });
+        assert_eq!(
+            r,
+            super::super::table::TransitionResult::Ok {
+                output: "＊".into(),
+                next_state: "".into(),
+            }
+        );
     }
 
     #[test]
@@ -319,10 +356,13 @@ c\tk
         let table = parse_table(src).unwrap();
         use super::super::table::KanaMode;
         let r = table.transition("", '\\', KanaMode::Hiragana);
-        assert_eq!(r, super::super::table::TransitionResult::Ok {
-            output: "Ｘ".into(),
-            next_state: "".into(),
-        });
+        assert_eq!(
+            r,
+            super::super::table::TransitionResult::Ok {
+                output: "Ｘ".into(),
+                next_state: "".into(),
+            }
+        );
     }
 
     #[test]
@@ -332,10 +372,13 @@ c\tk
         let table = parse_table(src).unwrap();
         use super::super::table::KanaMode;
         let r = table.transition("", '#', KanaMode::Hiragana);
-        assert_eq!(r, super::super::table::TransitionResult::Ok {
-            output: "＃".into(),
-            next_state: "".into(),
-        });
+        assert_eq!(
+            r,
+            super::super::table::TransitionResult::Ok {
+                output: "＃".into(),
+                next_state: "".into(),
+            }
+        );
     }
 
     #[test]
