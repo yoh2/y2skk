@@ -30,8 +30,10 @@ pub struct KanaTable {
     transitions: Vec<KanaTransition>,
     /// Katakana-mode overrides from `[trans.katakana]`
     kata_overrides: Vec<KanaTransition>,
-    /// Okurigana dictionary key aliases from `[okuri_alias]` (input_char → alias_char)
-    okuri_aliases: HashMap<char, char>,
+    /// Okurigana dictionary key aliases from `[okuri_alias]` (pre-state → alias key).
+    /// The key is the kana_table state immediately before the final kana emission;
+    /// the value is the dictionary lookup character (or string) to use for that path.
+    okuri_aliases: HashMap<String, String>,
 }
 
 /// Kana conversion mode
@@ -62,7 +64,7 @@ impl KanaTable {
     pub fn new(
         transitions: Vec<KanaTransition>,
         kata_overrides: Vec<KanaTransition>,
-        okuri_aliases: HashMap<char, char>,
+        okuri_aliases: HashMap<String, String>,
     ) -> Self {
         Self {
             transitions,
@@ -155,10 +157,30 @@ impl KanaTable {
         }
     }
 
-    /// Resolves the okurigana dictionary key for the given input character.
-    /// Returns the alias if registered in `[okuri_alias]`, otherwise returns the character unchanged.
-    pub fn okuri_key(&self, input: char) -> char {
-        self.okuri_aliases.get(&input).copied().unwrap_or(input)
+    /// Resolves the okurigana dictionary key.
+    ///
+    /// `pre_state` is the kana_table state immediately before the transition that
+    /// emitted the final kana (e.g. "c" for the か output in "Ca", or "ch" for the
+    /// ち output in "Chi"). `input_char` is the input character of that final
+    /// transition; it is used only as a fallback when `pre_state` is empty.
+    ///
+    /// Lookup order:
+    /// 1. If `pre_state` is non-empty and registered in `[okuri_alias]`, return that alias.
+    /// 2. If `pre_state` is non-empty, return its first character (so e.g. state "ch"
+    ///    yields "c" for the ち row, distinct from state "c" which can be aliased).
+    /// 3. Otherwise (empty `pre_state` — e.g. vowel-only okurigana), look up `input_char`
+    ///    in `[okuri_alias]` for backward compatibility, falling back to the character itself.
+    pub fn okuri_key(&self, pre_state: &str, input_char: char) -> String {
+        if !pre_state.is_empty() {
+            if let Some(alias) = self.okuri_aliases.get(pre_state) {
+                return alias.clone();
+            }
+            if let Some(first) = pre_state.chars().next() {
+                return first.to_string();
+            }
+        }
+        let key = input_char.to_string();
+        self.okuri_aliases.get(&key).cloned().unwrap_or(key)
     }
 
     /// Returns the effective transition list for the given mode.

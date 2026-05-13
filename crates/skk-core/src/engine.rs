@@ -1263,9 +1263,14 @@ impl SkkEngine {
 
         let lower = ch.to_ascii_lowercase();
 
+        // Snapshot the state immediately before this transition. When the transition
+        // emits the final okurigana (state returns to empty), this pre-state is used
+        // to resolve the dictionary lookup key via okuri_alias — so that paths like
+        // c→か (pre_state "c") and c→ch→ち (pre_state "ch") can be distinguished.
+        let pre_state = self.kana_state.clone();
         let result =
             self.kana_table
-                .transition(&self.kana_state.clone(), lower, KanaMode::Hiragana);
+                .transition(&pre_state, lower, KanaMode::Hiragana);
         match result {
             TransitionResult::Ok { output, next_state } => {
                 self.kana_state = next_state;
@@ -1273,7 +1278,7 @@ impl SkkEngine {
                     kana_buf.push_str(&output);
                     if self.kana_state.is_empty() {
                         // Okurigana is complete; start conversion.
-                        let okuri_key = self.kana_table.okuri_key(okuri_prefix).to_string();
+                        let okuri_key = self.kana_table.okuri_key(&pre_state, lower);
                         self.phase = SkkPhase::Hiragana;
                         return self.start_conversion(midashi, Some((okuri_key, kana_buf)));
                     }
@@ -1293,7 +1298,7 @@ impl SkkEngine {
                 // the retry character is dropped since we cannot re-dispatch here.
                 self.kana_state.clear();
                 if !output.is_empty() {
-                    let okuri_key = self.kana_table.okuri_key(okuri_prefix).to_string();
+                    let okuri_key = self.kana_table.okuri_key(&pre_state, lower);
                     kana_buf.push_str(&output);
                     self.phase = SkkPhase::Hiragana;
                     return self.start_conversion(midashi, Some((okuri_key, kana_buf)));
@@ -4056,6 +4061,92 @@ mod tests {
         // Space starts conversion
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
         eng.phase.clone()
+    }
+
+    /// State-based okuri_alias regression: when typing okurigana in DvorakJP, the
+    /// dictionary lookup key must reflect the kana-table path taken (not just the
+    /// first input character).  Before this fix the okuri_alias `c -> k` was applied
+    /// unconditionally, so "OChi" (which goes c -> ch -> ち) wrongly looked up
+    /// `おk` instead of `おc`, breaking 落ち etc.
+    #[test]
+    fn test_dvorakjp_okuri_key_path_sensitive() {
+        use std::sync::Mutex;
+
+        struct RecordingDict {
+            calls: Mutex<Vec<(String, Option<String>)>>,
+        }
+        impl DictionaryProvider for RecordingDict {
+            fn lookup(&self, midashi: &str, okuri: Option<&str>) -> Option<DictEntry> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((midashi.to_string(), okuri.map(|s| s.to_string())));
+                None
+            }
+            fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> {
+                Ok(())
+            }
+        }
+
+        // Each case: (description, key sequence, expected (midashi, okuri_key))
+        // Key sequence is a string where uppercase letters are interpreted as
+        // Shift+letter (which is how SKK starts okurigana).
+        let cases: &[(&str, &str, &str, &str)] = &[
+            // c-row alias path: c+a -> か, pre_state "c" -> alias 'k'.
+            ("OCa", "OCa", "お", "k"),
+            // ち row via ch path: pre_state "ch" -> default first char 'c'.
+            ("OChi", "OChi", "お", "c"),
+            // 拗音 alias via cy path: pre_state "cy" -> alias 'k' (new cy entry).
+            ("OCya", "OCya", "お", "k"),
+            // k-row regression: pre_state "k" -> default 'k'.
+            ("OKi", "OKi", "お", "k"),
+            // Vowel-only okurigana: pre_state "" -> input char 'a'.
+            ("OA", "OA", "お", "a"),
+        ];
+
+        for (label, seq, want_midashi, want_okuri) in cases {
+            let mut eng = dvorakjp_engine();
+            let recorder = std::sync::Arc::new(RecordingDict {
+                calls: Mutex::new(Vec::new()),
+            });
+            // The engine owns its dictionary list; clone-by-Arc isn't supported here,
+            // so we register a fresh recorder per case and read its captured calls.
+            struct DictRef(std::sync::Arc<RecordingDict>);
+            impl DictionaryProvider for DictRef {
+                fn lookup(&self, midashi: &str, okuri: Option<&str>) -> Option<DictEntry> {
+                    self.0.lookup(midashi, okuri)
+                }
+                fn learn(&mut self, _entry: DictEntry) -> Result<(), DictError> {
+                    Ok(())
+                }
+            }
+            eng.add_dict(Box::new(DictRef(recorder.clone())));
+
+            for ch in seq.chars() {
+                let key = KeyEvent::press(Key::Char(ch), Modifiers::empty());
+                eng.process_key(&key);
+            }
+
+            let calls = recorder.calls.lock().unwrap();
+            assert!(
+                !calls.is_empty(),
+                "{}: dictionary lookup should have been invoked",
+                label
+            );
+            let (midashi, okuri) = &calls[0];
+            assert_eq!(
+                midashi, want_midashi,
+                "{}: midashi mismatch (got {:?})",
+                label, midashi
+            );
+            assert_eq!(
+                okuri.as_deref(),
+                Some(*want_okuri),
+                "{}: okuri_key mismatch (got {:?})",
+                label,
+                okuri
+            );
+        }
     }
 
     /// Defined 1-letter fullwidth symbols in dvorakjp-us should commit the fullwidth variant.

@@ -17,7 +17,7 @@ pub enum KanaTableError {
 pub fn parse_table(src: &str) -> Result<KanaTable, KanaTableError> {
     let mut transitions: Vec<KanaTransition> = Vec::new();
     let mut kata_overrides: Vec<KanaTransition> = Vec::new();
-    let mut okuri_aliases: HashMap<char, char> = HashMap::new();
+    let mut okuri_aliases: HashMap<String, String> = HashMap::new();
 
     #[derive(PartialEq, Eq)]
     enum Section {
@@ -182,17 +182,6 @@ fn parse_input_spec(s: &str, line_num: usize) -> Result<KanaInput, KanaTableErro
 
 /// Parses the input field into a single `char`.
 /// Used for `[okuri_alias]` entries where `KanaInput::Wildcard` is not meaningful.
-fn parse_alias_char(s: &str, line_num: usize) -> Result<char, KanaTableError> {
-    let err = |msg: &str| KanaTableError::Parse {
-        line: line_num,
-        message: msg.to_string(),
-    };
-    match parse_input_spec(s, line_num)? {
-        KanaInput::Char(c) => Ok(c),
-        KanaInput::Wildcard => Err(err("wildcard `*` is not valid in okuri_alias")),
-    }
-}
-
 /// Parses a single line from `[trans]` or `[trans.katakana]`.
 /// Format: `from TAB input TAB to TAB output` (4 tab-separated fields)
 fn parse_trans_line(line: &str, line_num: usize) -> Result<KanaTransition, KanaTableError> {
@@ -226,11 +215,13 @@ fn parse_trans_line(line: &str, line_num: usize) -> Result<KanaTransition, KanaT
 }
 
 /// Parses a single line from `[okuri_alias]`.
-/// Format: `from TAB to` (2 tab-separated fields)
+/// Format: `pre_state TAB okuri_key` (2 tab-separated fields).
+/// Both fields may be multi-character (typically a kana_table intermediate state
+/// like "c", "cy", "ch" on the left; a dictionary lookup key on the right).
 fn parse_okuri_alias_line(
     line: &str,
     line_num: usize,
-    map: &mut HashMap<char, char>,
+    map: &mut HashMap<String, String>,
 ) -> Result<(), KanaTableError> {
     let err = |msg: &str| KanaTableError::Parse {
         line: line_num,
@@ -242,8 +233,14 @@ fn parse_okuri_alias_line(
         return Err(err("expected 2 tab-separated fields in okuri_alias"));
     }
 
-    let from = parse_alias_char(fields[0], line_num)?;
-    let to = parse_alias_char(fields[1], line_num)?;
+    let from = unescape(fields[0], line_num)?;
+    let to = unescape(fields[1], line_num)?;
+    if from.is_empty() {
+        return Err(err("okuri_alias key must not be empty"));
+    }
+    if to.is_empty() {
+        return Err(err("okuri_alias value must not be empty"));
+    }
     map.insert(from, to);
     Ok(())
 }
@@ -280,8 +277,15 @@ c\tk
             super::super::table::TransitionResult::Ok { .. }
         ));
 
-        assert_eq!(table.okuri_key('c'), 'k');
-        assert_eq!(table.okuri_key('k'), 'k');
+        // State "c" matches the alias `c -> k`.
+        assert_eq!(table.okuri_key("c", 'a'), "k");
+        // State "k" has no alias; falls back to the first character of the state.
+        assert_eq!(table.okuri_key("k", 'a'), "k");
+        // Empty pre-state falls back to the input character (with alias lookup
+        // for backward compatibility — here 'c' is aliased to "k").
+        assert_eq!(table.okuri_key("", 'c'), "k");
+        // Empty pre-state and unaliased input character: returns the character itself.
+        assert_eq!(table.okuri_key("", 'a'), "a");
     }
 
     #[test]
@@ -394,8 +398,22 @@ c\tk
     }
 
     #[test]
-    fn test_wildcard_in_okuri_alias_errors() {
-        let src = "[okuri_alias]\n*\tk\n";
+    fn test_multi_char_okuri_alias_key() {
+        // State-keyed okuri_alias: "cy" (state) → "k" (lookup key).
+        let src = "[okuri_alias]\ncy\tk\n";
+        let table = parse_table(src).unwrap();
+        assert_eq!(table.okuri_key("cy", 'a'), "k");
+        // A different state is unaffected and falls back to its first character.
+        assert_eq!(table.okuri_key("ch", 'i'), "c");
+    }
+
+    #[test]
+    fn test_empty_okuri_alias_field_errors() {
+        // Empty value side should be rejected.
+        let src = "[okuri_alias]\nc\t\n";
+        assert!(parse_table(src).is_err());
+        // Empty key side should be rejected.
+        let src = "[okuri_alias]\n\tk\n";
         assert!(parse_table(src).is_err());
     }
 }

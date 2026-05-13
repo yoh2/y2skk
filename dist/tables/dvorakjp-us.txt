@@ -802,5 +802,9 @@ vy	x		ゔぃん
 [trans.katakana]
 
 [okuri_alias]
-# DvorakJP: c-row okuri keys map to k (か行) for dictionary lookup
+# DvorakJP: c-row / cy-row okuri keys map to k (か行) for dictionary lookup.
+# Keys are kana_table intermediate states immediately before the final kana emission.
+# State "ch" is intentionally NOT listed — it falls back to first char 'c',
+# preserving ち-row okurigana (e.g. OChi -> "おc" entries like 落ち).
 c	k
+cy	k
