@@ -324,10 +324,32 @@ fn systemctl_try_restart(unit: &str) {
 
 /// Kill any running `y2skk-wayland` so KWin relaunches with the freshly
 /// installed binary. `pkill` exits with status 1 when no process matched;
-/// we treat that as success (just means there was nothing to kill).
+/// we treat that as success (just means there was nothing to kill). Any
+/// other failure (pkill missing, syntax error, permission denied, signal
+/// abort) is surfaced as a warning so the user knows an old adapter may
+/// still be running.
 fn pkill_wayland() {
     println!("==> pkill -x y2skk-wayland (kwin will relaunch with the new binary)");
-    let _ = Command::new("pkill").args(["-x", "y2skk-wayland"]).status();
+    match Command::new("pkill").args(["-x", "y2skk-wayland"]).status() {
+        Ok(status) => match status.code() {
+            Some(0) | Some(1) => {} // 0 = matched; 1 = nothing to kill
+            Some(code) => {
+                eprintln!(
+                    "warning: pkill exited with status {code}; old y2skk-wayland may still be running"
+                );
+            }
+            None => {
+                eprintln!(
+                    "warning: pkill terminated by signal; old y2skk-wayland may still be running"
+                );
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "warning: failed to spawn pkill ({e}); old y2skk-wayland may still be running"
+            );
+        }
+    }
 }
 
 // ── daemon ─────────────────────────────────────────────────────────────────────
