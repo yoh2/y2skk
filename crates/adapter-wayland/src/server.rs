@@ -34,9 +34,10 @@ use crate::keymap;
 const TAG_STATUS_HIDE: u8 = 1;
 /// Byte written to the timer pipe for each key-repeat tick.
 const TAG_KEY_REPEAT: u8 = 2;
-/// Byte written to the timer pipe by the heartbeat thread roughly once per
-/// minute. The main loop logs a short summary of its IME state on receipt so
-/// long passthrough periods can be distinguished from a stuck event loop.
+/// Byte written to the timer pipe by the heartbeat thread every
+/// `HEARTBEAT_INTERVAL`. The main loop logs a short summary of its IME
+/// state on receipt so long passthrough periods can be distinguished
+/// from a stuck event loop.
 const TAG_HEARTBEAT: u8 = 3;
 /// Interval between heartbeat ticks.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
