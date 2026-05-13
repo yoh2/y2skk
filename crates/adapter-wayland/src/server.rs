@@ -34,6 +34,12 @@ use crate::keymap;
 const TAG_STATUS_HIDE: u8 = 1;
 /// Byte written to the timer pipe for each key-repeat tick.
 const TAG_KEY_REPEAT: u8 = 2;
+/// Byte written to the timer pipe by the heartbeat thread roughly once per
+/// minute. The main loop logs a short summary of its IME state on receipt so
+/// long passthrough periods can be distinguished from a stuck event loop.
+const TAG_HEARTBEAT: u8 = 3;
+/// Interval between heartbeat ticks.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Marker user-data for the wl_keyboard obtained via wl_seat.get_keyboard.
 /// Gives it a distinct Dispatch impl from the IM-grabbed keyboard (which
@@ -73,7 +79,12 @@ fn keysym_repeats(keysym: u32) -> bool {
 
 struct ActiveContext {
     context: ZwpInputMethodContextV1,
-    keyboard: WlKeyboard,
+    /// The IM-grabbed wl_keyboard. Kept alive (no longer explicitly released)
+    /// for the lifetime of this ActiveContext so wayland-client keeps routing
+    /// Modifiers/Key events to our Dispatch impl. KWin invalidates the
+    /// underlying object server-side when Deactivate fires, so the proxy is
+    /// just dropped at that point.
+    _keyboard: WlKeyboard,
     handle: LocalHandle,
     serial: u32,
     skk_mods: u32,
@@ -317,7 +328,12 @@ impl WaylandState {
         let (handle, serial, skk_mods) = match self.active.as_ref() {
             Some(a) => (a.handle, a.serial, a.skk_mods),
             None => {
-                tracing::debug!("on_key: no active context, dropping event");
+                // Visible at the default info level: this almost certainly
+                // means the IME thinks it is inactive while keys are still
+                // being delivered to its grabbed wl_keyboard (state desync).
+                tracing::warn!(
+                    "on_key: no active context, dropping event (code={keycode}, sym={keysym:#x})"
+                );
                 return false;
             }
         };
@@ -514,17 +530,25 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
         match event {
             zwp_input_method_v1::Event::Activate { id } => {
                 if let Some(prev) = state.active.take() {
-                    tracing::warn!("new activation before previous deactivation — cleaning up");
+                    tracing::warn!(
+                        handle = prev.handle,
+                        "new activation before previous deactivation — cleaning up"
+                    );
                     state.client.destroy_handle(prev.handle);
-                    prev.keyboard.release();
-                    prev.context.destroy();
+                    // Same rationale as the Deactivate branch: do not call
+                    // prev.keyboard.release() or prev.context.destroy() — when
+                    // a fresh Activate arrives without an intervening Deactivate,
+                    // KWin has likely already invalidated the previous keyboard
+                    // and context server-side, so sending the destructor would
+                    // crash the wl_display connection.
+                    drop(prev);
                 }
                 let handle = state.client.create_handle("wayland");
                 let keyboard = id.grab_keyboard(qh, ());
                 tracing::info!(handle, "input context activated");
                 state.active = Some(ActiveContext {
                     context: id,
-                    keyboard,
+                    _keyboard: keyboard,
                     handle,
                     serial: 0,
                     skk_mods: 0,
@@ -537,8 +561,16 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
                 if let Some(active) = state.active.take() {
                     tracing::info!(handle = active.handle, "input context deactivated");
                     state.client.destroy_handle(active.handle);
-                    active.keyboard.release();
-                    // Do not call context.destroy(): KWin frees it server-side on deactivate.
+                    // Do NOT call active.keyboard.release() or active.context.destroy():
+                    // KWin invalidates both the grabbed wl_keyboard and the
+                    // zwp_input_method_context_v1 server-side when it sends Deactivate.
+                    // Sending the destructor request hits a dead object and crashes the
+                    // whole wl_display connection with "invalid object" (observed
+                    // 2026-05-14 under rapid Activate/Deactivate from Slack focus
+                    // churn). Dropping the proxies without sending the destructor is
+                    // safe — the wayland-client crate does not auto-send destructors
+                    // on Drop.
+                    drop(active);
                 }
             }
             _ => {}
@@ -702,6 +734,14 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
             } => {
                 let new_skk_mods = keymap::xkb_mods_to_skk(mods_depressed, mods_latched);
                 let old_skk_mods = state.active.as_ref().map(|a| a.skk_mods).unwrap_or(0);
+                // Visible at info level so we can confirm that the IM-grabbed
+                // wl_keyboard is still receiving events when the passthrough
+                // issue is reproduced.
+                tracing::info!(
+                    "modifiers event: dep={mods_depressed:#x} lat={mods_latched:#x} \
+                     lock={mods_locked:#x} group={group} active={}",
+                    state.active.is_some()
+                );
                 if let Some(active) = &mut state.active {
                     active.skk_mods = new_skk_mods;
                     if let Some(xkb) = &mut active.xkb_state {
@@ -780,6 +820,24 @@ pub fn run() -> anyhow::Result<()> {
         rustix::pipe::PipeFlags::NONBLOCK | rustix::pipe::PipeFlags::CLOEXEC,
     )?;
 
+    // Heartbeat: a dedicated thread writes TAG_HEARTBEAT to the timer pipe
+    // every HEARTBEAT_INTERVAL so the main loop emits a periodic state log.
+    // This makes "main loop alive but no IME events arriving" distinguishable
+    // from "main loop wedged" in the journalctl trace.
+    {
+        let fd = timer_write.as_fd().try_clone_to_owned()?;
+        std::thread::Builder::new()
+            .name("y2skk-heartbeat".into())
+            .spawn(move || loop {
+                std::thread::sleep(HEARTBEAT_INTERVAL);
+                if rustix::io::write(&fd, &[TAG_HEARTBEAT]).is_err() {
+                    // Main process is gone; the pipe write end can only fail
+                    // when the reader has been closed. Bail out of the thread.
+                    break;
+                }
+            })?;
+    }
+
     let mut state = WaylandState::new(timer_write)?;
     state.qh = Some(qh.clone());
 
@@ -828,6 +886,7 @@ pub fn run() -> anyhow::Result<()> {
         let mut buf = [0u8; 32];
         let mut hide_status = false;
         let mut repeat_ticks: u32 = 0;
+        let mut heartbeats: u32 = 0;
         loop {
             match rustix::io::read(&timer_read, &mut buf) {
                 Ok(n) if n > 0 => {
@@ -835,12 +894,21 @@ pub fn run() -> anyhow::Result<()> {
                         match b {
                             TAG_STATUS_HIDE => hide_status = true,
                             TAG_KEY_REPEAT => repeat_ticks += 1,
+                            TAG_HEARTBEAT => heartbeats += 1,
                             _ => {}
                         }
                     }
                 }
                 _ => break,
             }
+        }
+        if heartbeats > 0 {
+            let handle = state.active.as_ref().map(|a| a.handle);
+            tracing::info!(
+                "heartbeat: ticks={heartbeats} active={} handle={handle:?} repeat_active={}",
+                state.active.is_some(),
+                state.repeat_active.is_some()
+            );
         }
         if hide_status {
             for cw in &mut state.candidate_windows {
@@ -870,8 +938,18 @@ pub fn run() -> anyhow::Result<()> {
         }
 
         // Process any buffered Wayland events and flush pending sends.
-        event_queue.dispatch_pending(&mut state)?;
-        let _ = event_queue.flush();
+        if let Err(e) = event_queue.dispatch_pending(&mut state) {
+            tracing::error!("dispatch_pending error: {e}");
+            return Err(e.into());
+        }
+        if let Err(e) = event_queue.flush() {
+            let msg = e.to_string();
+            if msg.contains("Protocol error") {
+                tracing::error!("wl_display flush: protocol error, exiting: {msg}");
+                anyhow::bail!("Wayland protocol error during flush: {msg}");
+            }
+            tracing::warn!("wl_display flush error: {msg}");
+        }
 
         // Wait for the next event (Wayland socket or timer pipe).
         let Some(guard) = event_queue.prepare_read() else {
@@ -891,11 +969,20 @@ pub fn run() -> anyhow::Result<()> {
                 tv_nsec: remaining.subsec_nanos() as _,
             }
         });
-        let _ = poll(&mut fds, timeout.as_ref());
+        if let Err(e) = poll(&mut fds, timeout.as_ref()) {
+            tracing::warn!("poll error: {e}");
+        }
 
         // Only read from the Wayland socket if it actually fired.
         if fds[0].revents().contains(PollFlags::IN) {
-            let _ = guard.read();
+            if let Err(e) = guard.read() {
+                let msg = e.to_string();
+                if msg.contains("Protocol error") {
+                    tracing::error!("wl_display read: protocol error, exiting: {msg}");
+                    anyhow::bail!("Wayland protocol error during read: {msg}");
+                }
+                tracing::warn!("wl_display read error: {msg}");
+            }
         }
         // Otherwise drop the guard; the timer-pipe path is handled next iteration.
     }
