@@ -525,11 +525,13 @@ impl CandidateWindow {
         }
     }
 
-    /// Same as `fade_out_cand_buf` but for the (smaller) indicator buffer
-    /// in overlay-panel mode. In layer-shell fallback the indicator is
-    /// drawn on the candidate-sized buffer, so this is a no-op then and
-    /// `fade_out_cand_buf` is what runs from hide_status's caller chain
-    /// — but here we keep the symmetry for the overlay-mode path.
+    /// Fade out whichever buffer currently shows the indicator. In
+    /// overlay-panel mode the indicator lives on its own small buffer
+    /// (`ind_buf`); in the layer-shell fallback we drew the indicator
+    /// box onto the candidate-sized buffer (`cand_buf`) and so we fade
+    /// that one instead. Either way the surface is left attached but
+    /// fully transparent so KWin removes the panel from view (see
+    /// `fade_out_cand_buf` for why we don't use `attach(None)`).
     fn fade_out_ind_buf(&mut self) {
         if self.backend.is_overlay() {
             if let Some(buf) = self.ind_buf.as_ref() {
