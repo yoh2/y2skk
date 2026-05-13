@@ -150,6 +150,14 @@ fn fill_transparent(canvas: &mut Canvas<'_>) {
     }
 }
 
+/// Overwrite the given memfd-backed buffer with fully-transparent pixels.
+/// Used to "hide" a surface without releasing its proxy: we leave the
+/// surface attached (so the compositor keeps managing it) but render
+/// nothing visible into it.
+fn render_transparent(fd: &OwnedFd, width: i32, height: i32) {
+    with_mapped_canvas(fd, width, height, fill_transparent);
+}
+
 // ── Drawing primitives ────────────────────────────────────────────────────────
 
 fn draw_text(
@@ -465,7 +473,7 @@ impl CandidateWindow {
             return;
         }
         if self.state == DisplayState::Candidates {
-            self.detach();
+            self.fade_out_cand_buf();
             self.state = DisplayState::Empty;
         }
     }
@@ -494,17 +502,50 @@ impl CandidateWindow {
             return;
         }
         if self.state == DisplayState::Status {
-            self.detach();
+            self.fade_out_ind_buf();
             self.state = DisplayState::Empty;
         }
     }
 
-    /// Detach the current buffer so the compositor renders nothing on this
-    /// surface. The surface itself stays around; subsequent show/show_status
-    /// will re-attach a buffer and bring it back.
-    fn detach(&mut self) {
-        self.surface.attach(None, 0, 0);
-        self.surface.commit();
+    /// Replace the currently-visible candidate buffer with a fully transparent
+    /// payload and re-commit. `wl_surface::attach(None)` would be the
+    /// canonical "no content" signal, but KWin keeps a stale input-panel
+    /// overlay visible at its last (sometimes upward-shifted) position when
+    /// it sees that and we don't get a real "hide" until the user moves
+    /// focus, switches mode, or hovers the cursor over the leftover window.
+    /// Attaching a transparent buffer of the same size and damaging the
+    /// whole region forces KWin to render the surface again and the user
+    /// sees it disappear immediately.
+    fn fade_out_cand_buf(&mut self) {
+        if let Some(buf) = self.cand_buf.as_ref() {
+            render_transparent(&buf.fd, buf.width, buf.height);
+            self.surface.attach(Some(&buf.buffer), 0, 0);
+            self.surface.damage_buffer(0, 0, buf.width, buf.height);
+            self.surface.commit();
+        }
+    }
+
+    /// Fade out whichever buffer currently shows the indicator. In
+    /// overlay-panel mode the indicator lives on its own small buffer
+    /// (`ind_buf`); in the layer-shell fallback we drew the indicator
+    /// box onto the candidate-sized buffer (`cand_buf`) and so we fade
+    /// that one instead. Either way the surface is left attached but
+    /// fully transparent so KWin removes the panel from view (see
+    /// `fade_out_cand_buf` for why we don't use `attach(None)`).
+    fn fade_out_ind_buf(&mut self) {
+        if self.backend.is_overlay() {
+            if let Some(buf) = self.ind_buf.as_ref() {
+                render_transparent(&buf.fd, buf.width, buf.height);
+                self.surface.attach(Some(&buf.buffer), 0, 0);
+                self.surface.damage_buffer(0, 0, buf.width, buf.height);
+                self.surface.commit();
+            }
+        } else if let Some(buf) = self.cand_buf.as_ref() {
+            render_transparent(&buf.fd, buf.width, buf.height);
+            self.surface.attach(Some(&buf.buffer), 0, 0);
+            self.surface.damage_buffer(0, 0, buf.width, buf.height);
+            self.surface.commit();
+        }
     }
 
     fn do_draw_candidates(
