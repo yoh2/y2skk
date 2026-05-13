@@ -178,7 +178,10 @@ fn main() {
             eprintln!("  --xim            XIM server (+ systemd service) only");
             eprintln!("  --gtk3           GTK3 IM module only");
             eprintln!("  --qt6            Qt6 IM plugin only");
-            eprintln!("  --wayland        Wayland adapter (+ KDE virtual-keyboard entry) only");
+            eprintln!("  --wayland        Wayland adapter (+ KDE virtual-keyboard entry) only.");
+            eprintln!("                   Always kills the running y2skk-wayland after install");
+            eprintln!("                   (outside packaging mode) so KWin relaunches the new");
+            eprintln!("                   binary on the next text-input focus.");
             eprintln!();
             eprintln!("OTHER:");
             eprintln!("  --restart        After install, run `systemctl --user try-restart`");
@@ -227,8 +230,7 @@ fn cmd_install(opts: Opts) {
     }
 
     // Optional service restart (opt-in, never in packaging mode).
-    // y2skk-wayland is launched on demand by KWin's virtual-keyboard
-    // mechanism, so it has no systemd unit to restart.
+    // Systemd-managed services (daemon, xim) are only touched with --restart.
     let did_restart = if opts.restart && !opts.mode.is_packaging() {
         let mut any = false;
         if opts.daemon {
@@ -243,6 +245,17 @@ fn cmd_install(opts: Opts) {
     } else {
         false
     };
+
+    // y2skk-wayland is launched on demand by KWin's virtual-keyboard
+    // mechanism, so it has no systemd unit. After a fresh binary lands,
+    // any process that is still running is using the old code, so kill it
+    // unconditionally — KWin will relaunch with the new binary the next
+    // time a text input activates. Skipped in packaging mode (which must
+    // not touch the running user environment) and treated as a success if
+    // no process was running.
+    if opts.wayland && !opts.mode.is_packaging() {
+        pkill_wayland();
+    }
 
     println!();
     println!("Installation complete.");
@@ -307,6 +320,14 @@ fn systemctl_try_restart(unit: &str) {
     let _ = Command::new("systemctl")
         .args(["--user", "try-restart", unit])
         .status();
+}
+
+/// Kill any running `y2skk-wayland` so KWin relaunches with the freshly
+/// installed binary. `pkill` exits with status 1 when no process matched;
+/// we treat that as success (just means there was nothing to kill).
+fn pkill_wayland() {
+    println!("==> pkill -x y2skk-wayland (kwin will relaunch with the new binary)");
+    let _ = Command::new("pkill").args(["-x", "y2skk-wayland"]).status();
 }
 
 // ── daemon ─────────────────────────────────────────────────────────────────────
