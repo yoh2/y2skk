@@ -86,7 +86,6 @@ struct ActiveContext {
     /// underlying object server-side when Deactivate fires, so the proxy is
     /// just dropped at that point.
     _keyboard: WlKeyboard,
-    handle: LocalHandle,
     serial: u32,
     skk_mods: u32,
     xkb_state: Option<keymap::XkbState>,
@@ -96,6 +95,13 @@ struct ActiveContext {
 
 pub struct WaylandState {
     client: ReconnectingClient,
+    /// SKK session handle. Created once at startup and reused across every
+    /// Activate/Deactivate cycle so the SKK state (kana mode, ▽/▼ mode,
+    /// candidate index, …) survives the rapid Activate/Deactivate churn
+    /// that some compositors (e.g. KWin with Electron apps) emit on every
+    /// key press. Without this, each cycle would create a fresh session
+    /// and the user would be kicked back to the default hiragana mode.
+    handle: LocalHandle,
     input_method: Option<ZwpInputMethodV1>,
     active: Option<ActiveContext>,
     compositor: Option<WlCompositor>,
@@ -145,8 +151,15 @@ pub struct WaylandState {
 
 impl WaylandState {
     fn new(timer_write: OwnedFd) -> anyhow::Result<Self> {
+        let client = ReconnectingClient::new()?;
+        let handle = client.create_handle("wayland");
+        tracing::info!(
+            handle,
+            "created SKK session handle (persistent across activations)"
+        );
         Ok(Self {
-            client: ReconnectingClient::new()?,
+            client,
+            handle,
             input_method: None,
             active: None,
             compositor: None,
@@ -371,8 +384,8 @@ impl WaylandState {
         is_press: bool,
         forward_passthrough: bool,
     ) -> bool {
-        let (handle, commit_serial, skk_mods) = match self.active.as_ref() {
-            Some(a) => (a.handle, a.serial, a.skk_mods),
+        let (commit_serial, skk_mods) = match self.active.as_ref() {
+            Some(a) => (a.serial, a.skk_mods),
             None => {
                 // Visible at the default info level: this almost certainly
                 // means the IME thinks it is inactive while keys are still
@@ -384,10 +397,13 @@ impl WaylandState {
             }
         };
 
-        let actions = match self.client.process_key(handle, keysym, skk_mods, is_press) {
+        let actions = match self
+            .client
+            .process_key(self.handle, keysym, skk_mods, is_press)
+        {
             Ok(a) => a,
             Err(e) => {
-                tracing::error!(handle, "process_key error: {e:?}");
+                tracing::error!(handle = self.handle, "process_key error: {e:?}");
                 return false;
             }
         };
@@ -576,26 +592,25 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
         match event {
             zwp_input_method_v1::Event::Activate { id } => {
                 if let Some(prev) = state.active.take() {
-                    tracing::warn!(
-                        handle = prev.handle,
-                        "new activation before previous deactivation — cleaning up"
-                    );
-                    state.client.destroy_handle(prev.handle);
-                    // Same rationale as the Deactivate branch: do not call
-                    // prev.keyboard.release() or prev.context.destroy() — when
-                    // a fresh Activate arrives without an intervening Deactivate,
-                    // KWin has likely already invalidated the previous keyboard
-                    // and context server-side, so sending the destructor would
-                    // crash the wl_display connection.
+                    tracing::warn!("new activation before previous deactivation — cleaning up");
+                    // Do not destroy the SKK handle: it is owned by
+                    // WaylandState and reused across every Activate cycle
+                    // so the user's kana mode survives the focus churn that
+                    // some compositors (KWin with Electron apps) cause.
+                    // Same rationale as the Deactivate branch for the
+                    // Wayland-side proxies: do not call
+                    // prev.keyboard.release() or prev.context.destroy() —
+                    // when a fresh Activate arrives without an intervening
+                    // Deactivate, KWin has likely already invalidated the
+                    // previous keyboard and context server-side, so sending
+                    // the destructor would crash the wl_display connection.
                     drop(prev);
                 }
-                let handle = state.client.create_handle("wayland");
                 let keyboard = id.grab_keyboard(qh, ());
-                tracing::info!(handle, "input context activated");
+                tracing::info!(handle = state.handle, "input context activated");
                 state.active = Some(ActiveContext {
                     context: id,
                     _keyboard: keyboard,
-                    handle,
                     serial: 0,
                     skk_mods: 0,
                     xkb_state: None,
@@ -614,8 +629,8 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
                 // any release for a key that was never pressed will not be
                 // in pressed_keys and gets dropped as before.
                 if let Some(active) = state.active.take() {
-                    tracing::info!(handle = active.handle, "input context deactivated");
-                    state.client.destroy_handle(active.handle);
+                    tracing::info!(handle = state.handle, "input context deactivated");
+                    // Do not destroy the SKK handle: see Activate branch above.
                     // Do NOT call active.keyboard.release() or active.context.destroy():
                     // KWin invalidates both the grabbed wl_keyboard and the
                     // zwp_input_method_context_v1 server-side when it sends Deactivate.
@@ -960,10 +975,10 @@ pub fn run() -> anyhow::Result<()> {
             }
         }
         if heartbeats > 0 {
-            let handle = state.active.as_ref().map(|a| a.handle);
             tracing::info!(
-                "heartbeat: ticks={heartbeats} active={} handle={handle:?} repeat_active={}",
+                "heartbeat: ticks={heartbeats} active={} handle={} repeat_active={}",
                 state.active.is_some(),
+                state.handle,
                 state.repeat_active.is_some()
             );
         }
