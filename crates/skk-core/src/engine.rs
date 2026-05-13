@@ -1268,9 +1268,9 @@ impl SkkEngine {
         // to resolve the dictionary lookup key via okuri_alias — so that paths like
         // c→か (pre_state "c") and c→ch→ち (pre_state "ch") can be distinguished.
         let pre_state = self.kana_state.clone();
-        let result =
-            self.kana_table
-                .transition(&pre_state, lower, KanaMode::Hiragana);
+        let result = self
+            .kana_table
+            .transition(&pre_state, lower, KanaMode::Hiragana);
         match result {
             TransitionResult::Ok { output, next_state } => {
                 self.kana_state = next_state;

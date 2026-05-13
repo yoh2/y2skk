@@ -185,7 +185,14 @@ fn render_status(fd: &OwnedFd, font: &Font, indicator: &str) {
     draw_filled_rect(pixels, box_x + 1, box_y + 1, box_w - 2, box_h - 2, BG_COLOR);
 
     let baseline_y = box_y + ROW_PAD + FONT_SIZE as i32;
-    draw_text(pixels, font, indicator, box_x + H_MARGIN, baseline_y, TEXT_COLOR);
+    draw_text(
+        pixels,
+        font,
+        indicator,
+        box_x + H_MARGIN,
+        baseline_y,
+        TEXT_COLOR,
+    );
 
     unsafe { munmap(ptr as *mut _, size).expect("munmap") };
 }
