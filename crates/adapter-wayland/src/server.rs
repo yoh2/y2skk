@@ -283,9 +283,13 @@ impl WaylandState {
         }
     }
 
-    /// Create one CandidateWindow per known output. Called once after the
-    /// first roundtrip when all globals (including outputs) have been
-    /// enumerated.
+    /// Create the candidate window(s). In overlay-panel mode (when
+    /// `zwp_input_panel_v1` is available) one window is enough — the
+    /// compositor places it near the text-input cursor regardless of which
+    /// output that cursor is on. In layer-shell fallback mode the window is
+    /// anchored to a specific output's screen edge, so we need one per
+    /// known output. Called once after the first roundtrip when all
+    /// globals (including outputs) have been enumerated.
     fn init_candidate_windows(&mut self) {
         let (Some(compositor), Some(shm), Some(qh)) = (
             self.compositor.as_ref(),
@@ -308,7 +312,13 @@ impl WaylandState {
         };
         let font = Arc::new(font);
 
-        let outputs: Vec<Option<WlOutput>> = if self.outputs.is_empty() {
+        // Overlay panel is compositor-positioned by cursor, so one window is
+        // enough regardless of monitor count. Pass `None` for output so the
+        // layer-shell fallback path inside CandidateWindow::new defaults
+        // sensibly when overlay creation fails.
+        let outputs: Vec<Option<WlOutput>> = if self.input_panel.is_some() {
+            vec![None]
+        } else if self.outputs.is_empty() {
             tracing::warn!("no wl_output found — creating one candidate window (default output)");
             vec![None]
         } else {
