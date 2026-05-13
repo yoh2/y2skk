@@ -18,6 +18,7 @@ use wayland_client::{
 use wayland_protocols::wp::input_method::zv1::client::{
     zwp_input_method_context_v1::{self, ZwpInputMethodContextV1},
     zwp_input_method_v1::{self, ZwpInputMethodV1},
+    zwp_input_panel_v1::ZwpInputPanelV1,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 
@@ -88,6 +89,12 @@ pub struct WaylandState {
     compositor: Option<WlCompositor>,
     shm: Option<WlShm>,
     layer_shell: Option<ZwlrLayerShellV1>,
+    /// `zwp_input_panel_v1` global, when the compositor advertises it.
+    /// When present, candidate window and status indicator surfaces are
+    /// hosted as input panel overlays so the compositor places them near
+    /// the application's text-input cursor. When absent, both fall back
+    /// to `zwlr_layer_shell_v1` anchored at the screen corner.
+    pub input_panel: Option<ZwpInputPanelV1>,
     outputs: Vec<WlOutput>,
     pub candidate_windows: Vec<CandidateWindow>,
     qh: Option<QueueHandle<WaylandState>>,
@@ -133,6 +140,7 @@ impl WaylandState {
             compositor: None,
             shm: None,
             layer_shell: None,
+            input_panel: None,
             outputs: Vec::new(),
             candidate_windows: Vec::new(),
             qh: None,
@@ -250,18 +258,25 @@ impl WaylandState {
         }
     }
 
-    /// Create one CandidateWindow per known output. Called once after the first
-    /// roundtrip when all globals (including outputs) have been enumerated.
+    /// Create one CandidateWindow per known output. Called once after the
+    /// first roundtrip when all globals (including outputs) have been
+    /// enumerated.
     fn init_candidate_windows(&mut self) {
-        let (Some(compositor), Some(shm), Some(layer_shell), Some(qh)) = (
+        let (Some(compositor), Some(shm), Some(qh)) = (
             self.compositor.as_ref(),
             self.shm.as_ref(),
-            self.layer_shell.as_ref(),
             self.qh.as_ref(),
         ) else {
             tracing::warn!("missing Wayland globals — candidate window disabled");
             return;
         };
+
+        if self.input_panel.is_none() && self.layer_shell.is_none() {
+            tracing::warn!(
+                "neither zwp_input_panel_v1 nor zwlr_layer_shell_v1 advertised — candidate window disabled"
+            );
+            return;
+        }
 
         let Some(font) = candidate_window::load_font() else {
             return;
@@ -276,15 +291,17 @@ impl WaylandState {
         };
 
         for output_opt in outputs {
-            let cw = CandidateWindow::new(
+            if let Some(cw) = CandidateWindow::new(
                 compositor,
-                layer_shell,
+                self.layer_shell.as_ref(),
+                self.input_panel.as_ref(),
                 shm.clone(),
                 Arc::clone(&font),
                 qh,
                 output_opt.as_ref(),
-            );
-            self.candidate_windows.push(cw);
+            ) {
+                self.candidate_windows.push(cw);
+            }
         }
 
         tracing::info!(
@@ -458,6 +475,10 @@ impl Dispatch<WlRegistry, ()> for WaylandState {
                     tracing::info!("found zwlr_layer_shell_v1 (version {version})");
                     state.layer_shell = Some(registry.bind(name, 4.min(version), qh, ()));
                 }
+                i if i == ZwpInputPanelV1::interface().name => {
+                    tracing::info!("found zwp_input_panel_v1 (version {version})");
+                    state.input_panel = Some(registry.bind(name, 1, qh, ()));
+                }
                 "wl_output" => {
                     let output: WlOutput = registry.bind(name, 2.min(version), qh, ());
                     state.outputs.push(output);
@@ -522,6 +543,19 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
             }
             _ => {}
         }
+    }
+}
+
+// `zwp_input_panel_v1` has no events, only requests.
+impl Dispatch<ZwpInputPanelV1, ()> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpInputPanelV1,
+        _event: <ZwpInputPanelV1 as Proxy>::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
     }
 }
 
