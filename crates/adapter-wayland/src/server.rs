@@ -755,13 +755,16 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                 }
             }
             wl_keyboard::Event::RepeatInfo { rate, delay } => {
-                state.repeat_rate = rate.max(0) as u32;
-                state.repeat_delay = delay.max(0) as u32;
-                tracing::info!(
-                    "key repeat info: rate={}/s, delay={}ms",
-                    state.repeat_rate,
-                    state.repeat_delay,
-                );
+                tracing::info!("key repeat info: rate={rate}/s, delay={delay}ms");
+                if rate > 0 {
+                    state.repeat_rate = rate as u32;
+                    state.repeat_delay = delay.max(0) as u32;
+                }
+                // Some compositors (notably KWin with Electron apps in focus)
+                // report rate=0 on the IM-grabbed keyboard even when the seat
+                // keyboard advertises a real repeat rate. Ignore the zero so
+                // the seat keyboard's value (received via the SeatKbd
+                // Dispatch impl below) survives the override.
             }
             wl_keyboard::Event::Modifiers {
                 serial: _,
