@@ -147,6 +147,13 @@ pub struct WaylandState {
     /// compositor-driven RepeatInfo updates keep arriving for the lifetime
     /// of the process.  We ignore all its other events.
     _seat_keyboard: Option<WlKeyboard>,
+    /// True once the seat keyboard has reported a `repeat_info` event.
+    /// Until then we accept the IM-grabbed keyboard's rate value as
+    /// authoritative (so a compositor that legitimately wants
+    /// repeat disabled via the IM-grabbed channel is honoured). After
+    /// the seat keyboard has spoken, IM-grabbed `rate=0` is treated as
+    /// a spurious Electron/Chrome artefact and ignored.
+    seat_repeat_received: bool,
 }
 
 impl WaylandState {
@@ -179,6 +186,7 @@ impl WaylandState {
             pending_stop_release: None,
             seat: None,
             _seat_keyboard: None,
+            seat_repeat_received: false,
         })
     }
 
@@ -767,15 +775,18 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
             }
             wl_keyboard::Event::RepeatInfo { rate, delay } => {
                 tracing::info!("key repeat info: rate={rate}/s, delay={delay}ms");
-                if rate > 0 {
-                    state.repeat_rate = rate as u32;
+                // KWin (with Electron apps in focus) sends rate=0 on the
+                // IM-grabbed keyboard even when the seat keyboard has
+                // already advertised a real value — that zero would
+                // otherwise clobber the real seat rate. Once the seat
+                // keyboard has produced a repeat_info we trust its value
+                // and ignore the IM-grabbed zero. Before the seat has
+                // spoken we still accept rate=0 in case the compositor
+                // actually wants repeat disabled.
+                if rate > 0 || !state.seat_repeat_received {
+                    state.repeat_rate = rate.max(0) as u32;
                     state.repeat_delay = delay.max(0) as u32;
                 }
-                // Some compositors (notably KWin with Electron apps in focus)
-                // report rate=0 on the IM-grabbed keyboard even when the seat
-                // keyboard advertises a real repeat rate. Ignore the zero so
-                // the seat keyboard's value (received via the SeatKbd
-                // Dispatch impl below) survives the override.
             }
             wl_keyboard::Event::Modifiers {
                 serial: _,
@@ -846,6 +857,10 @@ impl Dispatch<WlKeyboard, SeatKbd> for WaylandState {
         if let wl_keyboard::Event::RepeatInfo { rate, delay } = event {
             state.repeat_rate = rate.max(0) as u32;
             state.repeat_delay = delay.max(0) as u32;
+            // Mark that the seat keyboard has spoken so that later
+            // IM-grabbed-keyboard rate=0 events know to defer to this
+            // value rather than override it.
+            state.seat_repeat_received = true;
             tracing::info!(
                 "key repeat info (seat): rate={}/s, delay={}ms",
                 state.repeat_rate,
