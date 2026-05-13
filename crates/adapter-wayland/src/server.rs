@@ -324,8 +324,22 @@ impl WaylandState {
     /// Returns true if the IM consumed the key (no forwarding happened).
     /// Returns false for passthrough keys — these are forwarded to the app via
     /// `context.key()` and the app is responsible for its own key repeat.
-    fn on_key(&mut self, keycode: u32, keysym: u32, is_press: bool) -> bool {
-        let (handle, serial, skk_mods) = match self.active.as_ref() {
+    ///
+    /// `key_serial` / `key_time` are the serial and time from the original
+    /// `wl_keyboard.key` event. They are forwarded to `context.key` so KWin
+    /// can correlate the forwarded key with the original keyboard event — using
+    /// the input-method context's commit serial (`active.serial`) here was
+    /// observed to cause KWin to silently drop forwarded keys for some apps
+    /// (e.g. Electron's Enter/Backspace in Slack and X).
+    fn on_key(
+        &mut self,
+        key_serial: u32,
+        key_time: u32,
+        keycode: u32,
+        keysym: u32,
+        is_press: bool,
+    ) -> bool {
+        let (handle, commit_serial, skk_mods) = match self.active.as_ref() {
             Some(a) => (a.handle, a.serial, a.skk_mods),
             None => {
                 // Visible at the default info level: this almost certainly
@@ -346,7 +360,7 @@ impl WaylandState {
             }
         };
         tracing::debug!(
-            "on_key(code={keycode}, sym={keysym:#x}, press={is_press}) → {} action(s) (serial={serial})",
+            "on_key(code={keycode}, sym={keysym:#x}, press={is_press}) → {} action(s) (commit_serial={commit_serial})",
             actions.len()
         );
 
@@ -362,7 +376,7 @@ impl WaylandState {
 
         let mut sink = ContextSink {
             context,
-            serial,
+            serial: commit_serial,
             candidate_windows: cws,
             qh,
             timer_write_fd: timer_fd,
@@ -377,7 +391,7 @@ impl WaylandState {
                 .as_ref()
                 .unwrap()
                 .context
-                .key(serial, 0, keycode, state_val);
+                .key(key_serial, key_time, keycode, state_val);
         }
         consumed
     }
@@ -557,7 +571,16 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
             }
             zwp_input_method_v1::Event::Deactivate { context: _ctx } => {
                 state.stop_all_repeat();
-                state.pressed_keys.clear();
+                // Do NOT clear pressed_keys here. KWin's rapid Activate/Deactivate
+                // (e.g. Electron apps' focus churn on each Enter) can carry a
+                // key press across two grabs — press arrives on the old grab,
+                // release arrives on the new one. If we clear here, the
+                // release event hits the `stray release` branch in the Key
+                // handler and gets dropped, leaving the app stuck thinking
+                // the key is still held (Slack/X "Enter only works half the
+                // time" pattern). The synthetic-release filter still works:
+                // any release for a key that was never pressed will not be
+                // in pressed_keys and gets dropped as before.
                 if let Some(active) = state.active.take() {
                     tracing::info!(handle = active.handle, "input context deactivated");
                     state.client.destroy_handle(active.handle);
@@ -643,8 +666,8 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                 }
             }
             wl_keyboard::Event::Key {
-                serial: _,
-                time: _,
+                serial,
+                time,
                 key,
                 state: key_state,
             } => {
@@ -705,7 +728,7 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                     .unwrap_or(false);
                 let repeat_eligible = xkb_allows_repeat || keysym_repeats(keysym);
                 let consumed = if keysym != 0 {
-                    state.on_key(key, keysym, is_press)
+                    state.on_key(serial, time, key, keysym, is_press)
                 } else {
                     false
                 };
@@ -928,7 +951,10 @@ pub fn run() -> anyhow::Result<()> {
             };
             if was_consumed {
                 // Re-run the IM logic — commits/preedits will fire as usual.
-                state.on_key(keycode, keysym, true);
+                // Synthetic repeat tick: there is no original wl_keyboard.key
+                // serial/time, so pass 0. Engine-consumed paths never reach
+                // context.key, so the placeholder is harmless for this branch.
+                state.on_key(0, 0, keycode, keysym, true);
             } else {
                 // Passthrough: cycle release + press so the app sees a fresh
                 // keypress each tick (most apps ignore duplicate press events).
