@@ -262,8 +262,15 @@ impl WaylandState {
         }
     }
 
-    /// Directly send a press event for `keycode` to the focused app.  Used
-    /// for passthrough repeat handling (each tick is a release+press pair).
+    /// Directly send a press event for `keycode` to the focused app.
+    /// Currently unused: the only call site was the passthrough branch of
+    /// the repeat-tick loop, which became unreachable once `start_repeat`
+    /// stopped engaging IME-side repeat for passthrough keys (and the
+    /// remaining defensive arm of that branch now stops the repeat
+    /// instead). Kept around so that a future re-implementation of
+    /// passthrough repeat — should one become viable — has a paired
+    /// helper next to `send_key_release_to_app`.
+    #[allow(dead_code)]
     fn send_key_press_to_app(&self, keycode: u32) {
         if let Some(active) = self.active.as_ref() {
             active.context.key(active.serial, 0, keycode, 1);
@@ -333,10 +340,38 @@ impl WaylandState {
     }
 
     /// Returns true if the IM consumed the key (no forwarding happened).
-    /// Returns false for passthrough keys — these are forwarded to the app via
-    /// `context.key()` and the app is responsible for its own key repeat.
-    fn on_key(&mut self, keycode: u32, keysym: u32, is_press: bool) -> bool {
-        let (handle, serial, skk_mods) = match self.active.as_ref() {
+    /// Returns false for passthrough keys — these are normally forwarded to
+    /// the app via `context.key()` and the app is responsible for its own
+    /// key repeat.
+    ///
+    /// `key_serial` / `key_time` are the serial and time from the original
+    /// `wl_keyboard.key` event. They are forwarded to `context.key` so KWin
+    /// can correlate the forwarded key with the original keyboard event — using
+    /// the input-method context's commit serial (`active.serial`) here was
+    /// observed to cause KWin to silently drop forwarded keys for some apps
+    /// (e.g. Electron's Enter/Backspace in Slack and X).
+    ///
+    /// `forward_passthrough` controls what happens when the engine returns a
+    /// passthrough verdict. For real `wl_keyboard.key` events callers should
+    /// pass `true` so the key reaches the focused application. For
+    /// synthetic repeat ticks (which have no real serial/time) callers
+    /// should pass `false`: forwarding `context.key(0, 0, …)` would feed
+    /// KWin a serial that doesn't correspond to any keyboard event it sent
+    /// and the request would be silently dropped (or, worse, accepted once
+    /// and then discarded as a duplicate, leaving the application with a
+    /// stray phantom key event). Repeat-tick callers should observe the
+    /// returned `consumed` value and stop the repeat when it flips to
+    /// `false` mid-sequence.
+    fn on_key(
+        &mut self,
+        key_serial: u32,
+        key_time: u32,
+        keycode: u32,
+        keysym: u32,
+        is_press: bool,
+        forward_passthrough: bool,
+    ) -> bool {
+        let (handle, commit_serial, skk_mods) = match self.active.as_ref() {
             Some(a) => (a.handle, a.serial, a.skk_mods),
             None => {
                 // Visible at the default info level: this almost certainly
@@ -357,7 +392,7 @@ impl WaylandState {
             }
         };
         tracing::debug!(
-            "on_key(code={keycode}, sym={keysym:#x}, press={is_press}) → {} action(s) (serial={serial})",
+            "on_key(code={keycode}, sym={keysym:#x}, press={is_press}) → {} action(s) (commit_serial={commit_serial})",
             actions.len()
         );
 
@@ -373,7 +408,7 @@ impl WaylandState {
 
         let mut sink = ContextSink {
             context,
-            serial,
+            serial: commit_serial,
             candidate_windows: cws,
             qh,
             timer_write_fd: timer_fd,
@@ -382,13 +417,13 @@ impl WaylandState {
         let result = dispatch_actions(&actions, &mut sink);
 
         let consumed = result.consumed && !result.force_passthrough;
-        if !consumed {
+        if !consumed && forward_passthrough {
             let state_val: u32 = if is_press { 1 } else { 0 };
             self.active
                 .as_ref()
                 .unwrap()
                 .context
-                .key(serial, 0, keycode, state_val);
+                .key(key_serial, key_time, keycode, state_val);
         }
         consumed
     }
@@ -568,7 +603,16 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
             }
             zwp_input_method_v1::Event::Deactivate { context: _ctx } => {
                 state.stop_all_repeat();
-                state.pressed_keys.clear();
+                // Do NOT clear pressed_keys here. KWin's rapid Activate/Deactivate
+                // (e.g. Electron apps' focus churn on each Enter) can carry a
+                // key press across two grabs — press arrives on the old grab,
+                // release arrives on the new one. If we clear here, the
+                // release event hits the `stray release` branch in the Key
+                // handler and gets dropped, leaving the app stuck thinking
+                // the key is still held (Slack/X "Enter only works half the
+                // time" pattern). The synthetic-release filter still works:
+                // any release for a key that was never pressed will not be
+                // in pressed_keys and gets dropped as before.
                 if let Some(active) = state.active.take() {
                     tracing::info!(handle = active.handle, "input context deactivated");
                     state.client.destroy_handle(active.handle);
@@ -654,8 +698,8 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                 }
             }
             wl_keyboard::Event::Key {
-                serial: _,
-                time: _,
+                serial,
+                time,
                 key,
                 state: key_state,
             } => {
@@ -716,7 +760,9 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                     .unwrap_or(false);
                 let repeat_eligible = xkb_allows_repeat || keysym_repeats(keysym);
                 let consumed = if keysym != 0 {
-                    state.on_key(key, keysym, is_press)
+                    // Real wl_keyboard.key event: forward to the app when
+                    // the engine returns passthrough.
+                    state.on_key(serial, time, key, keysym, is_press, true)
                 } else {
                     false
                 };
@@ -938,13 +984,38 @@ pub fn run() -> anyhow::Result<()> {
                 break;
             };
             if was_consumed {
-                // Re-run the IM logic — commits/preedits will fire as usual.
-                state.on_key(keycode, keysym, true);
+                // Re-run the IM logic — commits/preedits fire as usual via
+                // the actions sink. Synthetic repeat tick: there is no
+                // original wl_keyboard.key serial/time, so pass 0 for both
+                // and pass `forward_passthrough=false` so the engine does
+                // NOT call context.key with a 0 serial. KWin would not be
+                // able to correlate that with any keyboard event it sent
+                // and would silently drop or de-duplicate the request,
+                // delivering at most one phantom keypress to the app.
+                let still_consumed = state.on_key(0, 0, keycode, keysym, true, false);
+                if !still_consumed {
+                    // The engine has stopped consuming this key (e.g. the
+                    // ▽-mode preedit shrank to empty while the user was
+                    // holding Backspace). The user's intent has been
+                    // satisfied and continuing to repeat would either go
+                    // nowhere or — worse — start leaking phantom passthrough
+                    // events. Stop the repeat and wait for a fresh real
+                    // press to re-arm anything.
+                    tracing::debug!(
+                        "consumed repeat tick became passthrough; stopping repeat (code={keycode}, sym={keysym:#x})"
+                    );
+                    state.stop_all_repeat();
+                    break;
+                }
             } else {
-                // Passthrough: cycle release + press so the app sees a fresh
-                // keypress each tick (most apps ignore duplicate press events).
-                state.send_key_release_to_app(keycode);
-                state.send_key_press_to_app(keycode);
+                // Defensive: start_repeat skips passthrough keys (commit
+                // 6493c47), so this branch should be unreachable. If we
+                // ever do land here, stop the repeat instead of feeding
+                // the app release/press pairs whose serial/time would not
+                // line up with any real keyboard event.
+                tracing::warn!("unexpected passthrough repeat tick (code={keycode}); stopping");
+                state.stop_all_repeat();
+                break;
             }
         }
 
