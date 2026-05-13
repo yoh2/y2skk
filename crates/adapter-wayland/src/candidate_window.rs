@@ -123,17 +123,9 @@ fn render_candidates(
     let content_h = n as i32 * LINE_H + ROW_PAD * 2;
 
     // Draw 1-pixel grey border.
-    draw_rect(pixels, 0, 0, CANVAS_W, content_h, BORDER_COLOR, CANVAS_W);
+    draw_rect(pixels, 0, 0, CANVAS_W, content_h, BORDER_COLOR);
     // Fill interior background.
-    draw_filled_rect(
-        pixels,
-        1,
-        1,
-        CANVAS_W - 2,
-        content_h - 2,
-        BG_COLOR,
-        CANVAS_W,
-    );
+    draw_filled_rect(pixels, 1, 1, CANVAS_W - 2, content_h - 2, BG_COLOR);
 
     let baseline_offset = FONT_SIZE as i32 + ROW_PAD;
 
@@ -142,7 +134,7 @@ fn render_candidates(
 
         // Focused row highlight.
         if i == focused as usize {
-            draw_filled_rect(pixels, 1, row_y, CANVAS_W - 2, LINE_H, FOCUS_BG, CANVAS_W);
+            draw_filled_rect(pixels, 1, row_y, CANVAS_W - 2, LINE_H, FOCUS_BG);
         }
 
         // Build "a: 候補" label.
@@ -153,9 +145,7 @@ fn render_candidates(
         };
 
         let baseline_y = row_y + baseline_offset;
-        draw_text(
-            pixels, font, &text, H_MARGIN, baseline_y, TEXT_COLOR, CANVAS_W, CANVAS_H,
-        );
+        draw_text(pixels, font, &text, H_MARGIN, baseline_y, TEXT_COLOR);
     }
 
     unsafe { munmap(ptr as *mut _, size).expect("munmap") };
@@ -191,33 +181,15 @@ fn render_status(fd: &OwnedFd, font: &Font, indicator: &str) {
     let box_x: i32 = 0;
     let box_y: i32 = CANVAS_H - box_h;
 
-    draw_rect(pixels, box_x, box_y, box_w, box_h, BORDER_COLOR, CANVAS_W);
-    draw_filled_rect(
-        pixels,
-        box_x + 1,
-        box_y + 1,
-        box_w - 2,
-        box_h - 2,
-        BG_COLOR,
-        CANVAS_W,
-    );
+    draw_rect(pixels, box_x, box_y, box_w, box_h, BORDER_COLOR);
+    draw_filled_rect(pixels, box_x + 1, box_y + 1, box_w - 2, box_h - 2, BG_COLOR);
 
     let baseline_y = box_y + ROW_PAD + FONT_SIZE as i32;
-    draw_text(
-        pixels,
-        font,
-        indicator,
-        box_x + H_MARGIN,
-        baseline_y,
-        TEXT_COLOR,
-        CANVAS_W,
-        CANVAS_H,
-    );
+    draw_text(pixels, font, indicator, box_x + H_MARGIN, baseline_y, TEXT_COLOR);
 
     unsafe { munmap(ptr as *mut _, size).expect("munmap") };
 }
 
-// TODO: reduce the number of function arguments
 fn draw_text(
     pixels: &mut [u8],
     font: &Font,
@@ -225,8 +197,6 @@ fn draw_text(
     start_x: i32,
     baseline_y: i32,
     color: [u8; 4],
-    stride_px: i32,
-    canvas_h: i32,
 ) {
     let mut pen_x = start_x as f32;
     for ch in text.chars() {
@@ -246,10 +216,10 @@ fn draw_text(
                 }
                 let px = glyph_x + bx as i32;
                 let py = glyph_y + by as i32;
-                if !(0..CANVAS_W).contains(&px) || !(0..canvas_h).contains(&py) {
+                if !(0..CANVAS_W).contains(&px) || !(0..CANVAS_H).contains(&py) {
                     continue;
                 }
-                let off = (py * stride_px * 4 + px * 4) as usize;
+                let off = (py * CANVAS_W * 4 + px * 4) as usize;
                 blend_pixel(&mut pixels[off..off + 4], color, coverage);
             }
         }
@@ -268,15 +238,7 @@ fn blend_pixel(dst: &mut [u8], fg: [u8; 4], coverage: u8) {
     dst[3] = 0xFF;
 }
 
-fn draw_filled_rect(
-    pixels: &mut [u8],
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
-    color: [u8; 4],
-    stride_px: i32,
-) {
+fn draw_filled_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
     for row in y..(y + h) {
         if !(0..CANVAS_H).contains(&row) {
             continue;
@@ -285,23 +247,23 @@ fn draw_filled_rect(
             if !(0..CANVAS_W).contains(&col) {
                 continue;
             }
-            let off = (row * stride_px * 4 + col * 4) as usize;
+            let off = (row * CANVAS_W * 4 + col * 4) as usize;
             pixels[off..off + 4].copy_from_slice(&color);
         }
     }
 }
 
-fn draw_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4], stride_px: i32) {
+fn draw_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
     // Top and bottom edges.
     for col in x..(x + w) {
         if (0..CANVAS_W).contains(&col) {
             if (0..CANVAS_H).contains(&y) {
-                let off = (y * stride_px * 4 + col * 4) as usize;
+                let off = (y * CANVAS_W * 4 + col * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
             let by = y + h - 1;
             if (0..CANVAS_H).contains(&by) {
-                let off = (by * stride_px * 4 + col * 4) as usize;
+                let off = (by * CANVAS_W * 4 + col * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
         }
@@ -310,12 +272,12 @@ fn draw_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4], 
     for row in y..(y + h) {
         if (0..CANVAS_H).contains(&row) {
             if (0..CANVAS_W).contains(&x) {
-                let off = (row * stride_px * 4 + x * 4) as usize;
+                let off = (row * CANVAS_W * 4 + x * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
             let rx = x + w - 1;
             if (0..CANVAS_W).contains(&rx) {
-                let off = (row * stride_px * 4 + rx * 4) as usize;
+                let off = (row * CANVAS_W * 4 + rx * 4) as usize;
                 pixels[off..off + 4].copy_from_slice(&color);
             }
         }
