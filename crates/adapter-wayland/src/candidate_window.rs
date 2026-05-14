@@ -7,6 +7,9 @@ use wayland_client::{
     protocol::{wl_buffer, wl_compositor, wl_output, wl_shm, wl_shm_pool, wl_surface},
     Connection, Dispatch, Proxy, QueueHandle,
 };
+use wayland_protocols::wp::input_method::zv1::client::{
+    zwp_input_panel_surface_v1::ZwpInputPanelSurfaceV1, zwp_input_panel_v1::ZwpInputPanelV1,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
     zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
@@ -23,10 +26,16 @@ const ROW_PAD: i32 = 4;
 const H_MARGIN: i32 = 8;
 const LINE_H: i32 = FONT_SIZE as i32 + ROW_PAD * 2;
 const MAX_ROWS: usize = 10;
-/// Fixed canvas width in pixels.
-const CANVAS_W: i32 = 380;
-/// Maximum canvas height (enough for MAX_ROWS candidates).
-const CANVAS_H: i32 = LINE_H * MAX_ROWS as i32 + ROW_PAD * 2;
+
+/// Candidate window surface dimensions.
+const CAND_W: i32 = 380;
+const CAND_H: i32 = LINE_H * MAX_ROWS as i32 + ROW_PAD * 2;
+
+/// Status indicator surface dimensions used in overlay-panel mode (small and
+/// square so the compositor can place it close to the cursor without
+/// margin-shift artefacts).
+const IND_H: i32 = LINE_H + ROW_PAD * 2;
+const IND_W: i32 = IND_H;
 
 // ARGB8888 little-endian: memory bytes are [B, G, R, A].
 const BG_COLOR: [u8; 4] = [0xE0, 0xFF, 0xFF, 0xFF]; // #FFFFE0 — light yellow
@@ -57,105 +66,63 @@ pub fn load_font() -> Option<Font> {
     None
 }
 
-// ── Pixel buffer helpers ──────────────────────────────────────────────────────
+// ── Canvas + SHM buffer ───────────────────────────────────────────────────────
+
+/// A flat pixel buffer (ARGB8888, row stride = width * 4) plus its dimensions.
+/// Drawing primitives operate on this so the same code can target surfaces of
+/// different sizes.
+struct Canvas<'a> {
+    pixels: &'a mut [u8],
+    width: i32,
+    height: i32,
+}
 
 struct ShmBuf {
     fd: OwnedFd,
     #[allow(dead_code)] // pool must be kept alive for the buffer to remain valid
     pool: wl_shm_pool::WlShmPool,
     buffer: wl_buffer::WlBuffer,
+    width: i32,
+    height: i32,
 }
 
 impl ShmBuf {
-    fn new(shm: &wl_shm::WlShm, qh: &QueueHandle<WaylandState>) -> anyhow::Result<Self> {
-        let size = (CANVAS_W * CANVAS_H * 4) as usize;
-        let fd = rustix::fs::memfd_create("y2skk-cands", rustix::fs::MemfdFlags::empty())?;
+    fn new(
+        shm: &wl_shm::WlShm,
+        qh: &QueueHandle<WaylandState>,
+        width: i32,
+        height: i32,
+        tag: &str,
+    ) -> anyhow::Result<Self> {
+        let size = (width * height * 4) as usize;
+        let fd = rustix::fs::memfd_create(tag, rustix::fs::MemfdFlags::empty())?;
         rustix::fs::ftruncate(&fd, size as u64)?;
 
         let pool = shm.create_pool(fd.as_fd(), size as i32, qh, ());
         let buffer = pool.create_buffer(
             0,
-            CANVAS_W,
-            CANVAS_H,
-            CANVAS_W * 4,
+            width,
+            height,
+            width * 4,
             wl_shm::Format::Argb8888,
             qh,
             (),
         );
-        Ok(Self { fd, pool, buffer })
-    }
-}
-
-// ── Rendering ─────────────────────────────────────────────────────────────────
-
-/// Write ARGB pixel data to the memfd, then return.
-fn render_candidates(
-    fd: &OwnedFd,
-    font: &Font,
-    candidates: &[String],
-    focused: u32,
-    sel_keys: &str,
-) {
-    use rustix::mm::{mmap, munmap, MapFlags, ProtFlags};
-
-    let size = (CANVAS_W * CANVAS_H * 4) as usize;
-    let ptr = unsafe {
-        mmap(
-            ptr::null_mut(),
-            size,
-            ProtFlags::READ | ProtFlags::WRITE,
-            MapFlags::SHARED,
+        Ok(Self {
             fd,
-            0,
-        )
-        .expect("mmap") as *mut u8
-    };
-
-    let pixels = unsafe { std::slice::from_raw_parts_mut(ptr, size) };
-
-    // Fill entire canvas with transparent (hidden area stays invisible).
-    for chunk in pixels.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&TRANSPARENT);
+            pool,
+            buffer,
+            width,
+            height,
+        })
     }
-
-    let key_chars: Vec<char> = sel_keys.chars().collect();
-    let n = candidates.len().min(MAX_ROWS);
-    let content_h = n as i32 * LINE_H + ROW_PAD * 2;
-
-    // Draw 1-pixel grey border.
-    draw_rect(pixels, 0, 0, CANVAS_W, content_h, BORDER_COLOR);
-    // Fill interior background.
-    draw_filled_rect(pixels, 1, 1, CANVAS_W - 2, content_h - 2, BG_COLOR);
-
-    let baseline_offset = FONT_SIZE as i32 + ROW_PAD;
-
-    for (i, cand) in candidates.iter().enumerate().take(n) {
-        let row_y = ROW_PAD + i as i32 * LINE_H;
-
-        // Focused row highlight.
-        if i == focused as usize {
-            draw_filled_rect(pixels, 1, row_y, CANVAS_W - 2, LINE_H, FOCUS_BG);
-        }
-
-        // Build "a: 候補" label.
-        let text = if i < key_chars.len() {
-            format!("{}: {}", key_chars[i], cand)
-        } else {
-            cand.clone()
-        };
-
-        let baseline_y = row_y + baseline_offset;
-        draw_text(pixels, font, &text, H_MARGIN, baseline_y, TEXT_COLOR);
-    }
-
-    unsafe { munmap(ptr as *mut _, size).expect("munmap") };
 }
 
-/// Render the mode indicator as a small box at the bottom-left of the canvas.
-fn render_status(fd: &OwnedFd, font: &Font, indicator: &str) {
+/// Map the memfd, build a Canvas over it, run `f`, then unmap. Used by all
+/// rendering helpers below.
+fn with_mapped_canvas<F: FnOnce(&mut Canvas<'_>)>(fd: &OwnedFd, width: i32, height: i32, f: F) {
     use rustix::mm::{mmap, munmap, MapFlags, ProtFlags};
-
-    let size = (CANVAS_W * CANVAS_H * 4) as usize;
+    let size = (width * height * 4) as usize;
     let ptr = unsafe {
         mmap(
             ptr::null_mut(),
@@ -168,37 +135,33 @@ fn render_status(fd: &OwnedFd, font: &Font, indicator: &str) {
         .expect("mmap") as *mut u8
     };
     let pixels = unsafe { std::slice::from_raw_parts_mut(ptr, size) };
-
-    // Clear the full canvas first.
-    for chunk in pixels.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&TRANSPARENT);
-    }
-
-    // Small indicator box (~50x30) anchored to bottom-left of the canvas
-    // (which itself is anchored to bottom-left of the screen).
-    let box_w: i32 = 60;
-    let box_h: i32 = LINE_H + ROW_PAD * 2;
-    let box_x: i32 = 0;
-    let box_y: i32 = CANVAS_H - box_h;
-
-    draw_rect(pixels, box_x, box_y, box_w, box_h, BORDER_COLOR);
-    draw_filled_rect(pixels, box_x + 1, box_y + 1, box_w - 2, box_h - 2, BG_COLOR);
-
-    let baseline_y = box_y + ROW_PAD + FONT_SIZE as i32;
-    draw_text(
+    let mut canvas = Canvas {
         pixels,
-        font,
-        indicator,
-        box_x + H_MARGIN,
-        baseline_y,
-        TEXT_COLOR,
-    );
-
+        width,
+        height,
+    };
+    f(&mut canvas);
     unsafe { munmap(ptr as *mut _, size).expect("munmap") };
 }
+
+fn fill_transparent(canvas: &mut Canvas<'_>) {
+    for chunk in canvas.pixels.chunks_exact_mut(4) {
+        chunk.copy_from_slice(&TRANSPARENT);
+    }
+}
+
+/// Overwrite the given memfd-backed buffer with fully-transparent pixels.
+/// Used to "hide" a surface without releasing its proxy: we leave the
+/// surface attached (so the compositor keeps managing it) but render
+/// nothing visible into it.
+fn render_transparent(fd: &OwnedFd, width: i32, height: i32) {
+    with_mapped_canvas(fd, width, height, fill_transparent);
+}
+
+// ── Drawing primitives ────────────────────────────────────────────────────────
 
 fn draw_text(
-    pixels: &mut [u8],
+    canvas: &mut Canvas<'_>,
     font: &Font,
     text: &str,
     start_x: i32,
@@ -207,7 +170,7 @@ fn draw_text(
 ) {
     let mut pen_x = start_x as f32;
     for ch in text.chars() {
-        if pen_x >= (CANVAS_W - H_MARGIN) as f32 {
+        if pen_x >= (canvas.width - H_MARGIN) as f32 {
             break;
         }
         let (metrics, bitmap) = font.rasterize(ch, FONT_SIZE);
@@ -223,11 +186,11 @@ fn draw_text(
                 }
                 let px = glyph_x + bx as i32;
                 let py = glyph_y + by as i32;
-                if !(0..CANVAS_W).contains(&px) || !(0..CANVAS_H).contains(&py) {
+                if !(0..canvas.width).contains(&px) || !(0..canvas.height).contains(&py) {
                     continue;
                 }
-                let off = (py * CANVAS_W * 4 + px * 4) as usize;
-                blend_pixel(&mut pixels[off..off + 4], color, coverage);
+                let off = (py * canvas.width * 4 + px * 4) as usize;
+                blend_pixel(&mut canvas.pixels[off..off + 4], color, coverage);
             }
         }
         pen_x += metrics.advance_width;
@@ -245,49 +208,140 @@ fn blend_pixel(dst: &mut [u8], fg: [u8; 4], coverage: u8) {
     dst[3] = 0xFF;
 }
 
-fn draw_filled_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
+fn draw_filled_rect(canvas: &mut Canvas<'_>, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
     for row in y..(y + h) {
-        if !(0..CANVAS_H).contains(&row) {
+        if !(0..canvas.height).contains(&row) {
             continue;
         }
         for col in x..(x + w) {
-            if !(0..CANVAS_W).contains(&col) {
+            if !(0..canvas.width).contains(&col) {
                 continue;
             }
-            let off = (row * CANVAS_W * 4 + col * 4) as usize;
-            pixels[off..off + 4].copy_from_slice(&color);
+            let off = (row * canvas.width * 4 + col * 4) as usize;
+            canvas.pixels[off..off + 4].copy_from_slice(&color);
         }
     }
 }
 
-fn draw_rect(pixels: &mut [u8], x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
+fn draw_rect(canvas: &mut Canvas<'_>, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
     // Top and bottom edges.
     for col in x..(x + w) {
-        if (0..CANVAS_W).contains(&col) {
-            if (0..CANVAS_H).contains(&y) {
-                let off = (y * CANVAS_W * 4 + col * 4) as usize;
-                pixels[off..off + 4].copy_from_slice(&color);
+        if (0..canvas.width).contains(&col) {
+            if (0..canvas.height).contains(&y) {
+                let off = (y * canvas.width * 4 + col * 4) as usize;
+                canvas.pixels[off..off + 4].copy_from_slice(&color);
             }
             let by = y + h - 1;
-            if (0..CANVAS_H).contains(&by) {
-                let off = (by * CANVAS_W * 4 + col * 4) as usize;
-                pixels[off..off + 4].copy_from_slice(&color);
+            if (0..canvas.height).contains(&by) {
+                let off = (by * canvas.width * 4 + col * 4) as usize;
+                canvas.pixels[off..off + 4].copy_from_slice(&color);
             }
         }
     }
     // Left and right edges.
     for row in y..(y + h) {
-        if (0..CANVAS_H).contains(&row) {
-            if (0..CANVAS_W).contains(&x) {
-                let off = (row * CANVAS_W * 4 + x * 4) as usize;
-                pixels[off..off + 4].copy_from_slice(&color);
+        if (0..canvas.height).contains(&row) {
+            if (0..canvas.width).contains(&x) {
+                let off = (row * canvas.width * 4 + x * 4) as usize;
+                canvas.pixels[off..off + 4].copy_from_slice(&color);
             }
             let rx = x + w - 1;
-            if (0..CANVAS_W).contains(&rx) {
-                let off = (row * CANVAS_W * 4 + rx * 4) as usize;
-                pixels[off..off + 4].copy_from_slice(&color);
+            if (0..canvas.width).contains(&rx) {
+                let off = (row * canvas.width * 4 + rx * 4) as usize;
+                canvas.pixels[off..off + 4].copy_from_slice(&color);
             }
         }
+    }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+
+fn render_candidates(
+    fd: &OwnedFd,
+    font: &Font,
+    candidates: &[String],
+    focused: u32,
+    sel_keys: &str,
+) {
+    with_mapped_canvas(fd, CAND_W, CAND_H, |canvas| {
+        fill_transparent(canvas);
+
+        let key_chars: Vec<char> = sel_keys.chars().collect();
+        let n = candidates.len().min(MAX_ROWS);
+        let content_h = n as i32 * LINE_H + ROW_PAD * 2;
+
+        draw_rect(canvas, 0, 0, CAND_W, content_h, BORDER_COLOR);
+        draw_filled_rect(canvas, 1, 1, CAND_W - 2, content_h - 2, BG_COLOR);
+
+        let baseline_offset = FONT_SIZE as i32 + ROW_PAD;
+        for (i, cand) in candidates.iter().enumerate().take(n) {
+            let row_y = ROW_PAD + i as i32 * LINE_H;
+            if i == focused as usize {
+                draw_filled_rect(canvas, 1, row_y, CAND_W - 2, LINE_H, FOCUS_BG);
+            }
+            let text = if i < key_chars.len() {
+                format!("{}: {}", key_chars[i], cand)
+            } else {
+                cand.clone()
+            };
+            let baseline_y = row_y + baseline_offset;
+            draw_text(canvas, font, &text, H_MARGIN, baseline_y, TEXT_COLOR);
+        }
+    });
+}
+
+/// Render the mode indicator into a small dedicated buffer (overlay mode).
+/// The whole surface is the indicator box itself.
+fn render_indicator_overlay(fd: &OwnedFd, font: &Font, indicator: &str) {
+    with_mapped_canvas(fd, IND_W, IND_H, |canvas| {
+        fill_transparent(canvas);
+        draw_rect(canvas, 0, 0, IND_W, IND_H, BORDER_COLOR);
+        draw_filled_rect(canvas, 1, 1, IND_W - 2, IND_H - 2, BG_COLOR);
+        let baseline_y = ROW_PAD + FONT_SIZE as i32;
+        draw_text(canvas, font, indicator, H_MARGIN, baseline_y, TEXT_COLOR);
+    });
+}
+
+/// Render the mode indicator at the bottom-left of a candidate-sized buffer
+/// (layer-shell fallback mode, where the surface itself is anchored to the
+/// bottom-left of the screen).
+fn render_indicator_legacy(fd: &OwnedFd, font: &Font, indicator: &str) {
+    with_mapped_canvas(fd, CAND_W, CAND_H, |canvas| {
+        fill_transparent(canvas);
+        let box_w = IND_W;
+        let box_h = IND_H;
+        let box_x = 0;
+        let box_y = CAND_H - box_h;
+        draw_rect(canvas, box_x, box_y, box_w, box_h, BORDER_COLOR);
+        draw_filled_rect(canvas, box_x + 1, box_y + 1, box_w - 2, box_h - 2, BG_COLOR);
+        let baseline_y = box_y + ROW_PAD + FONT_SIZE as i32;
+        draw_text(
+            canvas,
+            font,
+            indicator,
+            box_x + H_MARGIN,
+            baseline_y,
+            TEXT_COLOR,
+        );
+    });
+}
+
+// ── Surface backend ───────────────────────────────────────────────────────────
+
+/// Backing surface management. `OverlayPanel` lets the compositor place the
+/// surface near the application's text-input cursor; `LayerShell` anchors it
+/// at the bottom-left of the screen as a fallback when `zwp_input_panel_v1`
+/// is not advertised.
+enum SurfaceBackend {
+    LayerShell(ZwlrLayerSurfaceV1),
+    // Held for the lifetime of the window — dropping the proxy destroys the
+    // panel surface in the compositor.
+    OverlayPanel(#[allow(dead_code)] ZwpInputPanelSurfaceV1),
+}
+
+impl SurfaceBackend {
+    fn is_overlay(&self) -> bool {
+        matches!(self, SurfaceBackend::OverlayPanel(_))
     }
 }
 
@@ -307,7 +361,7 @@ enum PendingDraw {
 
 /// What's currently on the surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DisplayState {
+enum DisplayState {
     Empty,
     Candidates,
     Status,
@@ -315,10 +369,18 @@ pub enum DisplayState {
 
 pub struct CandidateWindow {
     surface: wl_surface::WlSurface,
-    layer_surface: ZwlrLayerSurfaceV1,
+    backend: SurfaceBackend,
     shm: wl_shm::WlShm,
     font: Arc<Font>,
-    buf: Option<ShmBuf>,
+    /// Buffer for the candidate list (always sized `CAND_W` × `CAND_H`).
+    /// In layer-shell mode this buffer also hosts the indicator box at the
+    /// bottom-left (legacy layout).
+    cand_buf: Option<ShmBuf>,
+    /// Small buffer for the mode indicator (only used in overlay-panel mode).
+    ind_buf: Option<ShmBuf>,
+    /// True when the surface is ready to receive content. For overlay panels
+    /// this is set immediately (no configure handshake); for layer-shell it
+    /// is set when the first Configure event arrives.
     configured: bool,
     pending: Option<PendingDraw>,
     state: DisplayState,
@@ -327,45 +389,62 @@ pub struct CandidateWindow {
 impl CandidateWindow {
     pub fn new(
         compositor: &wl_compositor::WlCompositor,
-        layer_shell: &ZwlrLayerShellV1,
+        layer_shell: Option<&ZwlrLayerShellV1>,
+        input_panel: Option<&ZwpInputPanelV1>,
         shm: wl_shm::WlShm,
         font: Arc<Font>,
         qh: &QueueHandle<WaylandState>,
         output: Option<&wl_output::WlOutput>,
-    ) -> Self {
+    ) -> Option<Self> {
         let surface = compositor.create_surface(qh, ());
 
-        let layer_surface = layer_shell.get_layer_surface(
-            &surface,
-            output,
-            zwlr_layer_shell_v1::Layer::Top,
-            "y2skk-candidates".to_string(),
-            qh,
-            (),
-        );
+        let (backend, configured) = if let Some(panel) = input_panel {
+            tracing::info!("creating candidate window as input-panel overlay");
+            let panel_surface = panel.get_input_panel_surface(&surface, qh, ());
+            panel_surface.set_overlay_panel();
+            // Overlay panel surfaces have no Configure handshake; we can draw
+            // immediately after the initial commit below.
+            (SurfaceBackend::OverlayPanel(panel_surface), true)
+        } else if let Some(shell) = layer_shell {
+            tracing::info!("creating candidate window via layer-shell (fallback)");
+            let layer_surface = shell.get_layer_surface(
+                &surface,
+                output,
+                zwlr_layer_shell_v1::Layer::Top,
+                "y2skk-candidates".to_string(),
+                qh,
+                (),
+            );
+            layer_surface.set_anchor(Anchor::Bottom | Anchor::Left);
+            // top, right, bottom, left — 40px from bottom, 20px from left.
+            layer_surface.set_margin(0, 0, 40, 20);
+            layer_surface.set_size(CAND_W as u32, CAND_H as u32);
+            layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer_surface.set_exclusive_zone(0);
+            (SurfaceBackend::LayerShell(layer_surface), false)
+        } else {
+            tracing::warn!("neither zwp_input_panel_v1 nor zwlr_layer_shell_v1 available");
+            return None;
+        };
 
-        layer_surface.set_anchor(Anchor::Bottom | Anchor::Left);
-        layer_surface.set_margin(0, 0, 40, 20); // bottom, right, top, left → 40px from bottom, 20px from left
-        layer_surface.set_size(CANVAS_W as u32, CANVAS_H as u32);
-        layer_surface.set_keyboard_interactivity(KeyboardInteractivity::None);
-        layer_surface.set_exclusive_zone(0);
-
-        // Initial commit triggers the configure event.
+        // Initial commit. For layer-shell this triggers the configure event;
+        // for overlay panel it just registers the surface with the compositor.
         surface.commit();
 
-        Self {
+        Some(Self {
             surface,
-            layer_surface,
+            backend,
             shm,
             font,
-            buf: None,
-            configured: false,
+            cand_buf: None,
+            ind_buf: None,
+            configured,
             pending: None,
             state: DisplayState::Empty,
-        }
+        })
     }
 
-    /// Show candidates (takes priority over status indicator).
+    /// Show candidates (takes priority over the status indicator).
     pub fn show(
         &mut self,
         candidates: &[String],
@@ -385,7 +464,7 @@ impl CandidateWindow {
         self.state = DisplayState::Candidates;
     }
 
-    /// Hide candidates (clears the surface).
+    /// Hide candidates (or whatever else is currently on the surface).
     pub fn hide(&mut self) {
         if !self.configured {
             if matches!(self.pending, Some(PendingDraw::Candidates { .. })) {
@@ -394,12 +473,12 @@ impl CandidateWindow {
             return;
         }
         if self.state == DisplayState::Candidates {
-            self.clear_surface();
+            self.fade_out_cand_buf();
             self.state = DisplayState::Empty;
         }
     }
 
-    /// Show the mode indicator ("あ", "A", ...) — only when candidates are not visible.
+    /// Show the mode indicator (no-op while candidates are visible).
     pub fn show_status(&mut self, indicator: &str, qh: &QueueHandle<WaylandState>) {
         if self.state == DisplayState::Candidates {
             return;
@@ -423,40 +502,50 @@ impl CandidateWindow {
             return;
         }
         if self.state == DisplayState::Status {
-            self.clear_surface();
+            self.fade_out_ind_buf();
             self.state = DisplayState::Empty;
         }
     }
 
-    fn clear_surface(&mut self) {
-        if let Some(buf) = self.buf.as_ref() {
-            let _ = self.make_transparent();
+    /// Replace the currently-visible candidate buffer with a fully transparent
+    /// payload and re-commit. `wl_surface::attach(None)` would be the
+    /// canonical "no content" signal, but KWin keeps a stale input-panel
+    /// overlay visible at its last (sometimes upward-shifted) position when
+    /// it sees that and we don't get a real "hide" until the user moves
+    /// focus, switches mode, or hovers the cursor over the leftover window.
+    /// Attaching a transparent buffer of the same size and damaging the
+    /// whole region forces KWin to render the surface again and the user
+    /// sees it disappear immediately.
+    fn fade_out_cand_buf(&mut self) {
+        if let Some(buf) = self.cand_buf.as_ref() {
+            render_transparent(&buf.fd, buf.width, buf.height);
             self.surface.attach(Some(&buf.buffer), 0, 0);
-            self.surface.damage_buffer(0, 0, CANVAS_W, CANVAS_H);
+            self.surface.damage_buffer(0, 0, buf.width, buf.height);
             self.surface.commit();
         }
     }
 
-    fn make_transparent(&self) -> anyhow::Result<()> {
-        use rustix::mm::{mmap, munmap, MapFlags, ProtFlags};
-        let buf = self.buf.as_ref().unwrap();
-        let size = (CANVAS_W * CANVAS_H * 4) as usize;
-        let ptr = unsafe {
-            mmap(
-                ptr::null_mut(),
-                size,
-                ProtFlags::READ | ProtFlags::WRITE,
-                MapFlags::SHARED,
-                &buf.fd,
-                0,
-            )? as *mut u8
-        };
-        let pixels = unsafe { std::slice::from_raw_parts_mut(ptr, size) };
-        for chunk in pixels.chunks_exact_mut(4) {
-            chunk.copy_from_slice(&TRANSPARENT);
+    /// Fade out whichever buffer currently shows the indicator. In
+    /// overlay-panel mode the indicator lives on its own small buffer
+    /// (`ind_buf`); in the layer-shell fallback we drew the indicator
+    /// box onto the candidate-sized buffer (`cand_buf`) and so we fade
+    /// that one instead. Either way the surface is left attached but
+    /// fully transparent so KWin removes the panel from view (see
+    /// `fade_out_cand_buf` for why we don't use `attach(None)`).
+    fn fade_out_ind_buf(&mut self) {
+        if self.backend.is_overlay() {
+            if let Some(buf) = self.ind_buf.as_ref() {
+                render_transparent(&buf.fd, buf.width, buf.height);
+                self.surface.attach(Some(&buf.buffer), 0, 0);
+                self.surface.damage_buffer(0, 0, buf.width, buf.height);
+                self.surface.commit();
+            }
+        } else if let Some(buf) = self.cand_buf.as_ref() {
+            render_transparent(&buf.fd, buf.width, buf.height);
+            self.surface.attach(Some(&buf.buffer), 0, 0);
+            self.surface.damage_buffer(0, 0, buf.width, buf.height);
+            self.surface.commit();
         }
-        unsafe { munmap(ptr as *mut _, size)? };
-        Ok(())
     }
 
     fn do_draw_candidates(
@@ -466,33 +555,73 @@ impl CandidateWindow {
         sel_keys: &str,
         qh: &QueueHandle<WaylandState>,
     ) {
-        if !self.ensure_buffer(qh) {
+        if !self.ensure_cand_buf(qh) {
             return;
         }
-        render_candidates(
-            &self.buf.as_ref().unwrap().fd,
-            &self.font,
-            candidates,
-            focused,
-            sel_keys,
-        );
-        self.commit_buffer();
+        let buf = self.cand_buf.as_ref().unwrap();
+        render_candidates(&buf.fd, &self.font, candidates, focused, sel_keys);
+        self.attach_and_commit(buf.width, buf.height, true);
     }
 
     fn do_draw_status(&mut self, indicator: &str, qh: &QueueHandle<WaylandState>) {
-        if !self.ensure_buffer(qh) {
-            return;
+        if self.backend.is_overlay() {
+            // Overlay mode: dedicated small buffer so the surface size changes
+            // to match the indicator, and the compositor places it tightly
+            // near the cursor.
+            if !self.ensure_ind_buf(qh) {
+                return;
+            }
+            let buf = self.ind_buf.as_ref().unwrap();
+            render_indicator_overlay(&buf.fd, &self.font, indicator);
+            self.attach_and_commit(buf.width, buf.height, false);
+        } else {
+            // Layer-shell fallback: surface is screen-anchored at fixed size;
+            // draw the indicator box at the bottom-left of the candidate-sized
+            // buffer (legacy layout).
+            if !self.ensure_cand_buf(qh) {
+                return;
+            }
+            let buf = self.cand_buf.as_ref().unwrap();
+            render_indicator_legacy(&buf.fd, &self.font, indicator);
+            self.attach_and_commit(buf.width, buf.height, true);
         }
-        render_status(&self.buf.as_ref().unwrap().fd, &self.font, indicator);
-        self.commit_buffer();
     }
 
-    fn ensure_buffer(&mut self, qh: &QueueHandle<WaylandState>) -> bool {
-        if self.buf.is_none() {
-            match ShmBuf::new(&self.shm, qh) {
-                Ok(b) => self.buf = Some(b),
+    fn ensure_cand_buf(&mut self, qh: &QueueHandle<WaylandState>) -> bool {
+        Self::ensure_buf(
+            &self.shm,
+            &mut self.cand_buf,
+            qh,
+            CAND_W,
+            CAND_H,
+            "y2skk-candidates",
+        )
+    }
+
+    fn ensure_ind_buf(&mut self, qh: &QueueHandle<WaylandState>) -> bool {
+        Self::ensure_buf(
+            &self.shm,
+            &mut self.ind_buf,
+            qh,
+            IND_W,
+            IND_H,
+            "y2skk-indicator",
+        )
+    }
+
+    fn ensure_buf(
+        shm: &wl_shm::WlShm,
+        slot: &mut Option<ShmBuf>,
+        qh: &QueueHandle<WaylandState>,
+        width: i32,
+        height: i32,
+        tag: &str,
+    ) -> bool {
+        if slot.is_none() {
+            match ShmBuf::new(shm, qh, width, height, tag) {
+                Ok(b) => *slot = Some(b),
                 Err(e) => {
-                    tracing::error!("SHM buffer creation failed: {e}");
+                    tracing::error!("SHM buffer creation failed for {tag}: {e}");
                     return false;
                 }
             }
@@ -500,37 +629,51 @@ impl CandidateWindow {
         true
     }
 
-    fn commit_buffer(&mut self) {
-        let buf = self.buf.as_ref().unwrap();
-        self.surface.attach(Some(&buf.buffer), 0, 0);
-        self.surface.damage_buffer(0, 0, CANVAS_W, CANVAS_H);
+    /// Attach the buffer (caller already rendered into it) and commit.
+    ///
+    /// `is_cand_buf` chooses which buffer to attach without holding a mutable
+    /// borrow of `self.surface` simultaneously with an immutable borrow of the
+    /// buffer slot.
+    fn attach_and_commit(&mut self, width: i32, height: i32, is_cand_buf: bool) {
+        let buffer = if is_cand_buf {
+            &self.cand_buf.as_ref().unwrap().buffer
+        } else {
+            &self.ind_buf.as_ref().unwrap().buffer
+        };
+        self.surface.attach(Some(buffer), 0, 0);
+        self.surface.damage_buffer(0, 0, width, height);
         self.surface.commit();
     }
 
-    /// Returns true if this window owns the given layer surface proxy.
     pub fn owns_layer_surface(&self, surface: &ZwlrLayerSurfaceV1) -> bool {
-        self.layer_surface.id() == surface.id()
+        match &self.backend {
+            SurfaceBackend::LayerShell(ls) => ls.id() == surface.id(),
+            SurfaceBackend::OverlayPanel(_) => false,
+        }
     }
 
-    /// Called by the event dispatcher when a configure event is received.
     pub fn handle_configure(&mut self, serial: u32, qh: &QueueHandle<WaylandState>) {
-        self.layer_surface.ack_configure(serial);
+        if let SurfaceBackend::LayerShell(ls) = &self.backend {
+            ls.ack_configure(serial);
+        }
+        let was_configured = self.configured;
         self.configured = true;
-
-        match self.pending.take() {
-            Some(PendingDraw::Candidates {
-                candidates,
-                focused,
-                sel_keys,
-            }) => {
-                self.do_draw_candidates(&candidates, focused, &sel_keys, qh);
-                self.state = DisplayState::Candidates;
+        if !was_configured {
+            match self.pending.take() {
+                Some(PendingDraw::Candidates {
+                    candidates,
+                    focused,
+                    sel_keys,
+                }) => {
+                    self.do_draw_candidates(&candidates, focused, &sel_keys, qh);
+                    self.state = DisplayState::Candidates;
+                }
+                Some(PendingDraw::Status { indicator }) => {
+                    self.do_draw_status(&indicator, qh);
+                    self.state = DisplayState::Status;
+                }
+                None => {}
             }
-            Some(PendingDraw::Status { indicator }) => {
-                self.do_draw_status(&indicator, qh);
-                self.state = DisplayState::Status;
-            }
-            None => {}
         }
     }
 }
@@ -587,6 +730,19 @@ impl Dispatch<ZwlrLayerShellV1, ()> for WaylandState {
         _state: &mut Self,
         _proxy: &ZwlrLayerShellV1,
         _event: zwlr_layer_shell_v1::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+// `zwp_input_panel_surface_v1` has no events, only requests.
+impl Dispatch<ZwpInputPanelSurfaceV1, ()> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpInputPanelSurfaceV1,
+        _event: <ZwpInputPanelSurfaceV1 as Proxy>::Event,
         _: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,

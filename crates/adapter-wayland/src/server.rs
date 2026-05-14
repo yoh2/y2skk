@@ -18,6 +18,7 @@ use wayland_client::{
 use wayland_protocols::wp::input_method::zv1::client::{
     zwp_input_method_context_v1::{self, ZwpInputMethodContextV1},
     zwp_input_method_v1::{self, ZwpInputMethodV1},
+    zwp_input_panel_v1::ZwpInputPanelV1,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 
@@ -33,6 +34,13 @@ use crate::keymap;
 const TAG_STATUS_HIDE: u8 = 1;
 /// Byte written to the timer pipe for each key-repeat tick.
 const TAG_KEY_REPEAT: u8 = 2;
+/// Byte written to the timer pipe by the heartbeat thread every
+/// `HEARTBEAT_INTERVAL`. The main loop logs a short summary of its IME
+/// state on receipt so long passthrough periods can be distinguished
+/// from a stuck event loop.
+const TAG_HEARTBEAT: u8 = 3;
+/// Interval between heartbeat ticks.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Marker user-data for the wl_keyboard obtained via wl_seat.get_keyboard.
 /// Gives it a distinct Dispatch impl from the IM-grabbed keyboard (which
@@ -72,8 +80,12 @@ fn keysym_repeats(keysym: u32) -> bool {
 
 struct ActiveContext {
     context: ZwpInputMethodContextV1,
-    keyboard: WlKeyboard,
-    handle: LocalHandle,
+    /// The IM-grabbed wl_keyboard. Kept alive (no longer explicitly released)
+    /// for the lifetime of this ActiveContext so wayland-client keeps routing
+    /// Modifiers/Key events to our Dispatch impl. KWin invalidates the
+    /// underlying object server-side when Deactivate fires, so the proxy is
+    /// just dropped at that point.
+    _keyboard: WlKeyboard,
     serial: u32,
     skk_mods: u32,
     xkb_state: Option<keymap::XkbState>,
@@ -83,11 +95,24 @@ struct ActiveContext {
 
 pub struct WaylandState {
     client: ReconnectingClient,
+    /// SKK session handle. Created once at startup and reused across every
+    /// Activate/Deactivate cycle so the SKK state (kana mode, ▽/▼ mode,
+    /// candidate index, …) survives the rapid Activate/Deactivate churn
+    /// that some compositors (e.g. KWin with Electron apps) emit on every
+    /// key press. Without this, each cycle would create a fresh session
+    /// and the user would be kicked back to the default hiragana mode.
+    handle: LocalHandle,
     input_method: Option<ZwpInputMethodV1>,
     active: Option<ActiveContext>,
     compositor: Option<WlCompositor>,
     shm: Option<WlShm>,
     layer_shell: Option<ZwlrLayerShellV1>,
+    /// `zwp_input_panel_v1` global, when the compositor advertises it.
+    /// When present, candidate window and status indicator surfaces are
+    /// hosted as input panel overlays so the compositor places them near
+    /// the application's text-input cursor. When absent, both fall back
+    /// to `zwlr_layer_shell_v1` anchored at the screen corner.
+    pub input_panel: Option<ZwpInputPanelV1>,
     outputs: Vec<WlOutput>,
     pub candidate_windows: Vec<CandidateWindow>,
     qh: Option<QueueHandle<WaylandState>>,
@@ -122,17 +147,32 @@ pub struct WaylandState {
     /// compositor-driven RepeatInfo updates keep arriving for the lifetime
     /// of the process.  We ignore all its other events.
     _seat_keyboard: Option<WlKeyboard>,
+    /// True once the seat keyboard has reported a `repeat_info` event.
+    /// Until then we accept the IM-grabbed keyboard's rate value as
+    /// authoritative (so a compositor that legitimately wants
+    /// repeat disabled via the IM-grabbed channel is honoured). After
+    /// the seat keyboard has spoken, IM-grabbed `rate=0` is treated as
+    /// a spurious Electron/Chrome artefact and ignored.
+    seat_repeat_received: bool,
 }
 
 impl WaylandState {
     fn new(timer_write: OwnedFd) -> anyhow::Result<Self> {
+        let client = ReconnectingClient::new()?;
+        let handle = client.create_handle("wayland");
+        tracing::info!(
+            handle,
+            "created SKK session handle (persistent across activations)"
+        );
         Ok(Self {
-            client: ReconnectingClient::new()?,
+            client,
+            handle,
             input_method: None,
             active: None,
             compositor: None,
             shm: None,
             layer_shell: None,
+            input_panel: None,
             outputs: Vec::new(),
             candidate_windows: Vec::new(),
             qh: None,
@@ -146,6 +186,7 @@ impl WaylandState {
             pending_stop_release: None,
             seat: None,
             _seat_keyboard: None,
+            seat_repeat_received: false,
         })
     }
 
@@ -175,6 +216,27 @@ impl WaylandState {
             }
         }
         self.pending_stop_release = None;
+        if !consumed {
+            // Passthrough keys: do not start IME-side repeat. The repeat
+            // tick path forwards each tick via send_key_*_to_app, which use
+            // the input-method context's commit serial — KWin appears to
+            // validate that against the real wl_keyboard.key serials it
+            // delivered and silently drop calls carrying the commit serial.
+            // The visible side effect was Slack desktop missing every
+            // second Enter once IM-side repeat actually engaged: the real
+            // release was deferred via pending_stop_release while
+            // repeat_active was set, then eventually fired through the
+            // commit-serial path and dropped, leaving the app convinced
+            // the key was still held. Letting repeat_active stay None for
+            // passthrough keys makes the release flow through on_key with
+            // is_press=false, where the real wl_keyboard.key serial is
+            // already plumbed through to context.key (1c2a4c4). The cost
+            // is that we no longer synthesise repeat ticks for passthrough
+            // — the focused app must handle key repeat itself, which is
+            // the normal Wayland contract anyway.
+            tracing::debug!("start_repeat: skip passthrough key (code={keycode}, sym={keysym:#x})");
+            return;
+        }
         if self.repeat_rate == 0 {
             tracing::debug!("start_repeat: disabled (rate=0)");
             return;
@@ -242,33 +304,57 @@ impl WaylandState {
         }
     }
 
-    /// Directly send a press event for `keycode` to the focused app.  Used
-    /// for passthrough repeat handling (each tick is a release+press pair).
+    /// Directly send a press event for `keycode` to the focused app.
+    /// Currently unused: the only call site was the passthrough branch of
+    /// the repeat-tick loop, which became unreachable once `start_repeat`
+    /// stopped engaging IME-side repeat for passthrough keys (and the
+    /// remaining defensive arm of that branch now stops the repeat
+    /// instead). Kept around so that a future re-implementation of
+    /// passthrough repeat — should one become viable — has a paired
+    /// helper next to `send_key_release_to_app`.
+    #[allow(dead_code)]
     fn send_key_press_to_app(&self, keycode: u32) {
         if let Some(active) = self.active.as_ref() {
             active.context.key(active.serial, 0, keycode, 1);
         }
     }
 
-    /// Create one CandidateWindow per known output. Called once after the first
-    /// roundtrip when all globals (including outputs) have been enumerated.
+    /// Create the candidate window(s). In overlay-panel mode (when
+    /// `zwp_input_panel_v1` is available) one window is enough — the
+    /// compositor places it near the text-input cursor regardless of which
+    /// output that cursor is on. In layer-shell fallback mode the window is
+    /// anchored to a specific output's screen edge, so we need one per
+    /// known output. Called once after the first roundtrip when all
+    /// globals (including outputs) have been enumerated.
     fn init_candidate_windows(&mut self) {
-        let (Some(compositor), Some(shm), Some(layer_shell), Some(qh)) = (
+        let (Some(compositor), Some(shm), Some(qh)) = (
             self.compositor.as_ref(),
             self.shm.as_ref(),
-            self.layer_shell.as_ref(),
             self.qh.as_ref(),
         ) else {
             tracing::warn!("missing Wayland globals — candidate window disabled");
             return;
         };
 
+        if self.input_panel.is_none() && self.layer_shell.is_none() {
+            tracing::warn!(
+                "neither zwp_input_panel_v1 nor zwlr_layer_shell_v1 advertised — candidate window disabled"
+            );
+            return;
+        }
+
         let Some(font) = candidate_window::load_font() else {
             return;
         };
         let font = Arc::new(font);
 
-        let outputs: Vec<Option<WlOutput>> = if self.outputs.is_empty() {
+        // Overlay panel is compositor-positioned by cursor, so one window is
+        // enough regardless of monitor count. Pass `None` for output so the
+        // layer-shell fallback path inside CandidateWindow::new defaults
+        // sensibly when overlay creation fails.
+        let outputs: Vec<Option<WlOutput>> = if self.input_panel.is_some() {
+            vec![None]
+        } else if self.outputs.is_empty() {
             tracing::warn!("no wl_output found — creating one candidate window (default output)");
             vec![None]
         } else {
@@ -276,15 +362,17 @@ impl WaylandState {
         };
 
         for output_opt in outputs {
-            let cw = CandidateWindow::new(
+            if let Some(cw) = CandidateWindow::new(
                 compositor,
-                layer_shell,
+                self.layer_shell.as_ref(),
+                self.input_panel.as_ref(),
                 shm.clone(),
                 Arc::clone(&font),
                 qh,
                 output_opt.as_ref(),
-            );
-            self.candidate_windows.push(cw);
+            ) {
+                self.candidate_windows.push(cw);
+            }
         }
 
         tracing::info!(
@@ -294,26 +382,62 @@ impl WaylandState {
     }
 
     /// Returns true if the IM consumed the key (no forwarding happened).
-    /// Returns false for passthrough keys — these are forwarded to the app via
-    /// `context.key()` and the app is responsible for its own key repeat.
-    fn on_key(&mut self, keycode: u32, keysym: u32, is_press: bool) -> bool {
-        let (handle, serial, skk_mods) = match self.active.as_ref() {
-            Some(a) => (a.handle, a.serial, a.skk_mods),
+    /// Returns false for passthrough keys — these are normally forwarded to
+    /// the app via `context.key()` and the app is responsible for its own
+    /// key repeat.
+    ///
+    /// `key_serial` / `key_time` are the serial and time from the original
+    /// `wl_keyboard.key` event. They are forwarded to `context.key` so KWin
+    /// can correlate the forwarded key with the original keyboard event — using
+    /// the input-method context's commit serial (`active.serial`) here was
+    /// observed to cause KWin to silently drop forwarded keys for some apps
+    /// (e.g. Electron's Enter/Backspace in Slack and X).
+    ///
+    /// `forward_passthrough` controls what happens when the engine returns a
+    /// passthrough verdict. For real `wl_keyboard.key` events callers should
+    /// pass `true` so the key reaches the focused application. For
+    /// synthetic repeat ticks (which have no real serial/time) callers
+    /// should pass `false`: forwarding `context.key(0, 0, …)` would feed
+    /// KWin a serial that doesn't correspond to any keyboard event it sent
+    /// and the request would be silently dropped (or, worse, accepted once
+    /// and then discarded as a duplicate, leaving the application with a
+    /// stray phantom key event). Repeat-tick callers should observe the
+    /// returned `consumed` value and stop the repeat when it flips to
+    /// `false` mid-sequence.
+    fn on_key(
+        &mut self,
+        key_serial: u32,
+        key_time: u32,
+        keycode: u32,
+        keysym: u32,
+        is_press: bool,
+        forward_passthrough: bool,
+    ) -> bool {
+        let (commit_serial, skk_mods) = match self.active.as_ref() {
+            Some(a) => (a.serial, a.skk_mods),
             None => {
-                tracing::debug!("on_key: no active context, dropping event");
+                // Visible at the default info level: this almost certainly
+                // means the IME thinks it is inactive while keys are still
+                // being delivered to its grabbed wl_keyboard (state desync).
+                tracing::warn!(
+                    "on_key: no active context, dropping event (code={keycode}, sym={keysym:#x})"
+                );
                 return false;
             }
         };
 
-        let actions = match self.client.process_key(handle, keysym, skk_mods, is_press) {
+        let actions = match self
+            .client
+            .process_key(self.handle, keysym, skk_mods, is_press)
+        {
             Ok(a) => a,
             Err(e) => {
-                tracing::error!(handle, "process_key error: {e:?}");
+                tracing::error!(handle = self.handle, "process_key error: {e:?}");
                 return false;
             }
         };
         tracing::debug!(
-            "on_key(code={keycode}, sym={keysym:#x}, press={is_press}) → {} action(s) (serial={serial})",
+            "on_key(code={keycode}, sym={keysym:#x}, press={is_press}) → {} action(s) (commit_serial={commit_serial})",
             actions.len()
         );
 
@@ -329,7 +453,7 @@ impl WaylandState {
 
         let mut sink = ContextSink {
             context,
-            serial,
+            serial: commit_serial,
             candidate_windows: cws,
             qh,
             timer_write_fd: timer_fd,
@@ -338,13 +462,13 @@ impl WaylandState {
         let result = dispatch_actions(&actions, &mut sink);
 
         let consumed = result.consumed && !result.force_passthrough;
-        if !consumed {
+        if !consumed && forward_passthrough {
             let state_val: u32 = if is_press { 1 } else { 0 };
             self.active
                 .as_ref()
                 .unwrap()
                 .context
-                .key(serial, 0, keycode, state_val);
+                .key(key_serial, key_time, keycode, state_val);
         }
         consumed
     }
@@ -458,6 +582,10 @@ impl Dispatch<WlRegistry, ()> for WaylandState {
                     tracing::info!("found zwlr_layer_shell_v1 (version {version})");
                     state.layer_shell = Some(registry.bind(name, 4.min(version), qh, ()));
                 }
+                i if i == ZwpInputPanelV1::interface().name => {
+                    tracing::info!("found zwp_input_panel_v1 (version {version})");
+                    state.input_panel = Some(registry.bind(name, 1, qh, ()));
+                }
                 "wl_output" => {
                     let output: WlOutput = registry.bind(name, 2.min(version), qh, ());
                     state.outputs.push(output);
@@ -494,17 +622,24 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
             zwp_input_method_v1::Event::Activate { id } => {
                 if let Some(prev) = state.active.take() {
                     tracing::warn!("new activation before previous deactivation — cleaning up");
-                    state.client.destroy_handle(prev.handle);
-                    prev.keyboard.release();
-                    prev.context.destroy();
+                    // Do not destroy the SKK handle: it is owned by
+                    // WaylandState and reused across every Activate cycle
+                    // so the user's kana mode survives the focus churn that
+                    // some compositors (KWin with Electron apps) cause.
+                    // Same rationale as the Deactivate branch for the
+                    // Wayland-side proxies: do not call
+                    // prev.keyboard.release() or prev.context.destroy() —
+                    // when a fresh Activate arrives without an intervening
+                    // Deactivate, KWin has likely already invalidated the
+                    // previous keyboard and context server-side, so sending
+                    // the destructor would crash the wl_display connection.
+                    drop(prev);
                 }
-                let handle = state.client.create_handle("wayland");
                 let keyboard = id.grab_keyboard(qh, ());
-                tracing::info!(handle, "input context activated");
+                tracing::info!(handle = state.handle, "input context activated");
                 state.active = Some(ActiveContext {
                     context: id,
-                    keyboard,
-                    handle,
+                    _keyboard: keyboard,
                     serial: 0,
                     skk_mods: 0,
                     xkb_state: None,
@@ -512,16 +647,46 @@ impl Dispatch<ZwpInputMethodV1, ()> for WaylandState {
             }
             zwp_input_method_v1::Event::Deactivate { context: _ctx } => {
                 state.stop_all_repeat();
-                state.pressed_keys.clear();
+                // Do NOT clear pressed_keys here. KWin's rapid Activate/Deactivate
+                // (e.g. Electron apps' focus churn on each Enter) can carry a
+                // key press across two grabs — press arrives on the old grab,
+                // release arrives on the new one. If we clear here, the
+                // release event hits the `stray release` branch in the Key
+                // handler and gets dropped, leaving the app stuck thinking
+                // the key is still held (Slack/X "Enter only works half the
+                // time" pattern). The synthetic-release filter still works:
+                // any release for a key that was never pressed will not be
+                // in pressed_keys and gets dropped as before.
                 if let Some(active) = state.active.take() {
-                    tracing::info!(handle = active.handle, "input context deactivated");
-                    state.client.destroy_handle(active.handle);
-                    active.keyboard.release();
-                    // Do not call context.destroy(): KWin frees it server-side on deactivate.
+                    tracing::info!(handle = state.handle, "input context deactivated");
+                    // Do not destroy the SKK handle: see Activate branch above.
+                    // Do NOT call active.keyboard.release() or active.context.destroy():
+                    // KWin invalidates both the grabbed wl_keyboard and the
+                    // zwp_input_method_context_v1 server-side when it sends Deactivate.
+                    // Sending the destructor request hits a dead object and crashes the
+                    // whole wl_display connection with "invalid object" (observed
+                    // 2026-05-14 under rapid Activate/Deactivate from Slack focus
+                    // churn). Dropping the proxies without sending the destructor is
+                    // safe — the wayland-client crate does not auto-send destructors
+                    // on Drop.
+                    drop(active);
                 }
             }
             _ => {}
         }
+    }
+}
+
+// `zwp_input_panel_v1` has no events, only requests.
+impl Dispatch<ZwpInputPanelV1, ()> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpInputPanelV1,
+        _event: <ZwpInputPanelV1 as Proxy>::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
     }
 }
 
@@ -577,8 +742,8 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                 }
             }
             wl_keyboard::Event::Key {
-                serial: _,
-                time: _,
+                serial,
+                time,
                 key,
                 state: key_state,
             } => {
@@ -639,7 +804,9 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                     .unwrap_or(false);
                 let repeat_eligible = xkb_allows_repeat || keysym_repeats(keysym);
                 let consumed = if keysym != 0 {
-                    state.on_key(key, keysym, is_press)
+                    // Real wl_keyboard.key event: forward to the app when
+                    // the engine returns passthrough.
+                    state.on_key(serial, time, key, keysym, is_press, true)
                 } else {
                     false
                 };
@@ -651,13 +818,19 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
                 }
             }
             wl_keyboard::Event::RepeatInfo { rate, delay } => {
-                state.repeat_rate = rate.max(0) as u32;
-                state.repeat_delay = delay.max(0) as u32;
-                tracing::info!(
-                    "key repeat info: rate={}/s, delay={}ms",
-                    state.repeat_rate,
-                    state.repeat_delay,
-                );
+                tracing::info!("key repeat info: rate={rate}/s, delay={delay}ms");
+                // KWin (with Electron apps in focus) sends rate=0 on the
+                // IM-grabbed keyboard even when the seat keyboard has
+                // already advertised a real value — that zero would
+                // otherwise clobber the real seat rate. Once the seat
+                // keyboard has produced a repeat_info we trust its value
+                // and ignore the IM-grabbed zero. Before the seat has
+                // spoken we still accept rate=0 in case the compositor
+                // actually wants repeat disabled.
+                if rate > 0 || !state.seat_repeat_received {
+                    state.repeat_rate = rate.max(0) as u32;
+                    state.repeat_delay = delay.max(0) as u32;
+                }
             }
             wl_keyboard::Event::Modifiers {
                 serial: _,
@@ -668,6 +841,14 @@ impl Dispatch<WlKeyboard, ()> for WaylandState {
             } => {
                 let new_skk_mods = keymap::xkb_mods_to_skk(mods_depressed, mods_latched);
                 let old_skk_mods = state.active.as_ref().map(|a| a.skk_mods).unwrap_or(0);
+                // Visible at info level so we can confirm that the IM-grabbed
+                // wl_keyboard is still receiving events when the passthrough
+                // issue is reproduced.
+                tracing::info!(
+                    "modifiers event: dep={mods_depressed:#x} lat={mods_latched:#x} \
+                     lock={mods_locked:#x} group={group} active={}",
+                    state.active.is_some()
+                );
                 if let Some(active) = &mut state.active {
                     active.skk_mods = new_skk_mods;
                     if let Some(xkb) = &mut active.xkb_state {
@@ -720,6 +901,10 @@ impl Dispatch<WlKeyboard, SeatKbd> for WaylandState {
         if let wl_keyboard::Event::RepeatInfo { rate, delay } = event {
             state.repeat_rate = rate.max(0) as u32;
             state.repeat_delay = delay.max(0) as u32;
+            // Mark that the seat keyboard has spoken so that later
+            // IM-grabbed-keyboard rate=0 events know to defer to this
+            // value rather than override it.
+            state.seat_repeat_received = true;
             tracing::info!(
                 "key repeat info (seat): rate={}/s, delay={}ms",
                 state.repeat_rate,
@@ -745,6 +930,24 @@ pub fn run() -> anyhow::Result<()> {
     let (timer_read, timer_write) = rustix::pipe::pipe_with(
         rustix::pipe::PipeFlags::NONBLOCK | rustix::pipe::PipeFlags::CLOEXEC,
     )?;
+
+    // Heartbeat: a dedicated thread writes TAG_HEARTBEAT to the timer pipe
+    // every HEARTBEAT_INTERVAL so the main loop emits a periodic state log.
+    // This makes "main loop alive but no IME events arriving" distinguishable
+    // from "main loop wedged" in the journalctl trace.
+    {
+        let fd = timer_write.as_fd().try_clone_to_owned()?;
+        std::thread::Builder::new()
+            .name("y2skk-heartbeat".into())
+            .spawn(move || loop {
+                std::thread::sleep(HEARTBEAT_INTERVAL);
+                if rustix::io::write(&fd, &[TAG_HEARTBEAT]).is_err() {
+                    // Main process is gone; the pipe write end can only fail
+                    // when the reader has been closed. Bail out of the thread.
+                    break;
+                }
+            })?;
+    }
 
     let mut state = WaylandState::new(timer_write)?;
     state.qh = Some(qh.clone());
@@ -794,6 +997,7 @@ pub fn run() -> anyhow::Result<()> {
         let mut buf = [0u8; 32];
         let mut hide_status = false;
         let mut repeat_ticks: u32 = 0;
+        let mut heartbeats: u32 = 0;
         loop {
             match rustix::io::read(&timer_read, &mut buf) {
                 Ok(n) if n > 0 => {
@@ -801,12 +1005,21 @@ pub fn run() -> anyhow::Result<()> {
                         match b {
                             TAG_STATUS_HIDE => hide_status = true,
                             TAG_KEY_REPEAT => repeat_ticks += 1,
+                            TAG_HEARTBEAT => heartbeats += 1,
                             _ => {}
                         }
                     }
                 }
                 _ => break,
             }
+        }
+        if heartbeats > 0 {
+            tracing::info!(
+                "heartbeat: ticks={heartbeats} active={} handle={} repeat_active={}",
+                state.active.is_some(),
+                state.handle,
+                state.repeat_active.is_some()
+            );
         }
         if hide_status {
             for cw in &mut state.candidate_windows {
@@ -825,19 +1038,54 @@ pub fn run() -> anyhow::Result<()> {
                 break;
             };
             if was_consumed {
-                // Re-run the IM logic — commits/preedits will fire as usual.
-                state.on_key(keycode, keysym, true);
+                // Re-run the IM logic — commits/preedits fire as usual via
+                // the actions sink. Synthetic repeat tick: there is no
+                // original wl_keyboard.key serial/time, so pass 0 for both
+                // and pass `forward_passthrough=false` so the engine does
+                // NOT call context.key with a 0 serial. KWin would not be
+                // able to correlate that with any keyboard event it sent
+                // and would silently drop or de-duplicate the request,
+                // delivering at most one phantom keypress to the app.
+                let still_consumed = state.on_key(0, 0, keycode, keysym, true, false);
+                if !still_consumed {
+                    // The engine has stopped consuming this key (e.g. the
+                    // ▽-mode preedit shrank to empty while the user was
+                    // holding Backspace). The user's intent has been
+                    // satisfied and continuing to repeat would either go
+                    // nowhere or — worse — start leaking phantom passthrough
+                    // events. Stop the repeat and wait for a fresh real
+                    // press to re-arm anything.
+                    tracing::debug!(
+                        "consumed repeat tick became passthrough; stopping repeat (code={keycode}, sym={keysym:#x})"
+                    );
+                    state.stop_all_repeat();
+                    break;
+                }
             } else {
-                // Passthrough: cycle release + press so the app sees a fresh
-                // keypress each tick (most apps ignore duplicate press events).
-                state.send_key_release_to_app(keycode);
-                state.send_key_press_to_app(keycode);
+                // Defensive: start_repeat skips passthrough keys (commit
+                // 6493c47), so this branch should be unreachable. If we
+                // ever do land here, stop the repeat instead of feeding
+                // the app release/press pairs whose serial/time would not
+                // line up with any real keyboard event.
+                tracing::warn!("unexpected passthrough repeat tick (code={keycode}); stopping");
+                state.stop_all_repeat();
+                break;
             }
         }
 
         // Process any buffered Wayland events and flush pending sends.
-        event_queue.dispatch_pending(&mut state)?;
-        let _ = event_queue.flush();
+        if let Err(e) = event_queue.dispatch_pending(&mut state) {
+            tracing::error!("dispatch_pending error: {e}");
+            return Err(e.into());
+        }
+        if let Err(e) = event_queue.flush() {
+            let msg = e.to_string();
+            if msg.contains("Protocol error") {
+                tracing::error!("wl_display flush: protocol error, exiting: {msg}");
+                anyhow::bail!("Wayland protocol error during flush: {msg}");
+            }
+            tracing::warn!("wl_display flush error: {msg}");
+        }
 
         // Wait for the next event (Wayland socket or timer pipe).
         let Some(guard) = event_queue.prepare_read() else {
@@ -857,11 +1105,20 @@ pub fn run() -> anyhow::Result<()> {
                 tv_nsec: remaining.subsec_nanos() as _,
             }
         });
-        let _ = poll(&mut fds, timeout.as_ref());
+        if let Err(e) = poll(&mut fds, timeout.as_ref()) {
+            tracing::warn!("poll error: {e}");
+        }
 
         // Only read from the Wayland socket if it actually fired.
         if fds[0].revents().contains(PollFlags::IN) {
-            let _ = guard.read();
+            if let Err(e) = guard.read() {
+                let msg = e.to_string();
+                if msg.contains("Protocol error") {
+                    tracing::error!("wl_display read: protocol error, exiting: {msg}");
+                    anyhow::bail!("Wayland protocol error during read: {msg}");
+                }
+                tracing::warn!("wl_display read error: {msg}");
+            }
         }
         // Otherwise drop the guard; the timer-pipe path is handled next iteration.
     }
