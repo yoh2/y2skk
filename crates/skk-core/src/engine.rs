@@ -1641,20 +1641,32 @@ impl SkkEngine {
                                 &okuri_key,
                             );
                         }
-                        // Key pressed but no candidate at that position — consume and ignore.
-                        return vec![];
+                        // sel_key matched but no candidate at that position
+                        // — fall through to the printable-char fallback at
+                        // the bottom of this function so the key behaves
+                        // the same as any other non-selection printable
+                        // (top candidate is committed, then the key is
+                        // re-dispatched as kana). The previous `return
+                        // vec![]` here was meant to consume-and-ignore but
+                        // empty actions get dispatched as passthrough by
+                        // skk-ipc, which surfaced as "candidate window
+                        // stays but the key types itself in the app".
                     }
                 }
             }
             listing
         };
 
-        // Uppercase 'X' → enter purge-confirmation flow (ignored in listing mode).
-        if event.key == Key::Char('X') && !event.modifiers.contains(Modifiers::CTRL) {
-            if in_listing {
-                // Listing mode: spec says X must not trigger purge.  Consume the key.
-                return vec![];
-            }
+        // Uppercase 'X' in inline mode → enter purge-confirmation flow.
+        // In listing mode X is not a special key — fall through to the
+        // printable-char fallback so it behaves like any other uppercase
+        // letter (commit current candidate, then start a fresh ▽ midashi
+        // with X re-dispatched). The previous `if in_listing { return
+        // vec![]; }` branch was meant to consume X in listing mode but
+        // empty actions get dispatched as passthrough, so the key was
+        // typed straight into the focused app.
+        if event.key == Key::Char('X') && !event.modifiers.contains(Modifiers::CTRL) && !in_listing
+        {
             self.phase = SkkPhase::PurgeConfirm {
                 midashi,
                 okuri,
@@ -2534,6 +2546,89 @@ mod tests {
             "should enter register mode after last candidate"
         );
         assert!(matches!(eng.phase(), SkkPhase::Hiragana));
+    }
+
+    #[test]
+    fn test_listing_out_of_range_sel_key_falls_through() {
+        // sel_keys is "aoeuh" (5 chars) but only 3 candidates exist.
+        // Pressing 'h' (sel_keys[4]) maps to candidate index 4, which is
+        // out of range. The key should fall through to the printable-char
+        // fallback and behave the same as a non-sel printable: commit the
+        // focused candidate, then re-dispatch as kana (preedit "h" while
+        // waiting for a vowel). Previously this branch returned `vec![]`
+        // which surfaced as the key being typed straight into the
+        // focused application.
+        let table = romaji_table();
+        let keybindings = SkkKeybindings {
+            inline_count: 0,
+            selection_keys: vec!['a', 'o', 'e', 'u', 'h'],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(table, keybindings);
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("A"),
+            Candidate::new("B"),
+            Candidate::new("C"),
+        ])));
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // inline_count=0 → already in listing mode at index=0.
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
+
+        let actions = eng.process_key(&press('h'));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::Commit(s) if s == "A")),
+            "out-of-range sel_key 'h' should commit focused candidate (A), got {:?}",
+            actions
+        );
+        // After commit + handle_kana('h'), the engine sits in Hiragana
+        // phase with 'h' in the kana state machine waiting for a vowel.
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+        assert!(
+            !eng.kana_state.is_empty(),
+            "kana state should hold the redispatched 'h' consonant"
+        );
+    }
+
+    #[test]
+    fn test_inline_mode_unchanged_for_sel_key() {
+        // Regression guard: inline mode (index < inline_count) should
+        // behave exactly the same for sel_keys characters as before. The
+        // listing-mode fix does not alter the inline path (the listing
+        // block early-returns via `listing = false` so the sel_key match
+        // is never attempted).
+        let table = romaji_table();
+        let keybindings = SkkKeybindings {
+            inline_count: 3,
+            selection_keys: vec!['a', 'o', 'e', 'u', 'h'],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(table, keybindings);
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("A"),
+            Candidate::new("B"),
+        ])));
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        // inline_count=3 with only 2 candidates → inline mode for both.
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 0, .. }));
+
+        let actions = eng.process_key(&press('h'));
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::Commit(s) if s == "A")),
+            "inline-mode sel_key 'h' should still commit focused candidate, got {:?}",
+            actions
+        );
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+        assert!(!eng.kana_state.is_empty());
     }
 
     #[test]
@@ -3507,7 +3602,18 @@ mod tests {
     }
 
     #[test]
-    fn test_purge_ignored_in_listing_mode() {
+    fn test_listing_x_falls_through_to_kana_redispatch() {
+        // X in listing mode must NOT enter PurgeConfirm. Instead it falls
+        // through to the printable-char fallback, behaving like any other
+        // uppercase letter (B/C/...): commit current candidate, then
+        // re-dispatch X to start a fresh ▽ midashi.
+        //
+        // (The previous version of this test asserted that the phase
+        // stayed `Selecting` after pressing X — that matched the author's
+        // original intent of silent-consume but the implementation
+        // actually passthrough'd X to the focused application, leaving
+        // the candidate window stuck. The new behaviour aligns X with the
+        // already-working B/C path.)
         let table = romaji_table();
         let keybindings = SkkKeybindings {
             inline_count: 1,
@@ -3527,11 +3633,18 @@ mod tests {
         eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // index=1 listing
         assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }));
 
-        // 'X' in listing mode must NOT enter PurgeConfirm.
-        eng.process_key(&press('X'));
+        let actions = eng.process_key(&press('X'));
         assert!(
-            matches!(eng.phase(), SkkPhase::Selecting { index: 1, .. }),
-            "X must be ignored in listing mode"
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::Commit(s) if s == "B")),
+            "X in listing mode should commit the focused candidate (B at index=1) before redispatching, got {:?}",
+            actions
+        );
+        assert!(
+            matches!(eng.phase(), SkkPhase::Midashi { .. }),
+            "X in listing mode should land in Midashi (▽) after the commit + redispatch, got {:?}",
+            eng.phase()
         );
     }
 
