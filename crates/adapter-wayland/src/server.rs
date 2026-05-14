@@ -216,6 +216,27 @@ impl WaylandState {
             }
         }
         self.pending_stop_release = None;
+        if !consumed {
+            // Passthrough keys: do not start IME-side repeat. The repeat
+            // tick path forwards each tick via send_key_*_to_app, which use
+            // the input-method context's commit serial — KWin appears to
+            // validate that against the real wl_keyboard.key serials it
+            // delivered and silently drop calls carrying the commit serial.
+            // The visible side effect was Slack desktop missing every
+            // second Enter once IM-side repeat actually engaged: the real
+            // release was deferred via pending_stop_release while
+            // repeat_active was set, then eventually fired through the
+            // commit-serial path and dropped, leaving the app convinced
+            // the key was still held. Letting repeat_active stay None for
+            // passthrough keys makes the release flow through on_key with
+            // is_press=false, where the real wl_keyboard.key serial is
+            // already plumbed through to context.key (1c2a4c4). The cost
+            // is that we no longer synthesise repeat ticks for passthrough
+            // — the focused app must handle key repeat itself, which is
+            // the normal Wayland contract anyway.
+            tracing::debug!("start_repeat: skip passthrough key (code={keycode}, sym={keysym:#x})");
+            return;
+        }
         if self.repeat_rate == 0 {
             tracing::debug!("start_repeat: disabled (rate=0)");
             return;
