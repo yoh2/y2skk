@@ -33,8 +33,11 @@ pub enum NumType {
 
 impl NumType {
     /// Converts the marker character immediately following `#` in a dict entry
-    /// to the corresponding `NumType`.  Returns `None` for unknown or unsupported
-    /// markers (including `#4` which is handled separately).
+    /// to the corresponding `NumType`.  Returns `None` for unknown markers and
+    /// for `#4`, which is recursive numeric conversion (handled in
+    /// `crate::num::template::expand_with_recursive_lookup` via a separate
+    /// branch that performs a dictionary re-lookup with the digit run as the
+    /// secondary key).
     pub fn from_marker(ch: char) -> Option<Self> {
         match ch {
             '0' => Some(Self::Raw),
