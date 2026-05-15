@@ -1382,6 +1382,13 @@ impl SkkEngine {
             // substituted via `#4`, and deduplicates words to avoid
             // cartesian-product blow-ups when multiple dictionaries return
             // identical entries.
+            //
+            // The pipeline collects candidates and ignore directives in two
+            // passes (a Lisp-form directive may follow the displayable word
+            // it blacklists, so a streaming approach can't decide
+            // emit/skip on a single pass), but caps the returned word list
+            // at `MAX_RECURSIVE_EXPANSIONS` to bound work even when a
+            // single secondary entry holds a very large candidate list.
             let lisp_directives_enabled = self.lisp_directives;
             let lookup_fn = |key: &str| -> Vec<String> {
                 let secondary: Vec<crate::dict::entry::Candidate> = self
@@ -1413,6 +1420,7 @@ impl SkkEngine {
                     .map(|c| c.word)
                     .filter(|w| !secondary_ignore.contains(w))
                     .filter(|w| seen.insert(w.clone()))
+                    .take(crate::num::template::MAX_RECURSIVE_EXPANSIONS)
                     .collect()
             };
 
