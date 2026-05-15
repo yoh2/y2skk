@@ -1375,19 +1375,43 @@ impl SkkEngine {
 
             // Closure for recursive-lookup expansion (`#4`). Borrows
             // `self.dict` immutably; only invoked when a candidate template
-            // contains `#4`. Filters out Lisp-form candidates so that
-            // S-expression text (e.g. `(skk-ignore-dic-word ...)`) cannot
-            // leak into the substituted result, and deduplicates words to
-            // avoid cartesian-product blow-ups when multiple dictionaries
-            // return identical entries.
+            // contains `#4`. Mirrors the primary-lookup pipeline: hides all
+            // Lisp-form candidates, applies any `skk-ignore-dic-word`
+            // directives present in the secondary entry (when
+            // `lisp_directives` is enabled) so blacklisted words cannot be
+            // substituted via `#4`, and deduplicates words to avoid
+            // cartesian-product blow-ups when multiple dictionaries return
+            // identical entries.
+            let lisp_directives_enabled = self.lisp_directives;
             let lookup_fn = |key: &str| -> Vec<String> {
-                let mut seen = std::collections::HashSet::new();
-                self.dict
+                let secondary: Vec<crate::dict::entry::Candidate> = self
+                    .dict
                     .iter()
                     .filter_map(|d| d.lookup(key, None))
                     .flat_map(|e| e.candidates.into_iter())
+                    .collect();
+                let secondary_ignore: std::collections::HashSet<String> = if lisp_directives_enabled
+                {
+                    secondary
+                        .iter()
+                        .filter_map(|c| match &c.lisp_form {
+                            Some(crate::dict::entry::LispForm::IgnoreDicWord(ws)) => {
+                                Some(ws.as_slice())
+                            }
+                            _ => None,
+                        })
+                        .flatten()
+                        .cloned()
+                        .collect()
+                } else {
+                    std::collections::HashSet::new()
+                };
+                let mut seen = std::collections::HashSet::new();
+                secondary
+                    .into_iter()
                     .filter(|c| c.is_displayable())
                     .map(|c| c.word)
+                    .filter(|w| !secondary_ignore.contains(w))
                     .filter(|w| seen.insert(w.clone()))
                     .collect()
             };
@@ -4076,6 +4100,46 @@ mod tests {
         assert!(
             !words.iter().any(|w| w.contains("skk-ignore-dic-word")),
             "Lisp directive must not leak into recursive expansion: {:?}",
+            words
+        );
+    }
+
+    #[test]
+    fn test_numeric_recursive_applies_secondary_ignore_directive() {
+        // A `(skk-ignore-dic-word ...)` directive in the *secondary* lookup
+        // entry must blacklist the listed words from being substituted via
+        // `#4`, mirroring how the primary lookup applies the directive.
+        use crate::dict::entry::LispForm;
+        let mut eng = engine();
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4")]),
+            (
+                "1".to_string(),
+                vec![
+                    Candidate::lisp(
+                        "(skk-ignore-dic-word \"壱\")",
+                        LispForm::IgnoreDicWord(vec!["壱".to_string()]),
+                    ),
+                    Candidate::new("壱"),
+                    Candidate::new("弐"),
+                ],
+            ),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p1".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting, got {:?}", eng.phase());
+        };
+        let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+        assert!(words.contains(&"弐"), "expected '弐' in {:?}", words);
+        assert!(
+            !words.contains(&"壱"),
+            "secondary skk-ignore-dic-word directive must blacklist '壱' from #4 expansion: {:?}",
             words
         );
     }

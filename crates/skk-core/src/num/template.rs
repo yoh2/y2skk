@@ -1,5 +1,12 @@
 use super::{convert, types::NumType};
 
+/// Defensive cap on the number of expansions a single dict candidate may
+/// produce via [`expand_with_recursive_lookup`]. Templates containing
+/// multiple `#4` markers can in principle produce a cartesian-product blow-up
+/// (`alternatives_1 * alternatives_2 * ...`); this bound keeps memory and
+/// time predictable for pathological or crafted dictionaries.
+pub const MAX_RECURSIVE_EXPANSIONS: usize = 256;
+
 /// Scans `midashi` for maximal runs of ASCII decimal digits, replaces each run
 /// with a single `#`, and returns the resulting template string together with
 /// the ordered list of digit runs.
@@ -104,6 +111,13 @@ pub fn expand(candidate_word: &str, runs: &[String]) -> Option<String> {
 ///
 /// For candidates that do not contain `#4`, this behaves like `expand`
 /// wrapped in a single-element `Vec`, and `lookup` is never invoked.
+///
+/// Defensive cap: a template containing multiple `#4` markers can in
+/// principle produce `lookup_count_1 * lookup_count_2 * ...` expansions.
+/// To prevent pathological dictionaries (or crafted inputs) from blowing
+/// up memory, the running expansion set is capped at
+/// [`MAX_RECURSIVE_EXPANSIONS`] entries; any additional combinations are
+/// silently dropped.
 pub fn expand_with_recursive_lookup(
     candidate_word: &str,
     runs: &[String],
@@ -126,9 +140,14 @@ pub fn expand_with_recursive_lookup(
                 if alternatives.is_empty() {
                     return Vec::new();
                 }
-                let mut new_results = Vec::with_capacity(results.len() * alternatives.len());
-                for r in &results {
+                let projected = results.len().saturating_mul(alternatives.len());
+                let cap = projected.min(MAX_RECURSIVE_EXPANSIONS);
+                let mut new_results = Vec::with_capacity(cap);
+                'outer: for r in &results {
                     for alt in &alternatives {
+                        if new_results.len() >= MAX_RECURSIVE_EXPANSIONS {
+                            break 'outer;
+                        }
                         let mut s = r.clone();
                         s.push_str(alt);
                         new_results.push(s);
@@ -399,5 +418,33 @@ mod tests {
         let runs: Vec<String> = vec![]; // no runs
         let result = expand_with_recursive_lookup("#4", &runs, &lookup);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn expand_recursive_caps_cartesian_product() {
+        // Multiple #4 markers each with many lookup results would otherwise
+        // produce alternatives_1 * alternatives_2 * ... expansions
+        // (here 16^4 = 65536); the cap keeps the output bounded.
+        let alternatives: Vec<String> = (0..16).map(|i| format!("a{i}")).collect();
+        let lookup = |_: &str| alternatives.clone();
+        let runs: Vec<String> = (0..4).map(|i| i.to_string()).collect();
+        let result = expand_with_recursive_lookup("#4#4#4#4", &runs, &lookup);
+        assert!(
+            result.len() <= MAX_RECURSIVE_EXPANSIONS,
+            "expansion must be capped at {}, got {}",
+            MAX_RECURSIVE_EXPANSIONS,
+            result.len()
+        );
+        assert_eq!(
+            result.len(),
+            MAX_RECURSIVE_EXPANSIONS,
+            "with 16^4 potential expansions the cap should be saturated"
+        );
+        // The first emitted combinations must be well-formed concatenations
+        // of four alternatives (no truncation mid-string).
+        for s in &result {
+            assert!(s.starts_with('a'));
+            assert!(!s.contains('#'));
+        }
     }
 }
