@@ -102,9 +102,13 @@ pub fn expand(candidate_word: &str, runs: &[String]) -> Option<String> {
 /// produces `["A-C", "B-C"]`. Other `#X` markers are resolved by
 /// [`crate::num::convert::convert`] just like in [`expand`].
 ///
-/// Returns an empty `Vec` if any marker fails to resolve (run shortage,
-/// conversion failure, or a `#4` whose recursive lookup returns no
-/// candidates). Recursive lookup results are substituted literally — they
+/// Returns an empty `Vec` only if a *recognised* marker fails to resolve —
+/// specifically: run shortage (more `#n` markers than runs), `convert`
+/// failure for a `#0`/`#1`/`#2`/`#3`/`#5`/`#9`/`#6`/`#7`/`#a`/`#b`/`#c`
+/// marker, or a `#4` whose recursive lookup returns no candidates.
+/// Unknown or unsupported markers (e.g. `#z`) are *not* failures: the
+/// `#` is kept as a literal character and processing continues, matching
+/// [`expand`]. Recursive lookup results are substituted literally — they
 /// are not re-scanned for nested markers, so a dictionary chain such as
 /// `5 /#4/` produces the literal string `"#4"` rather than recursing
 /// indefinitely.
