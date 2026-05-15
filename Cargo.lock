@@ -15,6 +15,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "adapter-gtk4"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "skk-ipc",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
 name = "adapter-qt6"
 version = "0.1.0"
 dependencies = [
