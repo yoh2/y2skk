@@ -110,14 +110,13 @@ y2skk を使うには SKK 辞書が最低 1 つ必要です。
 cargo xtask install
 ```
 
-このコマンドは daemon / XIM サーバー / GTK3 / GTK4 / Qt6 をビルドして
-`~/.local/` 以下にインストールします。実験的な Wayland アダプターは
-**デフォルトではインストールされません**。明示的に有効化するには `--wayland`
-を指定します：
+このコマンドは daemon / XIM サーバー / GTK3 / GTK4 / Qt6、および実験的な
+Wayland アダプターをビルドして `~/.local/` 以下にインストールします。一部だけ
+インストールしたい場合はコンポーネントを明示してください：
 
 ```sh
+cargo xtask install --daemon --xim    # daemon と XIM サーバーのみ
 cargo xtask install --wayland         # Wayland アダプターのみ
-cargo xtask install --daemon --xim --gtk3 --gtk4 --qt6 --wayland   # 全部入り
 ```
 
 詳細やオプション・システム全体へのインストール方法は [INSTALL.md](INSTALL.md) を参照してください。

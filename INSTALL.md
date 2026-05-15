@@ -46,10 +46,8 @@ Three install modes are available.
 cargo xtask install
 ```
 
-The default install builds the daemon, the XIM server, and the GTK3 / GTK4 / Qt6
-adapters under `~/.local/`. The experimental Wayland adapter is **not** installed
-by default; add `--wayland` to opt in (see
-[Install specific components only](#install-specific-components-only)).
+The default install builds the daemon, the XIM server, the GTK3 / GTK4 / Qt6
+adapters, and the experimental Wayland adapter, under `~/.local/`.
 The GTK3, GTK4, and Qt6 adapters require additional environment variables
 (printed at the end of install).
 
@@ -57,13 +55,13 @@ The GTK3, GTK4, and Qt6 adapters require additional environment variables
 |-----------|---------------|
 | `y2skk-daemon` | `~/.local/bin/y2skk-daemon` |
 | `y2skk-xim` | `~/.local/bin/y2skk-xim` |
-| `y2skk-wayland` (with `--wayland`) | `~/.local/bin/y2skk-wayland` |
+| `y2skk-wayland` | `~/.local/bin/y2skk-wayland` |
 | Kana tables | `~/.local/share/y2skk/tables/` |
 | GTK3 IM module | `~/.local/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | GTK4 IM module | `~/.local/lib/gtk-4.0/immodules/libim-y2skk.so` |
 | Qt6 IM plugin | `~/.local/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
-| KDE Virtual Keyboard entry (with `--wayland`) | `~/.local/share/applications/y2skk-wayland.desktop` |
+| KDE Virtual Keyboard entry | `~/.local/share/applications/y2skk-wayland.desktop` |
 
 Also updates the GTK3 user module cache (`~/.config/gtk-3.0/gtk.immodules`)
 and runs `gio-querymodules` against the GTK4 immodule directory
@@ -83,13 +81,13 @@ No extra environment variables are needed after this.
 |-----------|---------------|
 | `y2skk-daemon` | `/usr/local/bin/y2skk-daemon` |
 | `y2skk-xim` | `/usr/local/bin/y2skk-xim` |
-| `y2skk-wayland` (with `--wayland`) | `/usr/local/bin/y2skk-wayland` |
+| `y2skk-wayland` | `/usr/local/bin/y2skk-wayland` |
 | Kana tables | `/usr/local/share/y2skk/tables/` |
 | GTK3 IM module | `<pkg-config libdir>/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | GTK4 IM module | `<pkg-config libdir>/gtk-4.0/immodules/libim-y2skk.so` |
 | Qt6 IM plugin | `<qmake QT_INSTALL_PLUGINS>/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
-| KDE Virtual Keyboard entry (with `--wayland`) | `~/.local/share/applications/y2skk-wayland.desktop` |
+| KDE Virtual Keyboard entry | `~/.local/share/applications/y2skk-wayland.desktop` |
 
 ### Install specific components only
 
@@ -105,9 +103,10 @@ cargo xtask install --qt6             # Qt6 plugin only (user-local)
 cargo xtask install --wayland         # Wayland adapter + KDE Virtual Keyboard entry
 ```
 
-> **Note:** the Wayland adapter is **highly experimental** and KWin-only — see
-> [README.md](README.md#wayland-support-very-early-stage) for known issues.
-> It is opt-in for that reason. Activate it under
+> **Note:** the Wayland adapter is **experimental** and KWin-only — see the
+> Wayland section in [README.md](README.md#wayland-support-experimental-but-improving)
+> for the current status. It is included in the default install; if your
+> session is on KDE Plasma Wayland, activate the adapter under
 > *System Settings → Keyboard → Virtual Keyboard → y2skk* after install.
 
 ### Packaging
@@ -123,7 +122,7 @@ cargo xtask install --prefix /path/to/staging/usr
 |-----------|---------------|
 | `y2skk-daemon` | `<prefix>/bin/y2skk-daemon` |
 | `y2skk-xim` | `<prefix>/bin/y2skk-xim` |
-| `y2skk-wayland` (with `--wayland`) | `<prefix>/bin/y2skk-wayland` |
+| `y2skk-wayland` | `<prefix>/bin/y2skk-wayland` |
 | Kana tables | `<prefix>/share/y2skk/tables/` |
 | GTK3 IM module | `<prefix>/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
 | GTK4 IM module | `<prefix>/lib/gtk-4.0/immodules/libim-y2skk.so` |
@@ -391,9 +390,9 @@ kana_table = "~/.config/y2skk/tables/my-layout.txt"
 
 ### Wayland adapter does not work (KDE Plasma, experimental)
 
-The Wayland adapter is **at a very early experimental stage**; see
-[README.md](README.md#wayland-support-very-early-stage) for known issues.
-Some basic checks:
+The Wayland adapter is **experimental** and KWin-only; see
+[README.md](README.md#wayland-support-experimental-but-improving) for the
+current status. Some basic checks:
 
 1. Confirm you are running on KWin (KDE Plasma 5/6) under a Wayland session.
    Other compositors are not supported.

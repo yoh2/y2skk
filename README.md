@@ -110,13 +110,13 @@ Download from [skk-dev/dict](https://github.com/skk-dev/dict), or install via yo
 cargo xtask install
 ```
 
-This builds all components (daemon, XIM server, GTK3, GTK4, Qt6) and installs
-them under `~/.local/`. The experimental Wayland adapter is **not** installed
-by default; add `--wayland` to opt in:
+This builds all components (daemon, XIM server, GTK3, GTK4, Qt6, and the
+experimental Wayland adapter) and installs them under `~/.local/`. To install
+a subset, list the components explicitly:
 
 ```sh
+cargo xtask install --daemon --xim    # daemon and XIM server only
 cargo xtask install --wayland         # Wayland adapter only
-cargo xtask install --daemon --xim --gtk3 --gtk4 --qt6 --wayland   # everything
 ```
 
 See [INSTALL.md](INSTALL.md) for details, options, and system-wide installation.
