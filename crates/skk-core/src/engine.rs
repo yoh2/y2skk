@@ -1375,12 +1375,20 @@ impl SkkEngine {
 
             // Closure for recursive-lookup expansion (`#4`). Borrows
             // `self.dict` immutably; only invoked when a candidate template
-            // contains `#4`.
+            // contains `#4`. Filters out Lisp-form candidates so that
+            // S-expression text (e.g. `(skk-ignore-dic-word ...)`) cannot
+            // leak into the substituted result, and deduplicates words to
+            // avoid cartesian-product blow-ups when multiple dictionaries
+            // return identical entries.
             let lookup_fn = |key: &str| -> Vec<String> {
+                let mut seen = std::collections::HashSet::new();
                 self.dict
                     .iter()
                     .filter_map(|d| d.lookup(key, None))
-                    .flat_map(|e| e.candidates.into_iter().map(|c| c.word))
+                    .flat_map(|e| e.candidates.into_iter())
+                    .filter(|c| c.is_displayable())
+                    .map(|c| c.word)
+                    .filter(|w| seen.insert(w.clone()))
                     .collect()
             };
 
@@ -4027,6 +4035,49 @@ mod tests {
         let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
         assert!(words.contains(&"一市"), "expected '一市' in {:?}", words);
         assert!(words.contains(&"壱市"), "expected '壱市' in {:?}", words);
+    }
+
+    #[test]
+    fn test_numeric_recursive_skips_lisp_form_secondary_candidates() {
+        // The recursive `#4` lookup must filter out Lisp-form candidates
+        // (e.g. `(skk-ignore-dic-word ...)`) so that S-expression text
+        // does not leak into expanded candidates.
+        use crate::dict::entry::LispForm;
+        let mut eng = engine();
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4")]),
+            (
+                "1".to_string(),
+                vec![
+                    Candidate::lisp(
+                        "(skk-ignore-dic-word \"foo\")",
+                        LispForm::IgnoreDicWord(vec!["foo".to_string()]),
+                    ),
+                    Candidate::new("壱"),
+                ],
+            ),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p1".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting, got {:?}", eng.phase());
+        };
+        let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+        assert!(
+            words.contains(&"壱"),
+            "expected displayable secondary candidate '壱' in {:?}",
+            words
+        );
+        assert!(
+            !words.iter().any(|w| w.contains("skk-ignore-dic-word")),
+            "Lisp directive must not leak into recursive expansion: {:?}",
+            words
+        );
     }
 
     #[test]
