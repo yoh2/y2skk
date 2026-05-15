@@ -1373,6 +1373,17 @@ impl SkkEngine {
                 .cloned()
                 .collect();
 
+            // Closure for recursive-lookup expansion (`#4`). Borrows
+            // `self.dict` immutably; only invoked when a candidate template
+            // contains `#4`.
+            let lookup_fn = |key: &str| -> Vec<String> {
+                self.dict
+                    .iter()
+                    .filter_map(|d| d.lookup(key, None))
+                    .flat_map(|e| e.candidates.into_iter().map(|c| c.word))
+                    .collect()
+            };
+
             let mut seen = std::collections::HashSet::new();
             for c in dict_candidates {
                 // Skip all Lisp-form candidates (directives, unknown forms, etc.).
@@ -1380,32 +1391,38 @@ impl SkkEngine {
                     continue;
                 }
 
-                // For digit midashi, expand #n markers; skip unexpandable entries.
-                let expanded_word = if has_digits {
-                    match crate::num::expand(&c.word, &digit_runs) {
-                        Some(w) => w,
-                        None => continue,
+                // For digit midashi, expand #n markers (including `#4`
+                // recursive numeric conversion which may produce multiple
+                // alternatives per dict entry); skip unexpandable entries.
+                let expanded_words: Vec<String> = if has_digits {
+                    let alts =
+                        crate::num::expand_with_recursive_lookup(&c.word, &digit_runs, &lookup_fn);
+                    if alts.is_empty() {
+                        continue;
                     }
+                    alts
                 } else {
-                    c.word.clone()
+                    vec![c.word.clone()]
                 };
 
-                // Skip words blacklisted by any skk-ignore-dic-word directive.
-                if self.lisp_directives && ignore_set.contains(&expanded_word) {
-                    continue;
-                }
+                for expanded_word in expanded_words {
+                    // Skip words blacklisted by any skk-ignore-dic-word directive.
+                    if self.lisp_directives && ignore_set.contains(&expanded_word) {
+                        continue;
+                    }
 
-                if seen.insert(expanded_word.clone()) {
-                    let orig = CandidateOrigin::Dict {
-                        template_midashi: lookup_key.to_string(),
-                        template_word: c.word.clone(),
-                    };
-                    candidates.push(Candidate {
-                        word: expanded_word,
-                        annotation: c.annotation,
-                        lisp_form: None,
-                    });
-                    origin.push(orig);
+                    if seen.insert(expanded_word.clone()) {
+                        let orig = CandidateOrigin::Dict {
+                            template_midashi: lookup_key.to_string(),
+                            template_word: c.word.clone(),
+                        };
+                        candidates.push(Candidate {
+                            word: expanded_word,
+                            annotation: c.annotation.clone(),
+                            lisp_form: None,
+                        });
+                        origin.push(orig);
+                    }
                 }
             }
         }
@@ -3955,6 +3972,101 @@ mod tests {
         let result = eng.dict[0].lookup("だい#かい", None);
         assert!(result.is_some(), "should have learned template midashi");
         assert_eq!(result.unwrap().candidates[0].word, "#1回");
+    }
+
+    #[test]
+    fn test_numeric_recursive_conversion_basic() {
+        // DDSKK manual example for #4 (recursive numeric conversion):
+        //   Dict has  `p# /#4/`  and  `125 /東京都葛飾区/`
+        //   Input `/p125<SPC>` should produce candidate "東京都葛飾区".
+        let mut eng = engine();
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4")]),
+            ("125".to_string(), vec![Candidate::new("東京都葛飾区")]),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p125".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting, got {:?}", eng.phase());
+        };
+        let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+        assert!(
+            words.contains(&"東京都葛飾区"),
+            "recursive lookup of \"125\" should produce \"東京都葛飾区\"; got {:?}",
+            words
+        );
+    }
+
+    #[test]
+    fn test_numeric_recursive_multiple_secondary_candidates() {
+        // Recursive lookup returning multiple candidates should fan out the
+        // primary candidate into one expansion per secondary entry.
+        let mut eng = engine();
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4市")]),
+            (
+                "1".to_string(),
+                vec![Candidate::new("一"), Candidate::new("壱")],
+            ),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p1".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting, got {:?}", eng.phase());
+        };
+        let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+        assert!(words.contains(&"一市"), "expected '一市' in {:?}", words);
+        assert!(words.contains(&"壱市"), "expected '壱市' in {:?}", words);
+    }
+
+    #[test]
+    fn test_numeric_recursive_learns_template_form() {
+        // Committing a #4-derived candidate must record the template form
+        // (with `#4` intact) to the user dict so that future inputs replay
+        // the recursive lookup rather than freezing the substituted text.
+        use crate::dict::file::UserDict;
+        let mut eng = engine();
+        let user_dict = UserDict::empty(std::path::PathBuf::from(
+            "/tmp/y2skk_test_recursive_learn.dict",
+        ));
+        eng.add_dict(Box::new(user_dict));
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4")]),
+            ("125".to_string(), vec![Candidate::new("東京都葛飾区")]),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p125".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting");
+        };
+        assert_eq!(candidates[0].word, "東京都葛飾区");
+
+        // Confirm with Ctrl+j (commits the focused candidate).
+        eng.process_key(&ctrl('j'));
+
+        // UserDict (index 0) must have learned the template midashi `p#`
+        // mapped to the template word `#4` — NOT the substituted form.
+        let result = eng.dict[0].lookup("p#", None);
+        assert!(
+            result.is_some(),
+            "should have learned template midashi `p#`"
+        );
+        assert_eq!(result.unwrap().candidates[0].word, "#4");
     }
 
     #[test]
