@@ -88,10 +88,14 @@ Outside KDE, prefer the X11 path (XIM + GTK3 / GTK4 / Qt6 adapters).
 | GTK4 dev headers | Build the GTK4 IM module |
 | Qt6 + private headers | Build the Qt6 plugin |
 | pkg-config | Used by the build system |
+| `gtk-query-immodules-3.0` (from the GTK3 package) | Refresh the GTK3 IM module cache after installing the GTK3 module (install-time only; not used by `cargo build`) |
 | `gio-querymodules` (from `glib2`) | Refresh the GIO cache after installing the GTK4 module (install-time only; not used by `cargo build`) |
+| `sudo` | Required for `cargo xtask install --system` / `uninstall --system` only (writes under root-owned paths) |
 
 Install these via your distribution's package manager.
 The GTK3, GTK4, and Qt6 packages are only required if you want those adapters.
+`sudo` is only invoked under `--system`; the default user-local install and
+packaging (`--prefix`) modes do not need it.
 
 ### Dictionary
 

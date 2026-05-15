@@ -23,10 +23,14 @@ You need the following tools and libraries, available from your distribution's p
 | GTK3 development headers | GTK3 IM module |
 | GTK4 development headers | GTK4 IM module |
 | Qt6 development headers (including private headers) | Qt6 IM plugin |
-| `gio-querymodules` (usually shipped with `glib2`) | Updating the GIO module cache after installing the GTK4 module |
+| `gtk-query-immodules-3.0` (usually shipped with the GTK3 package) | Updating the GTK3 IM module cache after installing the GTK3 module (install-time only; not used by `cargo build`) |
+| `gio-querymodules` (usually shipped with `glib2`) | Updating the GIO module cache after installing the GTK4 module (install-time only; not used by `cargo build`) |
+| `sudo` | `--system` install only (writes to root-owned paths via `cargo xtask install --system` / `uninstall --system`) |
 
 The GTK3, GTK4, and Qt6 packages are only required if you want those adapters.
 The daemon itself and the XIM server have no additional system dependencies beyond Rust.
+`sudo` is only invoked under `--system`; the default user-local install and
+packaging (`--prefix`) modes do not need it.
 
 ### SKK dictionary
 

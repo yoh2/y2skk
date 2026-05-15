@@ -88,10 +88,14 @@ KDE Plasma Wayland セッションでは日常用途で使える状態になっ�
 | GTK4 開発ヘッダ | GTK4 IM モジュールのビルド |
 | Qt6 + プライベートヘッダ | Qt6 プラグインのビルド |
 | pkg-config | ビルドシステムが使用 |
+| `gtk-query-immodules-3.0`（GTK3 パッケージに同梱） | GTK3 IM モジュールインストール後の GTK3 IM モジュールキャッシュ更新（インストール時のみ。`cargo build` 自体では使用しない） |
 | `gio-querymodules`（`glib2` に同梱） | GTK4 IM モジュールインストール後の GIO キャッシュ更新（インストール時のみ。`cargo build` 自体では使用しない） |
+| `sudo` | `cargo xtask install --system` / `uninstall --system` 時のみ必要（root 所有のパスに書き込みするため） |
 
 各パッケージはディストリビューションのパッケージマネージャーでインストールしてください。
 GTK3 / GTK4 / Qt6 パッケージはそれぞれのアダプターをビルドする場合のみ必要です。
+`sudo` は `--system` 利用時にのみ呼び出されます。デフォルトの user-local install と
+packaging (`--prefix`) モードでは不要です。
 
 ### 辞書
 
