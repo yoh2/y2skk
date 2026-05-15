@@ -9,8 +9,8 @@
 A SKK Japanese input method for Linux, written in Rust.
 
 y2skk runs as a daemon (`y2skk-daemon`) and exposes its functionality over D-Bus.
-Platform-specific adapters (GTK3, Qt6, XIM, Wayland) plug in to the daemon so that a
-single dictionary and session state are shared across all applications.
+Platform-specific adapters (GTK3, GTK4, Qt6, XIM, Wayland) plug in to the daemon
+so that a single dictionary and session state are shared across all applications.
 
 **[日本語版 README → README_ja.md](README_ja.md)**
 
@@ -21,28 +21,26 @@ single dictionary and session state are shared across all applications.
 | Component | Status |
 |-----------|--------|
 | GTK3 applications | ✅ Working |
+| GTK4 applications | ✅ Working |
 | Qt6 applications | ✅ Working |
 | XIM clients (xterm, etc.) | ✅ Working (via `y2skk-xim`) |
 | KDE Plasma (X11) | ✅ Primary target |
-| KDE Plasma (Wayland) | 🧪 **Very early / experimental** — see notes below |
-| GTK4 | 🚧 Not yet implemented |
+| KDE Plasma (Wayland) | 🧪 **Experimental** — see notes below |
 
-### Wayland support: very early stage
+### Wayland support: experimental but improving
 
-The Wayland adapter (`y2skk-wayland`) is **at a very early experimental stage** and
-should not be relied on for daily use. It is built on KDE's `zwp_input_method_v1`
-extension, so it currently runs only on KWin (KDE Plasma 5/6) and is not portable to
-other Wayland compositors. Known issues at the time of writing include:
+The Wayland adapter (`y2skk-wayland`) is built on KDE's `zwp_input_method_v1`
+extension, so it currently runs only on KWin (KDE Plasma 5/6) and is not portable
+to other Wayland compositors. `zwp_input_method_v2` is **not** planned (KWin
+does not advertise it and no other compositor in our test environments does
+either; see the GTK4/Wayland project notes). Recent fixes have addressed most
+of the previously reported issues (Slack/Electron Enter / Backspace half-fail,
+candidate window lingering at the screen bottom, intermittent passthrough after
+extended use), but the adapter is still considered experimental — packaging,
+non-KDE compositor support, and broad app coverage remain incomplete.
 
-- Mishandled events with Chromium-family applications launched with
-  `--ozone-platform=wayland` (e.g. backspace works only every other press in some
-  text fields).
-- No support for `zwp_input_method_v2` / `text-input-v3` yet, so non-KDE compositors
-  (GNOME, Sway, etc.) are unsupported.
-- Documentation, packaging, and stability are all incomplete.
-
-Use the X11 path (XIM + GTK3 + Qt6 adapters) for production work; treat the Wayland
-adapter as a preview only.
+If you are on KDE Plasma Wayland, the adapter is usable for daily input today.
+Outside KDE, prefer the X11 path (XIM + GTK3 / GTK4 / Qt6 adapters).
 
 ---
 
@@ -63,6 +61,9 @@ adapter as a preview only.
 - **Abbrev mode** — ASCII romaji search (`/` key)
 - **vi-compatible Esc** — optional mode; pressing Esc in a normal input phase switches to ASCII mode (configurable)
 - **XIM server** — standalone `y2skk-xim` binary that connects to the daemon via D-Bus
+- **GTK3 / GTK4 IM modules** — `adapter-gtk3` (legacy module ABI) and
+  `adapter-gtk4` (GIO `gtk-im-module` extension point) both reachable via
+  `GTK_IM_MODULE=y2skk`
 - **Wayland adapter (experimental)** — standalone `y2skk-wayland` binary using
   `zwp_input_method_v1` (KDE only); see the warning above
 - **Daemon reconnect / fail-open** — adapters keep working when the daemon is
@@ -84,11 +85,13 @@ adapter as a preview only.
 | Rust + Cargo | Build all components |
 | cmake ≥ 3.21 | Build the Qt6 plugin |
 | GTK3 dev headers | Build the GTK3 IM module |
+| GTK4 dev headers | Build the GTK4 IM module |
 | Qt6 + private headers | Build the Qt6 plugin |
 | pkg-config | Used by the build system |
+| `gio-querymodules` (from `glib2`) | Refresh the GIO cache after installing the GTK4 module (install-time only; not used by `cargo build`) |
 
 Install these via your distribution's package manager.
-The GTK3 and Qt6 packages are only required if you want those adapters.
+The GTK3, GTK4, and Qt6 packages are only required if you want those adapters.
 
 ### Dictionary
 
@@ -107,13 +110,13 @@ Download from [skk-dev/dict](https://github.com/skk-dev/dict), or install via yo
 cargo xtask install
 ```
 
-This builds all components (daemon, XIM server, GTK3, Qt6) and installs them under
-`~/.local/`. The experimental Wayland adapter is **not** installed by default;
-add `--wayland` to opt in:
+This builds all components (daemon, XIM server, GTK3, GTK4, Qt6) and installs
+them under `~/.local/`. The experimental Wayland adapter is **not** installed
+by default; add `--wayland` to opt in:
 
 ```sh
 cargo xtask install --wayland         # Wayland adapter only
-cargo xtask install --daemon --xim --gtk3 --qt6 --wayland   # everything
+cargo xtask install --daemon --xim --gtk3 --gtk4 --qt6 --wayland   # everything
 ```
 
 See [INSTALL.md](INSTALL.md) for details, options, and system-wide installation.
@@ -124,14 +127,15 @@ For **KDE Plasma**, create `~/.config/plasma-workspace/env/y2skk.sh`:
 
 ```sh
 export XMODIFIERS=@im=y2skk      # XIM clients (xterm, chromium, …)
-export GTK_IM_MODULE=y2skk       # GTK3 applications
+export GTK_IM_MODULE=y2skk       # GTK3 / GTK4 applications
 export QT_IM_MODULE=y2skk        # Qt6 applications
 # Additional variables for the default user-local adapter install:
 export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules"
+export GIO_EXTRA_MODULES="$HOME/.local/lib/gtk-4.0/immodules:$GIO_EXTRA_MODULES"
 export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH"
 ```
 
-> With `cargo xtask install --system` the last two lines are not needed.
+> With `cargo xtask install --system` the last three lines are not needed.
 
 Log out and back in (or run `source` on the file) to apply.
 

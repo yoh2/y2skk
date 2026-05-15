@@ -21,9 +21,11 @@ You need the following tools and libraries, available from your distribution's p
 | `cmake` ≥ 3.21 | Qt6 plugin build |
 | `pkg-config` | Build system |
 | GTK3 development headers | GTK3 IM module |
+| GTK4 development headers | GTK4 IM module |
 | Qt6 development headers (including private headers) | Qt6 IM plugin |
+| `gio-querymodules` (usually shipped with `glib2`) | Updating the GIO module cache after installing the GTK4 module |
 
-The GTK3 and Qt6 packages are only required if you want those adapters.
+The GTK3, GTK4, and Qt6 packages are only required if you want those adapters.
 The daemon itself and the XIM server have no additional system dependencies beyond Rust.
 
 ### SKK dictionary
@@ -44,10 +46,12 @@ Three install modes are available.
 cargo xtask install
 ```
 
-The default install builds the daemon, the XIM server, and the GTK3 / Qt6 adapters
-under `~/.local/`. The experimental Wayland adapter is **not** installed by default;
-add `--wayland` to opt in (see [Install specific components only](#install-specific-components-only)).
-The GTK3 and Qt6 adapters require additional environment variables (printed at the end of install).
+The default install builds the daemon, the XIM server, and the GTK3 / GTK4 / Qt6
+adapters under `~/.local/`. The experimental Wayland adapter is **not** installed
+by default; add `--wayland` to opt in (see
+[Install specific components only](#install-specific-components-only)).
+The GTK3, GTK4, and Qt6 adapters require additional environment variables
+(printed at the end of install).
 
 | Component | Installed path |
 |-----------|---------------|
@@ -56,11 +60,14 @@ The GTK3 and Qt6 adapters require additional environment variables (printed at t
 | `y2skk-wayland` (with `--wayland`) | `~/.local/bin/y2skk-wayland` |
 | Kana tables | `~/.local/share/y2skk/tables/` |
 | GTK3 IM module | `~/.local/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
+| GTK4 IM module | `~/.local/lib/gtk-4.0/immodules/libim-y2skk.so` |
 | Qt6 IM plugin | `~/.local/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
 | KDE Virtual Keyboard entry (with `--wayland`) | `~/.local/share/applications/y2skk-wayland.desktop` |
 
-Also updates the GTK3 user module cache (`~/.config/gtk-3.0/gtk.immodules`).
+Also updates the GTK3 user module cache (`~/.config/gtk-3.0/gtk.immodules`)
+and runs `gio-querymodules` against the GTK4 immodule directory
+(`~/.local/lib/gtk-4.0/immodules/giomodule.cache`).
 
 ### System-wide install (sudo required for adapters)
 
@@ -79,6 +86,7 @@ No extra environment variables are needed after this.
 | `y2skk-wayland` (with `--wayland`) | `/usr/local/bin/y2skk-wayland` |
 | Kana tables | `/usr/local/share/y2skk/tables/` |
 | GTK3 IM module | `<pkg-config libdir>/gtk-3.0/<binver>/immodules/im-y2skk.so` |
+| GTK4 IM module | `<pkg-config libdir>/gtk-4.0/immodules/libim-y2skk.so` |
 | Qt6 IM plugin | `<qmake QT_INSTALL_PLUGINS>/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 | systemd services | `~/.config/systemd/user/y2skk-daemon.service`, `y2skk-xim.service` |
 | KDE Virtual Keyboard entry (with `--wayland`) | `~/.local/share/applications/y2skk-wayland.desktop` |
@@ -91,6 +99,8 @@ cargo xtask install --xim             # XIM server + systemd service only (user-
 cargo xtask install --system --xim    # XIM server to system path (sudo)
 cargo xtask install --gtk3            # GTK3 IM module only (user-local)
 cargo xtask install --system --gtk3   # GTK3 to system path (sudo)
+cargo xtask install --gtk4            # GTK4 IM module only (user-local)
+cargo xtask install --system --gtk4   # GTK4 to system path (sudo)
 cargo xtask install --qt6             # Qt6 plugin only (user-local)
 cargo xtask install --wayland         # Wayland adapter + KDE Virtual Keyboard entry
 ```
@@ -116,6 +126,7 @@ cargo xtask install --prefix /path/to/staging/usr
 | `y2skk-wayland` (with `--wayland`) | `<prefix>/bin/y2skk-wayland` |
 | Kana tables | `<prefix>/share/y2skk/tables/` |
 | GTK3 IM module | `<prefix>/lib/gtk-3.0/<binver>/immodules/im-y2skk.so` |
+| GTK4 IM module | `<prefix>/lib/gtk-4.0/immodules/libim-y2skk.so` |
 | Qt6 IM plugin | `<prefix>/lib/qt6/plugins/platforminputcontexts/libqy2skk-qt6-plugin.so` |
 
 The systemd service file and the KDE Virtual Keyboard `.desktop` entry are **not**
@@ -135,21 +146,26 @@ For **KDE Plasma**, place these in `~/.config/plasma-workspace/env/y2skk.sh`
 
 ```sh
 export XMODIFIERS=@im=y2skk    # XIM clients (xterm, Chromium, legacy X11 apps)
-export GTK_IM_MODULE=y2skk     # GTK3 applications
+export GTK_IM_MODULE=y2skk     # GTK3 / GTK4 applications
 export QT_IM_MODULE=y2skk      # Qt6 applications
 ```
 
 ### User-local install (default)
 
-The same variables as above, plus these two for the user-local adapter paths:
+The same variables as above, plus these for the user-local adapter paths:
 
 ```sh
 export XMODIFIERS=@im=y2skk
 export GTK_IM_MODULE=y2skk
 export QT_IM_MODULE=y2skk
 export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules"
+export GIO_EXTRA_MODULES="$HOME/.local/lib/gtk-4.0/immodules:$GIO_EXTRA_MODULES"
 export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH"
 ```
+
+`GIO_EXTRA_MODULES` is needed because GIO does not scan
+`~/.local/lib/gtk-4.0/immodules/` by default; without it, `GTK_IM_MODULE=y2skk`
+would still produce a "no IM module matching y2skk found" warning in GTK4 apps.
 
 ---
 
@@ -291,6 +307,34 @@ Common causes:
    ```
 3. **System install**: verify the system cache: `grep y2skk /etc/gtk-3.0/gtk.immodules`
    Re-run as root: `sudo gtk-query-immodules-3.0 --update-cache`
+
+### GTK4 apps do not use y2skk
+
+1. Verify `GTK_IM_MODULE=y2skk` is set: `echo $GTK_IM_MODULE`
+2. **User-local install**: verify `GIO_EXTRA_MODULES` includes the user
+   immodule directory:
+   ```sh
+   echo $GIO_EXTRA_MODULES
+   ls "$HOME/.local/lib/gtk-4.0/immodules/libim-y2skk.so"
+   ```
+   If the cache file is missing, regenerate it:
+   ```sh
+   gio-querymodules "$HOME/.local/lib/gtk-4.0/immodules"
+   ```
+   (or just re-run `cargo xtask install --gtk4`).
+3. **System install**: verify the module is in the system path and the cache
+   knows about it:
+   ```sh
+   ls "$(pkg-config --variable=libdir gtk4)/gtk-4.0/immodules/libim-y2skk.so"
+   grep y2skk "$(pkg-config --variable=libdir gtk4)/gtk-4.0/immodules/giomodule.cache"
+   ```
+   Re-run as root to refresh: `sudo gio-querymodules "$(pkg-config --variable=libdir gtk4)/gtk-4.0/immodules"`
+4. Confirm the module loads at runtime:
+   ```sh
+   GTK_DEBUG=modules GTK_IM_MODULE=y2skk gnome-text-editor 2>&1 | grep -i y2skk
+   ```
+   You should see the module path in the output. Note: GTK4 also requires the
+   y2skk daemon to be running (`systemctl --user status y2skk-daemon`).
 
 ### Qt6 apps do not use y2skk
 
