@@ -1423,38 +1423,53 @@ impl SkkEngine {
                     continue;
                 }
 
-                // For digit midashi, expand #n markers (including `#4`
-                // recursive numeric conversion which may produce multiple
-                // alternatives per dict entry); skip unexpandable entries.
-                let expanded_words: Vec<String> = if has_digits {
+                if has_digits {
+                    // Numeric midashi: expand #n markers (including `#4`
+                    // recursive numeric conversion which may produce multiple
+                    // alternatives per dict entry). The annotation must be
+                    // cloned per expansion since one Candidate may fan out.
                     let alts =
                         crate::num::expand_with_recursive_lookup(&c.word, &digit_runs, &lookup_fn);
                     if alts.is_empty() {
                         continue;
                     }
-                    alts
+                    for expanded_word in alts {
+                        if self.lisp_directives && ignore_set.contains(&expanded_word) {
+                            continue;
+                        }
+                        if seen.insert(expanded_word.clone()) {
+                            candidates.push(Candidate {
+                                word: expanded_word,
+                                annotation: c.annotation.clone(),
+                                lisp_form: None,
+                            });
+                            origin.push(CandidateOrigin::Dict {
+                                template_midashi: lookup_key.to_string(),
+                                template_word: c.word.clone(),
+                            });
+                        }
+                    }
                 } else {
-                    vec![c.word.clone()]
-                };
-
-                for expanded_word in expanded_words {
-                    // Skip words blacklisted by any skk-ignore-dic-word directive.
-                    if self.lisp_directives && ignore_set.contains(&expanded_word) {
+                    // Non-numeric path: 1:1 mapping from Candidate to
+                    // emitted candidate. Move `c.annotation` (and `c.word`
+                    // into Candidate.word) to avoid the per-iteration clone
+                    // that the numeric fan-out path requires.
+                    if self.lisp_directives && ignore_set.contains(&c.word) {
                         continue;
                     }
-
-                    if seen.insert(expanded_word.clone()) {
-                        let orig = CandidateOrigin::Dict {
-                            template_midashi: lookup_key.to_string(),
-                            template_word: c.word.clone(),
-                        };
-                        candidates.push(Candidate {
-                            word: expanded_word,
-                            annotation: c.annotation.clone(),
-                            lisp_form: None,
-                        });
-                        origin.push(orig);
+                    if !seen.insert(c.word.clone()) {
+                        continue;
                     }
+                    let template_word = c.word.clone();
+                    candidates.push(Candidate {
+                        word: c.word,
+                        annotation: c.annotation,
+                        lisp_form: None,
+                    });
+                    origin.push(CandidateOrigin::Dict {
+                        template_midashi: lookup_key.to_string(),
+                        template_word,
+                    });
                 }
             }
         }
