@@ -1383,36 +1383,54 @@ impl SkkEngine {
             // cartesian-product blow-ups when multiple dictionaries return
             // identical entries.
             //
-            // The pipeline collects candidates and ignore directives in two
-            // passes (a Lisp-form directive may follow the displayable word
-            // it blacklists, so a streaming approach can't decide
-            // emit/skip on a single pass), but caps the returned word list
-            // at `MAX_RECURSIVE_EXPANSIONS` to bound work even when a
-            // single secondary entry holds a very large candidate list.
+            // Two execution paths:
+            //
+            // - Fast path (`lisp_directives` disabled): no directives to
+            //   honour, so candidates are streamed lazily with `.take()` and
+            //   processing stops as soon as `MAX_RECURSIVE_EXPANSIONS`
+            //   unique displayable words have been gathered. The full
+            //   secondary candidate list is never materialized.
+            //
+            // - Slow path (`lisp_directives` enabled): an `IgnoreDicWord`
+            //   directive may follow in the same entry the displayable word
+            //   it blacklists, so emit/skip cannot be decided on a single
+            //   pass. We materialize the secondary candidate list, build
+            //   `secondary_ignore` from it, then iterate again applying the
+            //   filter — capping only the *returned* word list at
+            //   `MAX_RECURSIVE_EXPANSIONS`. Materialization remains
+            //   O(secondary entry size); only post-filter work is bounded.
             let lisp_directives_enabled = self.lisp_directives;
             let lookup_fn = |key: &str| -> Vec<String> {
+                if !lisp_directives_enabled {
+                    let mut seen = std::collections::HashSet::new();
+                    return self
+                        .dict
+                        .iter()
+                        .filter_map(|d| d.lookup(key, None))
+                        .flat_map(|e| e.candidates.into_iter())
+                        .filter(|c| c.is_displayable())
+                        .map(|c| c.word)
+                        .filter(|w| seen.insert(w.clone()))
+                        .take(crate::num::template::MAX_RECURSIVE_EXPANSIONS)
+                        .collect();
+                }
                 let secondary: Vec<crate::dict::entry::Candidate> = self
                     .dict
                     .iter()
                     .filter_map(|d| d.lookup(key, None))
                     .flat_map(|e| e.candidates.into_iter())
                     .collect();
-                let secondary_ignore: std::collections::HashSet<String> = if lisp_directives_enabled
-                {
-                    secondary
-                        .iter()
-                        .filter_map(|c| match &c.lisp_form {
-                            Some(crate::dict::entry::LispForm::IgnoreDicWord(ws)) => {
-                                Some(ws.as_slice())
-                            }
-                            _ => None,
-                        })
-                        .flatten()
-                        .cloned()
-                        .collect()
-                } else {
-                    std::collections::HashSet::new()
-                };
+                let secondary_ignore: std::collections::HashSet<String> = secondary
+                    .iter()
+                    .filter_map(|c| match &c.lisp_form {
+                        Some(crate::dict::entry::LispForm::IgnoreDicWord(ws)) => {
+                            Some(ws.as_slice())
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .cloned()
+                    .collect();
                 let mut seen = std::collections::HashSet::new();
                 secondary
                     .into_iter()
@@ -1434,27 +1452,54 @@ impl SkkEngine {
                 if has_digits {
                     // Numeric midashi: expand #n markers (including `#4`
                     // recursive numeric conversion which may produce multiple
-                    // alternatives per dict entry). The annotation must be
-                    // cloned per expansion since one Candidate may fan out.
-                    let alts =
+                    // alternatives per dict entry).
+                    let mut alts =
                         crate::num::expand_with_recursive_lookup(&c.word, &digit_runs, &lookup_fn);
                     if alts.is_empty() {
                         continue;
                     }
-                    for expanded_word in alts {
+                    if alts.len() == 1 {
+                        // Single-expansion fast path (templates using only
+                        // deterministic markers like `#0/#1/#3/...` with no
+                        // `#4` fan-out): move `c.word` and `c.annotation`
+                        // instead of cloning, mirroring the non-numeric
+                        // branch.
+                        let expanded_word = alts.pop().unwrap();
                         if self.lisp_directives && ignore_set.contains(&expanded_word) {
                             continue;
                         }
-                        if seen.insert(expanded_word.clone()) {
-                            candidates.push(Candidate {
-                                word: expanded_word,
-                                annotation: c.annotation.clone(),
-                                lisp_form: None,
-                            });
-                            origin.push(CandidateOrigin::Dict {
-                                template_midashi: lookup_key.to_string(),
-                                template_word: c.word.clone(),
-                            });
+                        if !seen.insert(expanded_word.clone()) {
+                            continue;
+                        }
+                        candidates.push(Candidate {
+                            word: expanded_word,
+                            annotation: c.annotation,
+                            lisp_form: None,
+                        });
+                        origin.push(CandidateOrigin::Dict {
+                            template_midashi: lookup_key.to_string(),
+                            template_word: c.word,
+                        });
+                    } else {
+                        // Multi-expansion (e.g. `#4` fan-out): annotation
+                        // and template word must be cloned per expansion
+                        // since one Candidate produces several emitted
+                        // candidates.
+                        for expanded_word in alts {
+                            if self.lisp_directives && ignore_set.contains(&expanded_word) {
+                                continue;
+                            }
+                            if seen.insert(expanded_word.clone()) {
+                                candidates.push(Candidate {
+                                    word: expanded_word,
+                                    annotation: c.annotation.clone(),
+                                    lisp_form: None,
+                                });
+                                origin.push(CandidateOrigin::Dict {
+                                    template_midashi: lookup_key.to_string(),
+                                    template_word: c.word.clone(),
+                                });
+                            }
                         }
                     }
                 } else {
