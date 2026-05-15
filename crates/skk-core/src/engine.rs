@@ -1373,6 +1373,75 @@ impl SkkEngine {
                 .cloned()
                 .collect();
 
+            // Closure for recursive-lookup expansion (`#4`). Borrows
+            // `self.dict` immutably; only invoked when a candidate template
+            // contains `#4`. Mirrors the primary-lookup pipeline: hides all
+            // Lisp-form candidates, applies any `skk-ignore-dic-word`
+            // directives present in the secondary entry (when
+            // `lisp_directives` is enabled) so blacklisted words cannot be
+            // substituted via `#4`, and deduplicates words to avoid
+            // cartesian-product blow-ups when multiple dictionaries return
+            // identical entries.
+            //
+            // Two execution paths:
+            //
+            // - Fast path (`lisp_directives` disabled): no directives to
+            //   honour, so candidates are streamed lazily with `.take()` and
+            //   processing stops as soon as `MAX_RECURSIVE_EXPANSIONS`
+            //   unique displayable words have been gathered. The full
+            //   secondary candidate list is never materialized.
+            //
+            // - Slow path (`lisp_directives` enabled): an `IgnoreDicWord`
+            //   directive may follow in the same entry the displayable word
+            //   it blacklists, so emit/skip cannot be decided on a single
+            //   pass. We materialize the secondary candidate list, build
+            //   `secondary_ignore` from it, then iterate again applying the
+            //   filter — capping only the *returned* word list at
+            //   `MAX_RECURSIVE_EXPANSIONS`. Materialization remains
+            //   O(secondary entry size); only post-filter work is bounded.
+            let lisp_directives_enabled = self.lisp_directives;
+            let lookup_fn = |key: &str| -> Vec<String> {
+                if !lisp_directives_enabled {
+                    let mut seen = std::collections::HashSet::new();
+                    return self
+                        .dict
+                        .iter()
+                        .filter_map(|d| d.lookup(key, None))
+                        .flat_map(|e| e.candidates.into_iter())
+                        .filter(|c| c.is_displayable())
+                        .map(|c| c.word)
+                        .filter(|w| seen.insert(w.clone()))
+                        .take(crate::num::template::MAX_RECURSIVE_EXPANSIONS)
+                        .collect();
+                }
+                let secondary: Vec<crate::dict::entry::Candidate> = self
+                    .dict
+                    .iter()
+                    .filter_map(|d| d.lookup(key, None))
+                    .flat_map(|e| e.candidates.into_iter())
+                    .collect();
+                let secondary_ignore: std::collections::HashSet<String> = secondary
+                    .iter()
+                    .filter_map(|c| match &c.lisp_form {
+                        Some(crate::dict::entry::LispForm::IgnoreDicWord(ws)) => {
+                            Some(ws.as_slice())
+                        }
+                        _ => None,
+                    })
+                    .flatten()
+                    .cloned()
+                    .collect();
+                let mut seen = std::collections::HashSet::new();
+                secondary
+                    .into_iter()
+                    .filter(|c| c.is_displayable())
+                    .map(|c| c.word)
+                    .filter(|w| !secondary_ignore.contains(w))
+                    .filter(|w| seen.insert(w.clone()))
+                    .take(crate::num::template::MAX_RECURSIVE_EXPANSIONS)
+                    .collect()
+            };
+
             let mut seen = std::collections::HashSet::new();
             for c in dict_candidates {
                 // Skip all Lisp-form candidates (directives, unknown forms, etc.).
@@ -1380,32 +1449,80 @@ impl SkkEngine {
                     continue;
                 }
 
-                // For digit midashi, expand #n markers; skip unexpandable entries.
-                let expanded_word = if has_digits {
-                    match crate::num::expand(&c.word, &digit_runs) {
-                        Some(w) => w,
-                        None => continue,
+                if has_digits {
+                    // Numeric midashi: expand #n markers (including `#4`
+                    // recursive numeric conversion which may produce multiple
+                    // alternatives per dict entry).
+                    let mut alts =
+                        crate::num::expand_with_recursive_lookup(&c.word, &digit_runs, &lookup_fn);
+                    if alts.is_empty() {
+                        continue;
+                    }
+                    if alts.len() == 1 {
+                        // Single-expansion fast path (templates using only
+                        // deterministic markers like `#0/#1/#3/...` with no
+                        // `#4` fan-out): move `c.word` and `c.annotation`
+                        // instead of cloning, mirroring the non-numeric
+                        // branch.
+                        let expanded_word = alts.pop().unwrap();
+                        if self.lisp_directives && ignore_set.contains(&expanded_word) {
+                            continue;
+                        }
+                        if !seen.insert(expanded_word.clone()) {
+                            continue;
+                        }
+                        candidates.push(Candidate {
+                            word: expanded_word,
+                            annotation: c.annotation,
+                            lisp_form: None,
+                        });
+                        origin.push(CandidateOrigin::Dict {
+                            template_midashi: lookup_key.to_string(),
+                            template_word: c.word,
+                        });
+                    } else {
+                        // Multi-expansion (e.g. `#4` fan-out): annotation
+                        // and template word must be cloned per expansion
+                        // since one Candidate produces several emitted
+                        // candidates.
+                        for expanded_word in alts {
+                            if self.lisp_directives && ignore_set.contains(&expanded_word) {
+                                continue;
+                            }
+                            if seen.insert(expanded_word.clone()) {
+                                candidates.push(Candidate {
+                                    word: expanded_word,
+                                    annotation: c.annotation.clone(),
+                                    lisp_form: None,
+                                });
+                                origin.push(CandidateOrigin::Dict {
+                                    template_midashi: lookup_key.to_string(),
+                                    template_word: c.word.clone(),
+                                });
+                            }
+                        }
                     }
                 } else {
-                    c.word.clone()
-                };
-
-                // Skip words blacklisted by any skk-ignore-dic-word directive.
-                if self.lisp_directives && ignore_set.contains(&expanded_word) {
-                    continue;
-                }
-
-                if seen.insert(expanded_word.clone()) {
-                    let orig = CandidateOrigin::Dict {
-                        template_midashi: lookup_key.to_string(),
-                        template_word: c.word.clone(),
-                    };
+                    // Non-numeric path: 1:1 mapping from Candidate to
+                    // emitted candidate. Move `c.annotation` (and `c.word`
+                    // into Candidate.word) to avoid the per-iteration clone
+                    // that the numeric fan-out path requires.
+                    if self.lisp_directives && ignore_set.contains(&c.word) {
+                        continue;
+                    }
+                    if !seen.insert(c.word.clone()) {
+                        continue;
+                    }
+                    let template_word = c.word.clone();
                     candidates.push(Candidate {
-                        word: expanded_word,
+                        word: c.word,
                         annotation: c.annotation,
                         lisp_form: None,
                     });
-                    origin.push(orig);
+                    origin.push(CandidateOrigin::Dict {
+                        template_midashi: lookup_key.to_string(),
+                        template_word,
+                    });
                 }
             }
         }
@@ -3955,6 +4072,184 @@ mod tests {
         let result = eng.dict[0].lookup("だい#かい", None);
         assert!(result.is_some(), "should have learned template midashi");
         assert_eq!(result.unwrap().candidates[0].word, "#1回");
+    }
+
+    #[test]
+    fn test_numeric_recursive_conversion_basic() {
+        // DDSKK manual example for #4 (recursive numeric conversion):
+        //   Dict has  `p# /#4/`  and  `125 /東京都葛飾区/`
+        //   Input `/p125<SPC>` should produce candidate "東京都葛飾区".
+        let mut eng = engine();
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4")]),
+            ("125".to_string(), vec![Candidate::new("東京都葛飾区")]),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p125".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting, got {:?}", eng.phase());
+        };
+        let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+        assert!(
+            words.contains(&"東京都葛飾区"),
+            "recursive lookup of \"125\" should produce \"東京都葛飾区\"; got {:?}",
+            words
+        );
+    }
+
+    #[test]
+    fn test_numeric_recursive_multiple_secondary_candidates() {
+        // Recursive lookup returning multiple candidates should fan out the
+        // primary candidate into one expansion per secondary entry.
+        let mut eng = engine();
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4市")]),
+            (
+                "1".to_string(),
+                vec![Candidate::new("一"), Candidate::new("壱")],
+            ),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p1".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting, got {:?}", eng.phase());
+        };
+        let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+        assert!(words.contains(&"一市"), "expected '一市' in {:?}", words);
+        assert!(words.contains(&"壱市"), "expected '壱市' in {:?}", words);
+    }
+
+    #[test]
+    fn test_numeric_recursive_skips_lisp_form_secondary_candidates() {
+        // The recursive `#4` lookup must filter out Lisp-form candidates
+        // (e.g. `(skk-ignore-dic-word ...)`) so that S-expression text
+        // does not leak into expanded candidates.
+        use crate::dict::entry::LispForm;
+        let mut eng = engine();
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4")]),
+            (
+                "1".to_string(),
+                vec![
+                    Candidate::lisp(
+                        "(skk-ignore-dic-word \"foo\")",
+                        LispForm::IgnoreDicWord(vec!["foo".to_string()]),
+                    ),
+                    Candidate::new("壱"),
+                ],
+            ),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p1".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting, got {:?}", eng.phase());
+        };
+        let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+        assert!(
+            words.contains(&"壱"),
+            "expected displayable secondary candidate '壱' in {:?}",
+            words
+        );
+        assert!(
+            !words.iter().any(|w| w.contains("skk-ignore-dic-word")),
+            "Lisp directive must not leak into recursive expansion: {:?}",
+            words
+        );
+    }
+
+    #[test]
+    fn test_numeric_recursive_applies_secondary_ignore_directive() {
+        // A `(skk-ignore-dic-word ...)` directive in the *secondary* lookup
+        // entry must blacklist the listed words from being substituted via
+        // `#4`, mirroring how the primary lookup applies the directive.
+        use crate::dict::entry::LispForm;
+        let mut eng = engine();
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4")]),
+            (
+                "1".to_string(),
+                vec![
+                    Candidate::lisp(
+                        "(skk-ignore-dic-word \"壱\")",
+                        LispForm::IgnoreDicWord(vec!["壱".to_string()]),
+                    ),
+                    Candidate::new("壱"),
+                    Candidate::new("弐"),
+                ],
+            ),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p1".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting, got {:?}", eng.phase());
+        };
+        let words: Vec<_> = candidates.iter().map(|c| c.word.as_str()).collect();
+        assert!(words.contains(&"弐"), "expected '弐' in {:?}", words);
+        assert!(
+            !words.contains(&"壱"),
+            "secondary skk-ignore-dic-word directive must blacklist '壱' from #4 expansion: {:?}",
+            words
+        );
+    }
+
+    #[test]
+    fn test_numeric_recursive_learns_template_form() {
+        // Committing a #4-derived candidate must record the template form
+        // (with `#4` intact) to the user dict so that future inputs replay
+        // the recursive lookup rather than freezing the substituted text.
+        use crate::dict::file::UserDict;
+        let mut eng = engine();
+        let user_dict = UserDict::empty(std::path::PathBuf::from(
+            "/tmp/y2skk_test_recursive_learn.dict",
+        ));
+        eng.add_dict(Box::new(user_dict));
+        eng.add_dict(Box::new(KeyedStubDict(vec![
+            ("p#".to_string(), vec![Candidate::new("#4")]),
+            ("125".to_string(), vec![Candidate::new("東京都葛飾区")]),
+        ])));
+
+        eng.process_key(&press('/'));
+        for ch in "p125".chars() {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+
+        let SkkPhase::Selecting { candidates, .. } = eng.phase() else {
+            panic!("expected Selecting");
+        };
+        assert_eq!(candidates[0].word, "東京都葛飾区");
+
+        // Confirm with Ctrl+j (commits the focused candidate).
+        eng.process_key(&ctrl('j'));
+
+        // UserDict (index 0) must have learned the template midashi `p#`
+        // mapped to the template word `#4` — NOT the substituted form.
+        let result = eng.dict[0].lookup("p#", None);
+        assert!(
+            result.is_some(),
+            "should have learned template midashi `p#`"
+        );
+        assert_eq!(result.unwrap().candidates[0].word, "#4");
     }
 
     #[test]

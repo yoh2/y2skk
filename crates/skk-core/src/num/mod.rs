@@ -3,7 +3,7 @@ pub mod template;
 pub mod types;
 
 pub use convert::convert;
-pub use template::{expand, scan, synthesize};
+pub use template::{expand, expand_with_recursive_lookup, scan, synthesize};
 pub use types::NumType;
 
 /// Returns true if `midashi` contains at least one ASCII decimal digit run.
