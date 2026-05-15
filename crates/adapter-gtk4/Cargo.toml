@@ -1,0 +1,18 @@
+[package]
+name = "adapter-gtk4"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+skk-ipc.workspace = true
+zbus.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+cc.workspace         = true
+pkg-config.workspace = true

@@ -9,8 +9,8 @@
 Linux 向けの SKK 日本語入力メソッドです。Rust で実装しています。
 
 y2skk はデーモン (`y2skk-daemon`) として動作し、D-Bus 経由で機能を提供します。
-GTK3 / Qt6 / XIM / Wayland それぞれのアダプターがデーモンに接続する設計なので、
-辞書やセッション状態はすべてのアプリケーションで共有されます。
+GTK3 / GTK4 / Qt6 / XIM / Wayland それぞれのアダプターがデーモンに接続する
+設計なので、辞書やセッション状態はすべてのアプリケーションで共有されます。
 
 ---
 
@@ -19,27 +19,28 @@ GTK3 / Qt6 / XIM / Wayland それぞれのアダプターがデーモンに接�
 | コンポーネント | 状態 |
 |---------------|------|
 | GTK3 アプリケーション | ✅ 動作確認済み |
+| GTK4 アプリケーション | ✅ 動作確認済み |
 | Qt6 アプリケーション | ✅ 動作確認済み |
 | XIM クライアント（xterm 等） | ✅ 動作確認済み（`y2skk-xim` 経由） |
 | KDE Plasma（X11） | ✅ 主要ターゲット |
-| KDE Plasma（Wayland） | 🧪 **極めて初期段階／実験的** — 下記注意参照 |
-| GTK4 | 🚧 未対応 |
+| KDE Plasma（Wayland） | 🧪 **実験的** — 下記注意参照 |
 
-### Wayland サポートについて（極めて初期段階）
+### Wayland サポートについて（実験的・改善中）
 
-Wayland アダプター（`y2skk-wayland`）は **極めて初期の実験段階** であり、常用に
-耐える状態ではありません。KDE 独自の `zwp_input_method_v1` 拡張をベースにしている
-ため、現時点では KWin（KDE Plasma 5/6）でしか動作せず、他の Wayland コンポジタへの
-移植性はありません。執筆時点で判明している既知の不具合：
+Wayland アダプター（`y2skk-wayland`）は KDE 独自の `zwp_input_method_v1` 拡張を
+ベースにしているため、現時点では KWin（KDE Plasma 5/6）でしか動作せず、他の
+Wayland コンポジタへの移植性はありません。`zwp_input_method_v2` への対応は
+**予定なし**（KWin が advertise しておらず、手元でテストできる v2 対応コンポジタ
+も無いため。GTK4/Wayland プロジェクトメモ参照）。
 
-- `--ozone-platform=wayland` で起動した Chromium 系アプリで入力イベントが正しく
-  処理されない（一部のテキスト入力欄でバックスペースが 2 回に 1 回しか効かない等）
-- `zwp_input_method_v2` / `text-input-v3` には未対応のため、KDE 以外のコンポジタ
-  （GNOME、Sway 等）では動作しない
-- ドキュメント・パッケージング・安定性のいずれも未整備
+直近の修正で過去に報告されていた主要な不具合（Slack / Electron での Enter /
+Backspace の半分失敗、画面下端での候補ウィンドウ残留、長時間使用時の素通し化）
+は概ね解消しましたが、依然として実験的位置付けです。パッケージング、KDE 以外
+のコンポジタ対応、幅広いアプリでの検証は未整備です。
 
-常用には引き続き X11 経路（XIM + GTK3 + Qt6 アダプター）を使用してください。
-Wayland アダプターはあくまでプレビューと位置付けています。
+KDE Plasma Wayland セッションでは日常用途で使える状態になっています。KDE 以外
+の Wayland では引き続き X11 経路（XIM + GTK3 / GTK4 / Qt6 アダプター）を
+使用してください。
 
 ---
 
@@ -60,6 +61,9 @@ Wayland アダプターはあくまでプレビューと位置付けています
 - **Abbrev モード** — ローマ字で直接辞書検索（`/` キー）
 - **vi 互換 Esc** — オプション機能。通常入力フェーズで Esc を押すと ASCII モードに切り替わる（設定変更可）
 - **XIM サーバー** — D-Bus 経由でデーモンに接続する独立バイナリ `y2skk-xim`
+- **GTK3 / GTK4 IM モジュール** — `adapter-gtk3`（GTK3 の従来 IM module ABI）と
+  `adapter-gtk4`（GIO `gtk-im-module` extension point）の両方が
+  `GTK_IM_MODULE=y2skk` で読み込まれる
 - **Wayland アダプター（実験的）** — `zwp_input_method_v1` ベースの独立バイナリ
   `y2skk-wayland`（KDE 限定）。上の警告を参照
 - **デーモン再接続・フェイルオープン** — デーモン再起動中もアダプターは動作を継続。
@@ -81,11 +85,13 @@ Wayland アダプターはあくまでプレビューと位置付けています
 | Rust + Cargo | 全コンポーネントのビルド |
 | cmake ≥ 3.21 | Qt6 プラグインのビルド |
 | GTK3 開発ヘッダ | GTK3 IM モジュールのビルド |
+| GTK4 開発ヘッダ | GTK4 IM モジュールのビルド |
 | Qt6 + プライベートヘッダ | Qt6 プラグインのビルド |
 | pkg-config | ビルドシステムが使用 |
+| `gio-querymodules`（`glib2` に同梱） | GTK4 IM モジュールインストール後の GIO キャッシュ更新（インストール時のみ。`cargo build` 自体では使用しない） |
 
 各パッケージはディストリビューションのパッケージマネージャーでインストールしてください。
-GTK3 / Qt6 パッケージはそれぞれのアダプターをビルドする場合のみ必要です。
+GTK3 / GTK4 / Qt6 パッケージはそれぞれのアダプターをビルドする場合のみ必要です。
 
 ### 辞書
 
@@ -104,13 +110,14 @@ y2skk を使うには SKK 辞書が最低 1 つ必要です。
 cargo xtask install
 ```
 
-このコマンドは daemon / XIM サーバー / GTK3 / Qt6 をビルドして `~/.local/` 以下に
-インストールします。実験的な Wayland アダプターは **デフォルトではインストール
-されません**。明示的に有効化するには `--wayland` を指定します：
+このコマンドは daemon / XIM サーバー / GTK3 / GTK4 / Qt6 をビルドして
+`~/.local/` 以下にインストールします。実験的な Wayland アダプターは
+**デフォルトではインストールされません**。明示的に有効化するには `--wayland`
+を指定します：
 
 ```sh
 cargo xtask install --wayland         # Wayland アダプターのみ
-cargo xtask install --daemon --xim --gtk3 --qt6 --wayland   # 全部入り
+cargo xtask install --daemon --xim --gtk3 --gtk4 --qt6 --wayland   # 全部入り
 ```
 
 詳細やオプション・システム全体へのインストール方法は [INSTALL.md](INSTALL.md) を参照してください。
@@ -121,14 +128,20 @@ cargo xtask install --daemon --xim --gtk3 --qt6 --wayland   # 全部入り
 
 ```sh
 export XMODIFIERS=@im=y2skk      # XIM クライアント（xterm、Chromium 等）
-export GTK_IM_MODULE=y2skk       # GTK3 アプリケーション
+export GTK_IM_MODULE=y2skk       # GTK3 / GTK4 アプリケーション
 export QT_IM_MODULE=y2skk        # Qt6 アプリケーション
 # デフォルト（~/.local/）インストール時はさらに以下も必要:
 export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules"
+export GIO_EXTRA_MODULES="$HOME/.local/lib/gtk-4.0/immodules:$GIO_EXTRA_MODULES"
 export QT_PLUGIN_PATH="$HOME/.local/lib/qt6/plugins:$QT_PLUGIN_PATH"
 ```
 
-> `cargo xtask install --system` でシステムインストールした場合、最後の 2 行は不要です。
+> `cargo xtask install --system` でシステムインストールした場合、最後の 3 行は不要です。
+>
+> `GIO_EXTRA_MODULES` は GTK4 アダプター用です。GIO はデフォルトでは
+> `~/.local/lib/gtk-4.0/immodules/` を scan しないため、この環境変数で path
+> を追加する必要があります。設定し忘れると GTK4 アプリで
+> 「No IM module matching y2skk found」warning が出ます。
 
 ログアウト・ログインし直すか、ファイルを `source` して反映させてください。
 

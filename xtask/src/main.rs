@@ -3,7 +3,7 @@
 //! Run via `cargo xtask <subcommand> [options]`.
 //!
 //! Subcommands:
-//!   install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--qt6] [--wayland]
+//!   install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--gtk4] [--qt6] [--wayland]
 //!   uninstall [--system | --prefix <path>]
 //!
 //! Install modes (mutually exclusive):
@@ -65,6 +65,7 @@ struct Opts {
     daemon: bool,
     xim: bool,
     gtk3: bool,
+    gtk4: bool,
     qt6: bool,
     wayland: bool,
     /// Opt-in: run `systemctl --user try-restart` for installed services.
@@ -79,6 +80,7 @@ impl Opts {
         let mut daemon = false;
         let mut xim = false;
         let mut gtk3 = false;
+        let mut gtk4 = false;
         let mut qt6 = false;
         let mut wayland = false;
         let mut restart = false;
@@ -106,6 +108,10 @@ impl Opts {
                     gtk3 = true;
                     component_flag = true;
                 }
+                "--gtk4" => {
+                    gtk4 = true;
+                    component_flag = true;
+                }
                 "--qt6" => {
                     qt6 = true;
                     component_flag = true;
@@ -127,6 +133,7 @@ impl Opts {
             daemon = true;
             xim = true;
             gtk3 = true;
+            gtk4 = true;
             qt6 = true;
             wayland = true;
         }
@@ -144,6 +151,7 @@ impl Opts {
             daemon,
             xim,
             gtk3,
+            gtk4,
             qt6,
             wayland,
             restart,
@@ -162,7 +170,7 @@ fn main() {
             eprintln!("y2skk build helper");
             eprintln!();
             eprintln!("USAGE:");
-            eprintln!("  cargo xtask install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--qt6] [--wayland]");
+            eprintln!("  cargo xtask install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--gtk4] [--qt6] [--wayland]");
             eprintln!("  cargo xtask uninstall [--system | --prefix <path>]");
             eprintln!();
             eprintln!("INSTALL MODES (mutually exclusive):");
@@ -177,6 +185,7 @@ fn main() {
             eprintln!("  --daemon         Daemon (+ systemd service) only");
             eprintln!("  --xim            XIM server (+ systemd service) only");
             eprintln!("  --gtk3           GTK3 IM module only");
+            eprintln!("  --gtk4           GTK4 IM module only");
             eprintln!("  --qt6            Qt6 IM plugin only");
             eprintln!("  --wayland        Wayland adapter (+ KDE virtual-keyboard entry) only.");
             eprintln!("                   Always kills the running y2skk-wayland after install");
@@ -206,6 +215,9 @@ fn cmd_install(opts: Opts) {
     }
     if opts.gtk3 {
         install_gtk3(&ws, &opts.mode);
+    }
+    if opts.gtk4 {
+        install_gtk4(&ws, &opts.mode);
     }
     if opts.qt6 {
         install_qt6(&ws, &opts.mode);
@@ -286,13 +298,23 @@ fn cmd_install(opts: Opts) {
             if matches!(opts.mode, Mode::UserLocal) {
                 // Remind the user which extra env vars are needed for user-local adapters.
                 let need_gtk3_env = opts.gtk3 && pkg_config_exists("gtk+-3.0");
+                let need_gtk4_env = opts.gtk4 && pkg_config_exists("gtk4");
                 let need_qt6_env = opts.qt6;
-                if need_gtk3_env || need_qt6_env {
+                if need_gtk3_env || need_gtk4_env || need_qt6_env {
                     println!();
                     println!("Add the following to your shell profile or session startup script:");
                     if need_gtk3_env {
                         println!(
                             r#"  export GTK_IM_MODULE_FILE="$HOME/.config/gtk-3.0/gtk.immodules""#
+                        );
+                    }
+                    if need_gtk4_env {
+                        // GIO does not scan ~/.local/lib/gtk-4.0/immodules/ by
+                        // default; this env var tells it to. The cache file
+                        // is regenerated for us by gio-querymodules during
+                        // install.
+                        println!(
+                            r#"  export GIO_EXTRA_MODULES="$HOME/.local/lib/gtk-4.0/immodules:$GIO_EXTRA_MODULES""#
                         );
                     }
                     if need_qt6_env {
@@ -588,6 +610,118 @@ fn install_gtk3_cmake(ws: &Path, module_dir: Option<&Path>, use_sudo: bool) {
     }
 }
 
+// ── GTK4 adapter ──────────────────────────────────────────────────────────────
+
+fn install_gtk4(ws: &Path, mode: &Mode) {
+    println!("==> Building GTK4 IM module...");
+
+    if !pkg_config_exists("gtk4") {
+        println!("    [SKIP] gtk4 not found via pkg-config.");
+        return;
+    }
+
+    match mode {
+        Mode::UserLocal => install_gtk4_user(ws),
+        Mode::System => install_gtk4_cmake(ws, None, true),
+        Mode::Packaging(prefix) => {
+            // GTK4 immodules live in a flat $LIBDIR/gtk-4.0/immodules/ directory
+            // (no per-binary-version subdirectory like GTK3).
+            let module_dir = prefix.join("lib").join("gtk-4.0").join("immodules");
+            install_gtk4_cmake(ws, Some(&module_dir), false);
+        }
+    }
+}
+
+/// User-local GTK4 install: build with cargo, copy to ~/.local/, and
+/// (re)generate the GIO module cache for that directory so GIO can find
+/// the module without a full directory rescan.
+fn install_gtk4_user(ws: &Path) {
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    run(Command::new(&cargo)
+        .args(["build", "--release", "-p", "adapter-gtk4"])
+        .current_dir(ws));
+
+    let src = ws.join("target/release/libadapter_gtk4.so");
+    // GIO requires module file names to start with "lib".
+    let module_dir = home_dir().join(".local/lib/gtk-4.0/immodules");
+    let dest = module_dir.join("libim-y2skk.so");
+
+    install_file(&src, &dest, false);
+    update_gio_module_cache(&module_dir);
+}
+
+/// Run `gio-querymodules <dir>` so GIO updates `<dir>/giomodule.cache`.
+/// Without this (or `GIO_MODULE_DIR` cache regeneration by the distro
+/// package manager) GIO will not pick up modules dropped into a
+/// non-default directory like `~/.local/lib/gtk-4.0/immodules/`.
+fn update_gio_module_cache(module_dir: &Path) {
+    println!(
+        "    Updating GIO module cache -> {}/giomodule.cache",
+        module_dir.display()
+    );
+    match Command::new("gio-querymodules").arg(module_dir).status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!("    Warning: gio-querymodules exited with {:?}", s.code()),
+        Err(e) => eprintln!(
+            "    Warning: gio-querymodules not found: {e}\n    \
+             Install glib2 utilities (or run gio-querymodules manually) so GTK4 \
+             can discover the module."
+        ),
+    }
+}
+
+/// System or packaging GTK4 install via cmake.
+fn install_gtk4_cmake(ws: &Path, module_dir: Option<&Path>, use_sudo: bool) {
+    if !cmd_exists("cmake") {
+        println!("    [SKIP] cmake not found.");
+        return;
+    }
+
+    let build_dir = ws.join("target/xtask-build/gtk4");
+    let src_dir = ws.join("shim/gtk4");
+
+    // Refresh the GIO module cache when installing into a real system path
+    // (use_sudo=true). Skipped for packaging mode (use_sudo=false), which
+    // installs into a staging directory the host system never sees.
+    let update_cache = if use_sudo { "ON" } else { "OFF" };
+
+    let mut cmake_args: Vec<String> = vec![
+        "-S".into(),
+        src_dir.to_str().unwrap().into(),
+        "-B".into(),
+        build_dir.to_str().unwrap().into(),
+        "-DCMAKE_BUILD_TYPE=Release".into(),
+        format!("-DGTK4_UPDATE_GIOMODULE_CACHE={update_cache}"),
+    ];
+    if let Some(dir) = module_dir {
+        cmake_args.push(format!("-DGTK4_IM_MODULE_DIR={}", dir.to_str().unwrap()));
+    }
+
+    println!("    Configuring...");
+    let ok = Command::new("cmake")
+        .args(&cmake_args)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !ok {
+        println!("    [SKIP] cmake configure failed (GTK4 headers missing?).");
+        return;
+    }
+
+    println!("    Building...");
+    let jobs = parallelism();
+    run(Command::new("cmake").args(["--build", build_dir.to_str().unwrap(), "--parallel", &jobs]));
+
+    println!("    Installing{}...", if use_sudo { " (sudo)" } else { "" });
+    let install_args = ["--install", build_dir.to_str().unwrap()];
+    if use_sudo {
+        run_as_root(Command::new("cmake").args(install_args));
+    } else {
+        run(Command::new("cmake").args(install_args));
+    }
+}
+
 // ── Qt6 adapter ────────────────────────────────────────────────────────────────
 
 fn install_qt6(ws: &Path, mode: &Mode) {
@@ -753,6 +887,42 @@ fn cmd_uninstall(opts: Opts) {
         }
     }
 
+    // GTK4 module. After removing the .so we re-run gio-querymodules so the
+    // GIO module cache no longer references the deleted module. The system
+    // path lives under a root-owned directory, so both the file removal and
+    // the cache regeneration must go through sudo there.
+    let gtk4_path = match &opts.mode {
+        Mode::UserLocal => home_dir().join(".local/lib/gtk-4.0/immodules/libim-y2skk.so"),
+        Mode::System => gtk4_system_module_path(),
+        Mode::Packaging(prefix) => prefix.join("lib/gtk-4.0").join("immodules/libim-y2skk.so"),
+    };
+    if gtk4_path.exists() {
+        println!("  Removing GTK4 module: {}", gtk4_path.display());
+        if matches!(opts.mode, Mode::System) {
+            run_as_root(Command::new("rm").arg("-f").arg(&gtk4_path));
+        } else {
+            fs::remove_file(&gtk4_path).unwrap_or_else(|e| eprintln!("  Warning: {e}"));
+        }
+        removed = true;
+
+        // Regenerate the GIO cache so the deleted entry vanishes. Skipped
+        // for packaging mode (the module was never registered with the
+        // user's GIO at install time anyway).
+        if !matches!(opts.mode, Mode::Packaging(_)) {
+            if let Some(parent) = gtk4_path.parent() {
+                if matches!(opts.mode, Mode::System) {
+                    println!(
+                        "    Updating GIO module cache (sudo) -> {}/giomodule.cache",
+                        parent.display()
+                    );
+                    run_as_root(Command::new("gio-querymodules").arg(parent));
+                } else {
+                    update_gio_module_cache(parent);
+                }
+            }
+        }
+    }
+
     // Qt6 plugin.
     let qt6_path = match &opts.mode {
         Mode::UserLocal => {
@@ -861,6 +1031,13 @@ fn gtk3_system_module_path() -> PathBuf {
         .join("gtk-3.0")
         .join(&bin_ver)
         .join("immodules/im-y2skk.so")
+}
+
+fn gtk4_system_module_path() -> PathBuf {
+    let libdir = pkg_config_var("gtk4", "libdir").unwrap_or_else(|| "/usr/lib".to_string());
+    PathBuf::from(libdir)
+        .join("gtk-4.0")
+        .join("immodules/libim-y2skk.so")
 }
 
 fn qt6_system_plugin_path() -> PathBuf {
