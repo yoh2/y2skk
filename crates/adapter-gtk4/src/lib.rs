@@ -44,7 +44,7 @@ pub extern "C" fn g_io_module_query() -> *mut *mut c_char {
     unsafe { _y2skk_g_io_module_query() }
 }
 
-use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink};
+use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink, DispatchResult};
 use skk_ipc::proxy::reconnect::ReconnectingClient;
 use skk_ipc::NO_GHOST;
 
@@ -174,6 +174,23 @@ pub extern "C" fn y2skk_destroy_session(handle: c_uint) {
     }
 }
 
+// GDK keyval → Unicode codepoint. gdk is already loaded by the IM module, so the
+// symbol resolves without an extra crate dependency.
+extern "C" {
+    fn gdk_keyval_to_unicode(keyval: c_uint) -> u32;
+}
+
+/// GDK_CONTROL_MASK (1<<2) | GDK_MOD1_MASK / Alt (1<<3). Shift and AltGr (Mod5)
+/// are intentionally allowed so capital letters and AltGr characters still commit.
+const MOD_MASK_CTRL_ALT: c_uint = (1 << 2) | (1 << 3);
+
+/// Whether a passed-through key event should be committed by the adapter itself
+/// (mirroring `GtkIMContextSimple`).  True only for a key press that the engine
+/// did not consume and that carries no Ctrl/Alt modifier.
+fn passthrough_should_commit(is_press: c_int, modifiers: c_uint, result: &DispatchResult) -> bool {
+    is_press != 0 && !result.consumed && (modifiers & MOD_MASK_CTRL_ALT) == 0
+}
+
 /// Processes a key event, dispatching engine actions via `cbs`.
 /// Returns 1 if the key was consumed by the IME, 0 for passthrough.
 ///
@@ -199,10 +216,25 @@ pub unsafe extern "C" fn y2skk_process_key(
     let mut sink = CallbackSink { ctx, cbs };
     let result = dispatch_actions(&actions, &mut sink);
     if result.consumed && !result.force_passthrough {
-        1
-    } else {
-        0
+        return 1;
     }
+
+    // Mirror GtkIMContextSimple: on pure passthrough of an unmodified printable
+    // key, commit the character ourselves. GTK text widgets insert text via the
+    // IM `commit` path; the "insert from keyval on FALSE return" fallback is not
+    // universal across widgets/backends, so relying on it drops characters in
+    // some X11 widgets. Returning consumed here suppresses any GTK fallback, so
+    // there is no double insertion.
+    if passthrough_should_commit(is_press, modifiers, &result) {
+        let uc = gdk_keyval_to_unicode(keyval);
+        if let Some(ch) = char::from_u32(uc) {
+            if !ch.is_control() {
+                sink.commit(&ch.to_string());
+                return 1;
+            }
+        }
+    }
+    0
 }
 
 /// Notifies the daemon that the context gained focus.
@@ -223,4 +255,41 @@ pub extern "C" fn y2skk_focus_out(session_id: c_uint) {
 pub extern "C" fn y2skk_reset(session_id: c_uint) {
     // Future: call a Reset D-Bus method
     let _ = session_id;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pure_passthrough() -> DispatchResult {
+        DispatchResult {
+            consumed: false,
+            force_passthrough: true,
+        }
+    }
+
+    #[test]
+    fn commits_unmodified_printable_press() {
+        assert!(passthrough_should_commit(1, 0, &pure_passthrough()));
+    }
+
+    #[test]
+    fn ignores_key_release() {
+        assert!(!passthrough_should_commit(0, 0, &pure_passthrough()));
+    }
+
+    #[test]
+    fn ignores_ctrl_and_alt() {
+        assert!(!passthrough_should_commit(1, 1 << 2, &pure_passthrough()));
+        assert!(!passthrough_should_commit(1, 1 << 3, &pure_passthrough()));
+    }
+
+    #[test]
+    fn ignores_consumed_result() {
+        let consumed = DispatchResult {
+            consumed: true,
+            force_passthrough: false,
+        };
+        assert!(!passthrough_should_commit(1, 0, &consumed));
+    }
 }
