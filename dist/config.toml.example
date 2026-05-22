@@ -32,6 +32,13 @@ default_mode = "ascii"
 # Key names: space / return / tab / escape / or a single character
 toggle_keys = ["shift+space"]
 
+# Keys that toggle "raw mode".  While raw mode is active every key is passed
+# straight through to the application except these toggle keys, so control keys
+# the IME would normally consume (e.g. Ctrl+Q / XON to recover a terminal frozen
+# by Ctrl+S) can reach the application.  Same syntax as toggle_keys.
+# Disabled by default; uncomment and choose a combination to enable it.
+# raw_mode_toggle_keys = ["ctrl+alt+p"]
+
 # Characters that immediately start conversion in ▽ mode.
 # When one of these characters is typed, the current reading is converted and
 # the trigger character is also committed.

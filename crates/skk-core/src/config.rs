@@ -30,6 +30,12 @@ pub struct SkkKeybindings {
     /// Each entry is a `(Key, Modifiers)` pair.  Default: `[(Key::Space, Modifiers::SHIFT)]`.
     /// This does not take effect during word-registration mode.
     pub toggle_keys: Vec<(crate::key::Key, crate::key::Modifiers)>,
+    /// Keys that toggle "raw mode": while active, every key is passed through to
+    /// the application untouched, except these toggle keys themselves.  Provides an
+    /// escape hatch for sending control keys (e.g. C-q / XON) the IME would otherwise
+    /// consume.  Each entry is a `(Key, Modifiers)` pair.  Default: `[]` (disabled
+    /// until configured).
+    pub raw_mode_toggle_keys: Vec<(crate::key::Key, crate::key::Modifiers)>,
     /// vi-compatible behaviour: when true, pressing Esc in a regular input phase
     /// (Hiragana / Katakana / HalfWidthKatakana / WideAscii / Ascii) switches the
     /// IME to Ascii mode.  Conversion phases (▽/▼ etc.) keep their normal cancel
@@ -49,6 +55,7 @@ impl Default for SkkKeybindings {
             selection_keys: "asdfjkl;".chars().collect(),
             conversion_trigger_chars: vec![',', '.', 'を'],
             toggle_keys: vec![(crate::key::Key::Space, crate::key::Modifiers::SHIFT)],
+            raw_mode_toggle_keys: vec![],
             vi_escape: false,
         }
     }

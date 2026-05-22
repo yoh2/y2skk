@@ -62,6 +62,11 @@ pub struct InputConfig {
     pub default_mode: String,
     /// Key combinations that toggle IME on/off (default: ["shift+space"])
     pub toggle_keys: Vec<String>,
+    /// Key combinations that toggle raw mode.  While raw mode is active, every key
+    /// is passed straight through to the application except these toggle keys, so
+    /// control keys the IME would consume (e.g. C-q / XON) can reach it.
+    /// Default: [] (disabled until configured).  Example: ["ctrl+alt+p"].
+    pub raw_mode_toggle_keys: Vec<String>,
     /// Characters that trigger immediate conversion in ▽ mode.
     /// Each entry must be a single character (e.g. [",", ".", "を"]).
     /// After the candidate is committed, the trigger character is also output.
@@ -81,6 +86,7 @@ impl Default for InputConfig {
             kana_table: None,
             default_mode: "ascii".into(),
             toggle_keys: vec!["shift+space".into()],
+            raw_mode_toggle_keys: vec![],
             conversion_trigger_chars: vec![",".into(), ".".into(), "を".into()],
             vi_escape: false,
         }
@@ -433,6 +439,11 @@ pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
         parse_toggle_key(key)?;
     }
 
+    // 2b. raw_mode_toggle_keys — all entries must parse
+    for key in &config.input.raw_mode_toggle_keys {
+        parse_toggle_key(key)?;
+    }
+
     // 3. conversion_trigger_chars — each must be a single character
     for entry in &config.input.conversion_trigger_chars {
         let mut chars = entry.chars();
@@ -666,6 +677,40 @@ priority = 0
             result,
             Err(ConfigValidationError::InvalidConversionTriggerChar { .. })
         ));
+    }
+
+    #[test]
+    fn validate_invalid_raw_mode_toggle_key() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let table_path = manifest.join("../../dist/tables/romaji.txt");
+        let config = Config {
+            input: InputConfig {
+                kana_table: Some(table_path),
+                raw_mode_toggle_keys: vec!["shift+boguskey".to_string()],
+                ..InputConfig::default()
+            },
+            ..Config::default()
+        };
+        let result = validate(&config);
+        assert!(matches!(
+            result,
+            Err(ConfigValidationError::InvalidToggleKey { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_valid_raw_mode_toggle_key() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let table_path = manifest.join("../../dist/tables/romaji.txt");
+        let config = Config {
+            input: InputConfig {
+                kana_table: Some(table_path),
+                raw_mode_toggle_keys: vec!["ctrl+alt+p".to_string()],
+                ..InputConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(validate(&config).is_ok());
     }
 
     #[test]

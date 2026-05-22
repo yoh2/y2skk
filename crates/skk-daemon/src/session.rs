@@ -200,11 +200,19 @@ fn keybindings_from_config(config: &Config) -> SkkKeybindings {
         .filter_map(|s| crate::config::parse_toggle_key(s).ok())
         .collect();
 
+    let raw_mode_toggle_keys: Vec<(Key, Modifiers)> = config
+        .input
+        .raw_mode_toggle_keys
+        .iter()
+        .filter_map(|s| crate::config::parse_toggle_key(s).ok())
+        .collect();
+
     SkkKeybindings {
         inline_count: config.candidates.inline_count,
         selection_keys: config.candidates.selection_keys.chars().collect(),
         conversion_trigger_chars,
         toggle_keys,
+        raw_mode_toggle_keys,
         vi_escape: config.input.vi_escape,
         ..SkkKeybindings::default()
     }

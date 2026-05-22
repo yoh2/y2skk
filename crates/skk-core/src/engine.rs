@@ -205,6 +205,10 @@ pub struct SkkEngine {
     /// interpreted and the listed words are filtered from the candidate list.
     /// Default: `true`.
     lisp_directives: bool,
+    /// When true, the engine is in "raw mode": every key is forwarded to the
+    /// application untouched, except the configured raw-mode toggle keys.  The
+    /// current phase and buffers are frozen while active and restored on exit.
+    raw_mode: bool,
 }
 
 impl SkkEngine {
@@ -221,6 +225,7 @@ impl SkkEngine {
             completion: None,
             conversion_trigger: None,
             lisp_directives: true,
+            raw_mode: false,
         }
     }
 
@@ -271,6 +276,9 @@ impl SkkEngine {
     /// kana mode that was active when ▽ was entered, so that mode-switch events
     /// (e.g. q confirming from katakana ▼) are correctly detected.
     fn current_mode_indicator(&self) -> &'static str {
+        if self.raw_mode {
+            return "-";
+        }
         match &self.phase {
             SkkPhase::Katakana => "ア",
             SkkPhase::HalfWidthKatakana => "ｱ",
@@ -295,6 +303,32 @@ impl SkkEngine {
     // ── Internal dispatch ─────────────────────────────────────────────────────
 
     fn handle_press(&mut self, event: &KeyEvent) -> Vec<EngineAction> {
+        // ── Raw mode: forward everything except the toggle key ───────────────
+        // While raw mode is active every key is passed straight to the application,
+        // so control keys the IME would normally consume (e.g. C-q / XON) can reach
+        // it.  The toggle keys themselves switch the mode off again.  The current
+        // phase and buffers are left frozen and restored when raw mode is exited.
+        let is_raw_toggle = self
+            .keybindings
+            .raw_mode_toggle_keys
+            .iter()
+            .any(|(k, m)| event.key == *k && event.modifiers == *m);
+        if self.raw_mode {
+            if is_raw_toggle {
+                self.raw_mode = false;
+                // Redraw the preedit/candidates that were frozen on entry.
+                return self.render_current_phase();
+            }
+            return vec![EngineAction::Passthrough];
+        }
+        if is_raw_toggle {
+            self.raw_mode = true;
+            // Hide any visible preedit/candidates; the internal state is frozen and
+            // restored on exit.  The mode-indicator change to "-" is appended by
+            // `process_key`, which also makes this key event consumed.
+            return vec![EngineAction::HideCandidates, EngineAction::ClearPreedit];
+        }
+
         // ── Registration mode special keys ──────────────────────────────────
         if !self.register_stack.is_empty() {
             let in_ready_state = matches!(
@@ -2247,6 +2281,35 @@ impl SkkEngine {
         EngineAction::UpdatePreedit(self.build_preedit())
     }
 
+    /// Rebuilds the display actions for the current phase.  Used when leaving raw
+    /// mode to restore the preedit/candidate view that was hidden on entry.  Always
+    /// returns at least one non-passthrough action so the toggle key stays consumed.
+    fn render_current_phase(&self) -> Vec<EngineAction> {
+        match &self.phase {
+            // Phases with no visible preedit when their buffers are empty: a
+            // ClearPreedit is enough (and a no-op when nothing is shown).
+            SkkPhase::Ascii | SkkPhase::WideAscii => vec![EngineAction::ClearPreedit],
+            SkkPhase::Hiragana | SkkPhase::Katakana | SkkPhase::HalfWidthKatakana
+                if self.kana_state.is_empty() =>
+            {
+                vec![EngineAction::ClearPreedit]
+            }
+            // ▼ selection: redraw the inline preedit and, in listing mode, the page.
+            SkkPhase::Selecting {
+                candidates, index, ..
+            } => {
+                let mut actions = vec![self.preedit_action()];
+                if let Some(show) = self.listing_show_action(candidates, *index) {
+                    actions.push(show);
+                }
+                actions
+            }
+            // Remaining phases (pending roman buffer, ▽ midashi, abbrev, okuri,
+            // code input, purge confirm) all render through the preedit.
+            _ => vec![self.preedit_action()],
+        }
+    }
+
     fn build_preedit(&self) -> Preedit {
         // Ghost text: only when in Midashi with an empty roman_buf and active completion.
         // The ghost suffix is appended after the actual kana_buf; the cursor is placed
@@ -2544,6 +2607,111 @@ mod tests {
         // Ctrl+j → back to Hiragana
         eng.process_key(&ctrl('j'));
         assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+    }
+
+    #[test]
+    fn test_raw_mode_passes_through_and_restores() {
+        let keybindings = SkkKeybindings {
+            raw_mode_toggle_keys: vec![(Key::Char('p'), Modifiers::CTRL | Modifiers::ALT)],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(romaji_table(), keybindings);
+        let toggle = KeyEvent::press(Key::Char('p'), Modifiers::CTRL | Modifiers::ALT);
+
+        // Switch to ASCII mode first.
+        eng.process_key(&press('l'));
+        assert_eq!(eng.phase(), &SkkPhase::Ascii);
+
+        // Enter raw mode: the toggle is consumed (status update, no passthrough).
+        let actions = eng.process_key(&toggle);
+        assert_eq!(eng.current_mode_indicator(), "-");
+        assert!(actions.contains(&EngineAction::UpdateStatus("-".to_string())));
+        assert!(!actions.contains(&EngineAction::Passthrough));
+
+        // C-q is normally consumed by the IME; in raw mode it passes through.
+        assert_eq!(eng.process_key(&ctrl('q')), vec![EngineAction::Passthrough]);
+        // A printable key is forwarded too (not converted/committed).
+        assert_eq!(
+            eng.process_key(&press('a')),
+            vec![EngineAction::Passthrough]
+        );
+        // The frozen phase is unchanged.
+        assert_eq!(eng.phase(), &SkkPhase::Ascii);
+
+        // Toggle off: indicator restored, toggle consumed.
+        let actions = eng.process_key(&toggle);
+        assert_eq!(eng.current_mode_indicator(), "a");
+        assert!(actions.contains(&EngineAction::UpdateStatus("a".to_string())));
+        assert!(!actions.contains(&EngineAction::Passthrough));
+    }
+
+    #[test]
+    fn test_raw_mode_freezes_pending_roman_buffer() {
+        let keybindings = SkkKeybindings {
+            raw_mode_toggle_keys: vec![(Key::Char('p'), Modifiers::CTRL | Modifiers::ALT)],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(romaji_table(), keybindings);
+        let toggle = KeyEvent::press(Key::Char('p'), Modifiers::CTRL | Modifiers::ALT);
+
+        // Pending roman buffer "k" in Hiragana mode.
+        eng.process_key(&press('k'));
+
+        // Enter raw mode and pass some keys through.
+        eng.process_key(&toggle);
+        assert_eq!(
+            eng.process_key(&press('a')),
+            vec![EngineAction::Passthrough]
+        );
+        assert_eq!(eng.process_key(&ctrl('q')), vec![EngineAction::Passthrough]);
+
+        // Exit raw mode: the frozen preedit "k" is redrawn.
+        let actions = eng.process_key(&toggle);
+        assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::UpdatePreedit(p) if p.text == "k")));
+
+        // Typing resumes from the restored buffer: k + a → か.
+        let actions = eng.process_key(&press('a'));
+        assert!(actions.contains(&EngineAction::Commit("か".to_string())));
+    }
+
+    #[test]
+    fn test_raw_mode_restores_candidate_list() {
+        let keybindings = SkkKeybindings {
+            inline_count: 2,
+            selection_keys: vec!['a', 's'],
+            raw_mode_toggle_keys: vec![(Key::Char('p'), Modifiers::CTRL | Modifiers::ALT)],
+            ..SkkKeybindings::default()
+        };
+        let mut eng = SkkEngine::new(romaji_table(), keybindings);
+        eng.add_dict(Box::new(StubDict(vec![
+            Candidate::new("A"),
+            Candidate::new("B"),
+            Candidate::new("C"),
+            Candidate::new("D"),
+        ])));
+        let toggle = KeyEvent::press(Key::Char('p'), Modifiers::CTRL | Modifiers::ALT);
+
+        // Reach listing mode (index 2 shows a candidate page).
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 2, .. }));
+
+        // Enter raw mode: candidates hidden, state frozen.
+        let actions = eng.process_key(&toggle);
+        assert!(actions.contains(&EngineAction::HideCandidates));
+
+        // Exit raw mode: the candidate page is re-shown and the phase is intact.
+        let actions = eng.process_key(&toggle);
+        assert!(matches!(eng.phase(), SkkPhase::Selecting { index: 2, .. }));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, EngineAction::ShowCandidates(_, _, _))));
     }
 
     #[test]
