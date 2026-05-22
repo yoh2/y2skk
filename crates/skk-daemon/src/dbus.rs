@@ -67,30 +67,38 @@ impl DaemonInterface {
             .process_key(session_id, key_sym, modifiers, is_press)
     }
 
-    /// Reloads the configuration file from disk.
+    /// Reloads the configuration file from disk and applies it to all live
+    /// sessions (validate-before-apply: on any load/validation/build error the
+    /// current configuration is kept and the error is returned to the caller).
     ///
-    /// If loading or validation fails the current configuration is kept and an
-    /// error is logged; the running daemon is not interrupted.
-    async fn reload_config(&self) {
-        match Config::load(&self.config_path) {
-            Ok(new_cfg) => {
-                if let Err(e) = config::validate(&new_cfg) {
-                    tracing::error!(
-                        "Config reload failed (validation): {}: {e}",
-                        self.config_path.display()
-                    );
-                    return;
-                }
-                *self.config.lock().await = new_cfg;
-                tracing::info!("Config reloaded from {}", self.config_path.display());
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Config reload failed (load): {}: {e}",
-                    self.config_path.display()
-                );
-            }
-        }
+    /// Each session's engine is rebuilt with the new table/keybindings while its
+    /// base input mode is preserved; session IDs are unchanged so adapters need
+    /// not reconnect.  Dictionaries are reloaded only when the dict / user-dict
+    /// configuration changed.
+    async fn reload_config(&self) -> zbus::fdo::Result<()> {
+        let new_cfg = Config::load(&self.config_path)
+            .map_err(|e| zbus::fdo::Error::Failed(format!("config load failed: {e}")))?;
+        config::validate(&new_cfg)
+            .map_err(|e| zbus::fdo::Error::Failed(format!("config validation failed: {e}")))?;
+
+        // Hold the config lock across the whole apply so concurrent ReloadConfig
+        // calls are serialized and `dicts_changed` is always compared against the
+        // currently-applied config (no stale comparison / wrongly-skipped dict
+        // reload).  No other path locks `sessions` before `config`, so acquiring
+        // `sessions` while holding `config` cannot deadlock.
+        let mut config_guard = self.config.lock().await;
+        let dicts_changed = config_guard.dict.sources != new_cfg.dict.sources
+            || config_guard.user_dict != new_cfg.user_dict;
+
+        self.sessions
+            .lock()
+            .await
+            .reload(&new_cfg, dicts_changed)
+            .map_err(|e| zbus::fdo::Error::Failed(format!("config apply failed: {e}")))?;
+
+        *config_guard = new_cfg;
+        tracing::info!("Config reloaded from {}", self.config_path.display());
+        Ok(())
     }
 }
 

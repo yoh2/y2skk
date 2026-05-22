@@ -300,6 +300,25 @@ impl SkkEngine {
         &self.phase
     }
 
+    /// Returns the base input mode of the current phase, mapping transient
+    /// conversion phases (▽/▼/abbrev/okuri/code/purge) back to the kana script
+    /// that was active.  Used to preserve the user's input mode when the engine
+    /// is rebuilt on a config reload.  Raw mode is not reflected (it is dropped).
+    pub fn base_input_mode(&self) -> SkkPhase {
+        match &self.phase {
+            SkkPhase::Hiragana
+            | SkkPhase::Katakana
+            | SkkPhase::HalfWidthKatakana
+            | SkkPhase::Ascii
+            | SkkPhase::WideAscii => self.phase.clone(),
+            _ => match self.midashi_display_mode {
+                KanaMode::Katakana => SkkPhase::Katakana,
+                KanaMode::HalfWidth => SkkPhase::HalfWidthKatakana,
+                KanaMode::Hiragana => SkkPhase::Hiragana,
+            },
+        }
+    }
+
     // ── Internal dispatch ─────────────────────────────────────────────────────
 
     fn handle_press(&mut self, event: &KeyEvent) -> Vec<EngineAction> {
@@ -2607,6 +2626,24 @@ mod tests {
         // Ctrl+j → back to Hiragana
         eng.process_key(&ctrl('j'));
         assert_eq!(eng.phase(), &SkkPhase::Hiragana);
+    }
+
+    #[test]
+    fn test_base_input_mode() {
+        let mut eng = engine();
+        assert_eq!(eng.base_input_mode(), SkkPhase::Hiragana);
+
+        eng.process_key(&press('l')); // → Ascii
+        assert_eq!(eng.base_input_mode(), SkkPhase::Ascii);
+
+        eng.process_key(&ctrl('j')); // → Hiragana
+        eng.process_key(&press('q')); // → Katakana
+        assert_eq!(eng.base_input_mode(), SkkPhase::Katakana);
+
+        // A conversion phase (▽ entered from Katakana) maps back to its kana base.
+        eng.process_key(&press('A'));
+        assert!(matches!(eng.phase(), SkkPhase::Midashi { .. }));
+        assert_eq!(eng.base_input_mode(), SkkPhase::Katakana);
     }
 
     #[test]
