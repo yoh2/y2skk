@@ -234,8 +234,10 @@ impl Config {
         }
     }
 
-    /// Expands `~` in all path fields.
-    fn normalize(mut self) -> Self {
+    /// Expands `~` in all path fields.  Public so callers that deserialize a
+    /// `Config` directly (e.g. the GUI settings tool) can produce the same
+    /// tilde-expanded form `load()` yields before validating.
+    pub fn normalize(mut self) -> Self {
         if let Some(p) = self.input.kana_table {
             self.input.kana_table = Some(expand_tilde(p));
         }

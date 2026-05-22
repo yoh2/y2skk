@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [dependencies]
 skk-core.workspace = true
 skk-ipc.workspace = true
+skk-config.workspace = true
 zbus.workspace = true
 tokio.workspace = true
 serde.workspace = true

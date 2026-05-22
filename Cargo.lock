@@ -1306,6 +1306,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "skk-config"
+version = "0.9.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_with",
+ "skk-core",
+ "tempfile",
+ "thiserror",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "skk-core"
 version = "0.9.0"
 dependencies = [
@@ -1325,6 +1339,7 @@ dependencies = [
  "dirs",
  "serde",
  "serde_with",
+ "skk-config",
  "skk-core",
  "skk-ipc",
  "tempfile",
@@ -1528,6 +1543,7 @@ dependencies = [
  "indexmap 2.13.1",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.1",
 ]
 
@@ -2114,6 +2130,15 @@ version = "0.9.0"
 [[package]]
 name = "y2skk-settings"
 version = "0.9.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "skk-config",
+ "skk-ipc",
+ "tempfile",
+ "toml",
+ "toml_edit",
+]
 
 [[package]]
 name = "zbus"

@@ -4,4 +4,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+# staticlib: linked into the C++ Qt Widgets settings app.
+# cdylib: keeps cargo from warning about unused public symbols during `cargo check`.
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
 [dependencies]
+skk-config.workspace = true
+skk-ipc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
