@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "adapter-gtk3"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "cc",
  "pkg-config",
@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-gtk4"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "cc",
  "pkg-config",
@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-qt6"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "skk-ipc",
  "tracing",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "adapter-wayland"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "fontdue",
@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "skk-config"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "dirs",
  "serde",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "skk-core"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "bitflags",
  "encoding_rs",
@@ -1332,7 +1332,7 @@ dependencies = [
 
 [[package]]
 name = "skk-daemon"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "skk-ipc"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "serde",
  "skk-core",
@@ -2090,7 +2090,7 @@ dependencies = [
 
 [[package]]
 name = "xim-server"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "skk-ipc",
@@ -2121,15 +2121,15 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "xtask"
-version = "0.9.0"
+version = "0.9.5"
 
 [[package]]
 name = "y2skk-indicator"
-version = "0.9.0"
+version = "0.9.5"
 
 [[package]]
 name = "y2skk-settings"
-version = "0.9.0"
+version = "0.9.5"
 dependencies = [
  "serde",
  "serde_json",
