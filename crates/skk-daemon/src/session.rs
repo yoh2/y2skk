@@ -144,6 +144,65 @@ impl SessionManager {
             }
         }
     }
+
+    /// Applies a new (already-validated) config to the running daemon.
+    ///
+    /// The caller validates the config and builds `kana_table` first (and can
+    /// abort before calling this if either fails), so this method is infallible.
+    /// Every live session's engine is rebuilt with the new table and keybindings,
+    /// preserving only its base input mode — any in-progress conversion,
+    /// completion and raw-mode state is dropped.  Session IDs are preserved, so
+    /// the reload is transparent to adapters (no reconnect).
+    ///
+    /// Dictionaries are reloaded only when `dicts_changed` is true (the user dict
+    /// is flushed first); otherwise the existing shared dictionaries are kept.
+    /// Dictionary loading is intentionally tolerant, matching daemon startup: a
+    /// source that fails to load is logged and skipped, and a missing user dict
+    /// falls back to an empty in-memory one.  Such failures do not abort the
+    /// reload (the kana table is the only strictly validated resource here).
+    pub fn reload(&mut self, config: &Config, dicts_changed: bool, kana_table: KanaTable) {
+        // `kana_table` was already built (and validated) by the caller, so it is
+        // not parsed a second time here.
+        let keybindings = keybindings_from_config(config);
+        let initial_phase = crate::config::parse_default_mode(&config.input.default_mode)
+            .unwrap_or(SkkPhase::Hiragana);
+        let indicator_timeout_ms = if config.indicator.enabled {
+            config.indicator.timeout_ms
+        } else {
+            0
+        };
+        let lisp_directives = config.dict.lisp_directives;
+
+        if dicts_changed {
+            self.flush_user_dict();
+            let (dicts, user_dict) = load_dicts(config);
+            self.dicts = dicts;
+            self.user_dict = user_dict;
+        }
+        self.kana_table = kana_table;
+        self.keybindings = keybindings;
+        self.initial_phase = initial_phase;
+        self.indicator_timeout_ms = indicator_timeout_ms;
+        self.lisp_directives = lisp_directives;
+
+        // Rebuild each live engine, preserving only its base input mode.
+        let ids: Vec<SessionId> = self.sessions.keys().copied().collect();
+        for id in ids {
+            let mode = self.sessions[&id].base_input_mode();
+            let mut engine = SkkEngine::new(self.kana_table.clone(), self.keybindings.clone())
+                .with_initial_phase(mode)
+                .with_lisp_directives(self.lisp_directives);
+            engine.add_dict(Box::new(SharedUserDict(Arc::clone(&self.user_dict))));
+            for dict in &self.dicts {
+                engine.add_dict(Box::new(SharedDict(Arc::clone(dict))));
+            }
+            self.sessions.insert(id, engine);
+        }
+        tracing::info!(
+            "Applied reloaded config to {} session(s)",
+            self.sessions.len()
+        );
+    }
 }
 
 // ── Dictionary loading ────────────────────────────────────────────────────────
@@ -273,5 +332,61 @@ impl DictionaryProvider for SharedUserDict {
             .lock()
             .map(|ud| ud.complete(prefix))
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, InputConfig, UserDictConfig};
+    use std::path::PathBuf;
+
+    fn romaji_table_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/tables/romaji.txt")
+    }
+
+    fn test_config(default_mode: &str, user_dict_path: &std::path::Path) -> Config {
+        Config {
+            input: InputConfig {
+                kana_table: Some(romaji_table_path()),
+                default_mode: default_mode.into(),
+                ..InputConfig::default()
+            },
+            // Keep the user dict in a caller-owned temp dir (unique per run).
+            user_dict: UserDictConfig {
+                path: Some(user_dict_path.to_path_buf()),
+            },
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn reload_preserves_session_ids_and_base_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let user_dict = dir.path().join("user.dict");
+        let mut mgr = SessionManager::new(&test_config("hiragana", &user_dict)).unwrap();
+        let s1 = mgr.create_session("a");
+        let s2 = mgr.create_session("b");
+
+        // s1: 'q' toggles Hiragana → Katakana. s2: 'A' starts a ▽ conversion.
+        mgr.process_key(s1, 'q' as u32, 0, true);
+        mgr.process_key(s2, 'A' as u32, 0, true);
+        assert_eq!(mgr.sessions[&s1].phase(), &SkkPhase::Katakana);
+        assert!(matches!(
+            mgr.sessions[&s2].phase(),
+            SkkPhase::Midashi { .. }
+        ));
+
+        // Reload with a different default_mode; dictionaries unchanged.
+        let cfg2 = test_config("ascii", &user_dict);
+        let table = crate::config::load_kana_table(&cfg2.input).unwrap();
+        mgr.reload(&cfg2, false, table);
+
+        // Session IDs preserved (transparent to adapters); base mode kept;
+        // the in-progress ▽ collapses to its base mode (Hiragana), not default.
+        assert!(mgr.sessions.contains_key(&s1));
+        assert!(mgr.sessions.contains_key(&s2));
+        assert_eq!(mgr.sessions[&s1].phase(), &SkkPhase::Katakana);
+        assert_eq!(mgr.sessions[&s2].phase(), &SkkPhase::Hiragana);
     }
 }

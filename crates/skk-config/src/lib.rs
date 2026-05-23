@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 use skk_core::dict::DictEncoding;
+use skk_core::kana::table::KanaTable;
 
 /// Expands a leading `~` component to the user's home directory.
 /// Returns the path unchanged if it does not start with `~` or if the home
@@ -95,7 +96,7 @@ impl Default for InputConfig {
 
 // ── [user-dict] ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UserDictConfig {
     pub path: Option<PathBuf>,
@@ -115,7 +116,7 @@ impl UserDictConfig {
 
 // ── [dict] ────────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DictConfig {
     pub sources: Vec<DictSource>,
@@ -136,7 +137,7 @@ impl Default for DictConfig {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DictSource {
     pub path: PathBuf,
     #[serde_as(as = "DisplayFromStr")]
@@ -234,8 +235,10 @@ impl Config {
         }
     }
 
-    /// Expands `~` in all path fields.
-    fn normalize(mut self) -> Self {
+    /// Expands `~` in all path fields.  Public so callers that deserialize a
+    /// `Config` directly (e.g. the GUI settings tool) can produce the same
+    /// tilde-expanded form `load()` yields before validating.
+    pub fn normalize(mut self) -> Self {
         if let Some(p) = self.input.kana_table {
             self.input.kana_table = Some(expand_tilde(p));
         }
@@ -430,7 +433,10 @@ pub fn parse_toggle_key(
 /// Fully validates a loaded [`Config`], checking value correctness and path
 /// existence.  Returns the first error encountered, or `Ok(())` if the config
 /// is usable to start the daemon.
-pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
+/// Validates the config and returns the kana table it builds, so callers that
+/// also need the table (e.g. a live reload) can reuse it instead of parsing it
+/// a second time.
+pub fn validate(config: &Config) -> Result<KanaTable, ConfigValidationError> {
     // 1. default_mode
     parse_default_mode(&config.input.default_mode)?;
 
@@ -454,8 +460,8 @@ pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
         }
     }
 
-    // 4. kana table — existence + parse
-    load_kana_table(&config.input)?;
+    // 4. kana table — existence + parse (returned so the caller can reuse it)
+    let kana_table = load_kana_table(&config.input)?;
 
     // 5. dict sources — each path must exist
     for source in &config.dict.sources {
@@ -476,7 +482,7 @@ pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
         }
     }
 
-    Ok(())
+    Ok(kana_table)
 }
 
 #[cfg(test)]
@@ -696,6 +702,38 @@ priority = 0
             result,
             Err(ConfigValidationError::InvalidToggleKey { .. })
         ));
+    }
+
+    #[test]
+    fn dict_config_changes_detected_for_reload() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let table_path = manifest.join("../../dist/tables/romaji.txt");
+        let base = Config {
+            input: InputConfig {
+                kana_table: Some(table_path),
+                ..InputConfig::default()
+            },
+            ..Config::default()
+        };
+
+        // Changing only [candidates] must NOT count as a dictionary change.
+        let mut only_candidates = base.clone();
+        only_candidates.candidates.inline_count += 1;
+        assert_eq!(base.dict.sources, only_candidates.dict.sources);
+        assert_eq!(base.user_dict, only_candidates.user_dict);
+
+        // Changing dict sources or the user-dict path IS a dictionary change.
+        let mut diff_dict = base.clone();
+        diff_dict.dict.sources.push(DictSource {
+            path: PathBuf::from("/tmp/x.dict"),
+            encoding: DictEncoding::Utf8,
+            priority: 0,
+        });
+        assert_ne!(base.dict.sources, diff_dict.dict.sources);
+
+        let mut diff_userdict = base.clone();
+        diff_userdict.user_dict.path = Some(PathBuf::from("/tmp/u.dict"));
+        assert_ne!(base.user_dict, diff_userdict.user_dict);
     }
 
     #[test]
