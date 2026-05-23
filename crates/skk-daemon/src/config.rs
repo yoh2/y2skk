@@ -708,6 +708,12 @@ priority = 0
                 raw_mode_toggle_keys: vec!["ctrl+alt+p".to_string()],
                 ..InputConfig::default()
             },
+            // Point the user dict at an existing directory (the crate root) so the
+            // parent-exists check passes on a clean machine (e.g. CI) where the
+            // default ~/.local/share/y2skk/ does not exist.
+            user_dict: UserDictConfig {
+                path: Some(manifest.join("user.dict")),
+            },
             ..Config::default()
         };
         assert!(validate(&config).is_ok());
