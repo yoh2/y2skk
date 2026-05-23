@@ -147,9 +147,9 @@ impl SessionManager {
 
     /// Applies a new (already-validated) config to the running daemon.
     ///
-    /// The kana table is rebuilt first; if that fails the current state is left
-    /// untouched and the error is returned (validate-before-apply).  On success,
-    /// every live session's engine is rebuilt with the new table and keybindings,
+    /// The caller validates the config and builds `kana_table` first (and can
+    /// abort before calling this if either fails), so this method is infallible.
+    /// Every live session's engine is rebuilt with the new table and keybindings,
     /// preserving only its base input mode — any in-progress conversion,
     /// completion and raw-mode state is dropped.  Session IDs are preserved, so
     /// the reload is transparent to adapters (no reconnect).
@@ -160,13 +160,9 @@ impl SessionManager {
     /// source that fails to load is logged and skipped, and a missing user dict
     /// falls back to an empty in-memory one.  Such failures do not abort the
     /// reload (the kana table is the only strictly validated resource here).
-    pub fn reload(
-        &mut self,
-        config: &Config,
-        dicts_changed: bool,
-    ) -> Result<(), crate::config::KanaTableResolveError> {
-        // Build new resources first; bail out (keeping current state) on failure.
-        let kana_table = crate::config::load_kana_table(&config.input)?;
+    pub fn reload(&mut self, config: &Config, dicts_changed: bool, kana_table: KanaTable) {
+        // `kana_table` was already built (and validated) by the caller, so it is
+        // not parsed a second time here.
         let keybindings = keybindings_from_config(config);
         let initial_phase = crate::config::parse_default_mode(&config.input.default_mode)
             .unwrap_or(SkkPhase::Hiragana);
@@ -206,7 +202,6 @@ impl SessionManager {
             "Applied reloaded config to {} session(s)",
             self.sessions.len()
         );
-        Ok(())
     }
 }
 
@@ -383,8 +378,9 @@ mod tests {
         ));
 
         // Reload with a different default_mode; dictionaries unchanged.
-        mgr.reload(&test_config("ascii", &user_dict), false)
-            .unwrap();
+        let cfg2 = test_config("ascii", &user_dict);
+        let table = crate::config::load_kana_table(&cfg2.input).unwrap();
+        mgr.reload(&cfg2, false, table);
 
         // Session IDs preserved (transparent to adapters); base mode kept;
         // the in-progress ▽ collapses to its base mode (Hiragana), not default.

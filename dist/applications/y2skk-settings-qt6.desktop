@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=y2skk Settings (Qt6)
+GenericName=Input Method Settings
+Comment=Configure the y2skk SKK input method
+Exec=%Y2SKK_SETTINGS_QT6_BIN%
+Icon=input-keyboard
+Terminal=false
+Categories=Settings;Utility;Qt;

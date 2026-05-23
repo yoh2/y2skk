@@ -78,7 +78,9 @@ impl DaemonInterface {
     async fn reload_config(&self) -> zbus::fdo::Result<()> {
         let new_cfg = Config::load(&self.config_path)
             .map_err(|e| zbus::fdo::Error::Failed(format!("config load failed: {e}")))?;
-        config::validate(&new_cfg)
+        // validate() builds the kana table; reuse it for the apply so the table
+        // is parsed only once per reload.
+        let kana_table = config::validate(&new_cfg)
             .map_err(|e| zbus::fdo::Error::Failed(format!("config validation failed: {e}")))?;
 
         // Hold the config lock across the whole apply so concurrent ReloadConfig
@@ -93,8 +95,7 @@ impl DaemonInterface {
         self.sessions
             .lock()
             .await
-            .reload(&new_cfg, dicts_changed)
-            .map_err(|e| zbus::fdo::Error::Failed(format!("config apply failed: {e}")))?;
+            .reload(&new_cfg, dicts_changed, kana_table);
 
         *config_guard = new_cfg;
         tracing::info!("Config reloaded from {}", self.config_path.display());

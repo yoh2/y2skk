@@ -28,6 +28,24 @@ fn load_config_json(path: &Path) -> String {
     serde_json::to_string(&load_config_raw(path)).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Returns "" if the on-disk config is missing or parses, otherwise the TOML
+/// parse error.  `load_config_raw` falls back to defaults on a parse error so
+/// the form is still populated; the GUI uses this to surface the error instead
+/// of silently showing defaults (and Apply would otherwise refuse to clobber).
+fn config_load_error(path: &Path) -> String {
+    match fs::read_to_string(path) {
+        Ok(text) => match toml::from_str::<Config>(&text) {
+            Ok(_) => String::new(),
+            Err(e) => e.to_string(),
+        },
+        // A missing file is fine (defaults are used); any other read failure
+        // (permission denied, I/O error, …) is surfaced so it isn't mistaken
+        // for a valid/absent config.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => format!("cannot read config: {e}"),
+    }
+}
+
 /// Kana layout names available as `<name>.txt` in the XDG table directories.
 fn kana_layouts() -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
@@ -55,10 +73,10 @@ fn kana_layouts_json() -> String {
 fn validate_config_json(json: &str) -> String {
     match serde_json::from_str::<Config>(json) {
         Ok(cfg) => match validate(&cfg.normalize()) {
-            Ok(()) => String::new(),
+            Ok(_) => String::new(),
             Err(e) => e.to_string(),
         },
-        Err(e) => format!("internal: invalid config payload: {e}"),
+        Err(e) => format!("Invalid configuration data: {e}"),
     }
 }
 
@@ -68,7 +86,7 @@ fn validate_config_json(json: &str) -> String {
 fn apply_config_json(path: &Path, json: &str) -> String {
     let cfg: Config = match serde_json::from_str(json) {
         Ok(c) => c,
-        Err(e) => return format!("internal: invalid config payload: {e}"),
+        Err(e) => return format!("Invalid configuration data: {e}"),
     };
     if let Err(e) = validate(&cfg.clone().normalize()) {
         return e.to_string();
@@ -90,11 +108,32 @@ fn apply_config_json(path: &Path, json: &str) -> String {
 /// (including `~` paths) are preserved.  A missing file is created from scratch.
 fn write_config_preserving(path: &Path, new: &Config) -> std::io::Result<()> {
     let (mut doc, old) = match fs::read_to_string(path) {
-        Ok(text) => (
-            text.parse::<DocumentMut>().unwrap_or_default(),
-            toml::from_str::<Config>(&text).unwrap_or_default(),
-        ),
-        Err(_) => (DocumentMut::new(), Config::default()),
+        Ok(text) => {
+            // Refuse to clobber an existing-but-unparseable config: defaulting to
+            // an empty document would write a near-empty file and lose data.
+            let doc = text.parse::<DocumentMut>().map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("existing config is not valid TOML: {e}"),
+                )
+            })?;
+            // Also refuse a syntactically-valid but schema-invalid config (e.g.
+            // wrong value types) rather than defaulting and rewriting keys over it.
+            let old = toml::from_str::<Config>(&text).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("existing config is not valid: {e}"),
+                )
+            })?;
+            (doc, old)
+        }
+        // Only a missing file starts from scratch; other read failures
+        // (permission denied, I/O) are propagated so Apply fails clearly
+        // instead of risking a write over an unreadable existing file.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            (DocumentMut::new(), Config::default())
+        }
+        Err(e) => return Err(e),
     };
 
     // [input]
@@ -189,7 +228,20 @@ fn write_config_preserving(path: &Path, new: &Config) -> std::io::Result<()> {
         set_str(&mut doc, "daemon", "log_level", &new.daemon.log_level);
     }
 
-    fs::write(path, doc.to_string())
+    // Ensure the config directory exists (e.g. ~/.config/y2skk on first run).
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    // Write atomically: write to a sibling temp file, then rename into place
+    // (atomic on Unix within the same directory) so a crash or power loss
+    // mid-write can't truncate/corrupt the user's config.
+    let mut tmp = path.to_path_buf().into_os_string();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    fs::write(&tmp, doc.to_string())?;
+    fs::rename(&tmp, path)
 }
 
 // ── toml_edit helpers ───────────────────────────────────────────────────────
@@ -198,7 +250,7 @@ fn write_config_preserving(path: &Path, new: &Config) -> std::io::Result<()> {
 /// does not exist (or is not a table).
 fn section_mut<'a>(doc: &'a mut DocumentMut, name: &str) -> &'a mut Table {
     let root = doc.as_table_mut();
-    if root.get(name).map_or(true, |it| !it.is_table()) {
+    if root.get(name).is_none_or(|it| !it.is_table()) {
         root.insert(name, Item::Table(Table::new()));
     }
     root.get_mut(name).unwrap().as_table_mut().unwrap()
@@ -245,7 +297,10 @@ fn set_opt_path(
 // ── FFI boundary (C++ Qt front-end) ─────────────────────────────────────────
 
 fn to_c(s: String) -> *mut c_char {
-    CString::new(s).unwrap_or_default().into_raw()
+    // Replace any interior NUL so error/JSON strings are never silently
+    // truncated to an empty string by CString::new.
+    let sanitized = s.replace('\0', "\u{FFFD}");
+    CString::new(sanitized).unwrap_or_default().into_raw()
 }
 
 /// # Safety
@@ -274,6 +329,13 @@ pub extern "C" fn y2skk_settings_kana_layouts_json() -> *mut c_char {
 #[no_mangle]
 pub extern "C" fn y2skk_settings_default_config_path() -> *mut c_char {
     to_c(default_config_path().to_string_lossy().into_owned())
+}
+
+/// Returns "" if the on-disk config is missing or valid, otherwise its TOML
+/// parse error so the GUI can warn that it is showing defaults.
+#[no_mangle]
+pub extern "C" fn y2skk_settings_load_error() -> *mut c_char {
+    to_c(config_load_error(&default_config_path()))
 }
 
 /// Validates a JSON config; returns `""` if valid or an error message.
@@ -357,6 +419,32 @@ selection_keys = \"asdfjkl;\"
 
         let out = fs::read_to_string(&path).unwrap();
         assert!(out.contains("~/.local/share/y2skk/user.dict"));
+    }
+
+    #[test]
+    fn write_back_refuses_invalid_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let garbage = "this is = not valid toml [[[";
+        fs::write(&path, garbage).unwrap();
+
+        let err = write_config_preserving(&path, &Config::default()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        // The existing (invalid) file must be left untouched, not clobbered.
+        assert_eq!(fs::read_to_string(&path).unwrap(), garbage);
+    }
+
+    #[test]
+    fn write_back_refuses_schema_invalid_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        // Valid TOML syntax, but a wrong value type for the schema.
+        let contents = "[candidates]\ninline_count = \"oops\"\n";
+        fs::write(&path, contents).unwrap();
+
+        let err = write_config_preserving(&path, &Config::default()).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
     }
 
     #[test]

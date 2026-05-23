@@ -3,7 +3,7 @@
 //! Run via `cargo xtask <subcommand> [options]`.
 //!
 //! Subcommands:
-//!   install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--gtk4] [--qt6] [--wayland]
+//!   install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--gtk4] [--qt6] [--wayland] [--gui]
 //!   uninstall [--system | --prefix <path>]
 //!
 //! Install modes (mutually exclusive):
@@ -32,7 +32,9 @@ fn workspace_root() -> PathBuf {
 }
 
 fn home_dir() -> PathBuf {
-    PathBuf::from(env::var("HOME").expect("HOME is not set"))
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| die("HOME is not set"))
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -68,6 +70,7 @@ struct Opts {
     gtk4: bool,
     qt6: bool,
     wayland: bool,
+    gui: bool,
     /// Opt-in: run `systemctl --user try-restart` for installed services.
     /// Always ignored in Packaging mode (must not touch user environment).
     restart: bool,
@@ -83,6 +86,7 @@ impl Opts {
         let mut gtk4 = false;
         let mut qt6 = false;
         let mut wayland = false;
+        let mut gui = false;
         let mut restart = false;
         let mut component_flag = false;
 
@@ -120,6 +124,10 @@ impl Opts {
                     wayland = true;
                     component_flag = true;
                 }
+                "--gui" => {
+                    gui = true;
+                    component_flag = true;
+                }
                 "--restart" => restart = true,
                 other => die(&format!("Unknown option: {other}")),
             }
@@ -136,6 +144,7 @@ impl Opts {
             gtk4 = true;
             qt6 = true;
             wayland = true;
+            gui = true;
         }
 
         let mode = if system {
@@ -154,6 +163,7 @@ impl Opts {
             gtk4,
             qt6,
             wayland,
+            gui,
             restart,
         }
     }
@@ -170,7 +180,7 @@ fn main() {
             eprintln!("y2skk build helper");
             eprintln!();
             eprintln!("USAGE:");
-            eprintln!("  cargo xtask install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--gtk4] [--qt6] [--wayland]");
+            eprintln!("  cargo xtask install   [--system | --prefix <path>] [--daemon] [--xim] [--gtk3] [--gtk4] [--qt6] [--wayland] [--gui]");
             eprintln!("  cargo xtask uninstall [--system | --prefix <path>]");
             eprintln!();
             eprintln!("INSTALL MODES (mutually exclusive):");
@@ -187,6 +197,7 @@ fn main() {
             eprintln!("  --gtk3           GTK3 IM module only");
             eprintln!("  --gtk4           GTK4 IM module only");
             eprintln!("  --qt6            Qt6 IM plugin only");
+            eprintln!("  --gui            Qt6 settings GUI (y2skk-settings + launcher) only");
             eprintln!("  --wayland        Wayland adapter (+ KDE virtual-keyboard entry) only.");
             eprintln!("                   Always kills the running y2skk-wayland after install");
             eprintln!("                   (outside packaging mode) so KWin relaunches the new");
@@ -225,6 +236,8 @@ fn cmd_install(opts: Opts) {
     if opts.wayland {
         install_wayland(&ws, &opts.mode);
     }
+    // Only install the launcher if the GUI binary was actually built/installed.
+    let gui_installed = opts.gui && install_gui(&ws, &opts.mode);
 
     // Systemd user services and D-Bus activation: skipped for packaging.
     if !opts.mode.is_packaging() {
@@ -238,6 +251,9 @@ fn cmd_install(opts: Opts) {
         }
         if opts.wayland {
             install_wayland_desktop(&ws, &prefix);
+        }
+        if gui_installed {
+            install_gui_desktop(&ws, &prefix);
         }
     }
 
@@ -787,6 +803,111 @@ fn install_qt6_cmake(ws: &Path, plugin_dir: Option<&Path>, use_sudo: bool) {
     }
 }
 
+// ── Qt6 settings GUI ────────────────────────────────────────────────────────────
+
+/// Builds and installs the Qt6 settings GUI binary.  Returns `true` only if the
+/// binary was actually installed (so the caller can skip the launcher when the
+/// build was skipped or failed).
+fn install_gui(ws: &Path, mode: &Mode) -> bool {
+    println!("==> Building Qt6 settings GUI...");
+
+    if !cmd_exists("cmake") {
+        println!("    [SKIP] cmake not found.");
+        return false;
+    }
+
+    let prefix = mode.daemon_prefix();
+    let use_sudo = matches!(mode, Mode::System);
+    // Allow fetching Corrosion for developer installs, but not in packaging
+    // (`--prefix`) mode, which is expected to be reproducible / offline.
+    let fetch_corrosion = !mode.is_packaging();
+    install_gui_cmake(ws, &prefix, use_sudo, fetch_corrosion)
+}
+
+/// Returns `true` if configure/build/install all succeeded.
+fn install_gui_cmake(ws: &Path, prefix: &Path, use_sudo: bool, fetch_corrosion: bool) -> bool {
+    let build_dir = ws.join("target/xtask-build/qt6-settings");
+    let src_dir = ws.join("shim/qt6-settings");
+
+    println!("    Configuring...");
+    // Pass paths via OsStr (`.arg`) so non-UTF-8 prefixes are preserved with no
+    // lossy Display conversion and no panic.
+    let mut prefix_arg = OsString::from("-DCMAKE_INSTALL_PREFIX=");
+    prefix_arg.push(prefix);
+    let mut configure_cmd = Command::new("cmake");
+    configure_cmd
+        .arg("-S")
+        .arg(&src_dir)
+        .arg("-B")
+        .arg(&build_dir)
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .arg(&prefix_arg);
+    if fetch_corrosion {
+        // Developer convenience: fetch Corrosion if it isn't installed.  In
+        // packaging mode the CMake default (OFF) is kept so the build fails
+        // clearly instead of doing an implicit network fetch.
+        configure_cmd.arg("-DY2SKK_FETCH_CORROSION=ON");
+    }
+    let configured = run_ok(&mut configure_cmd);
+    if !configured {
+        println!("    [SKIP] cmake configure failed (Qt6 Widgets or Corrosion missing?).");
+        return false;
+    }
+
+    println!("    Building...");
+    let jobs = parallelism();
+    let mut build_cmd = Command::new("cmake");
+    build_cmd
+        .arg("--build")
+        .arg(&build_dir)
+        .arg("--parallel")
+        .arg(&jobs);
+    if !run_ok(&mut build_cmd) {
+        println!("    [SKIP] cmake build failed.");
+        return false;
+    }
+
+    println!(
+        "    Installing{} -> {}/bin/y2skk-settings-qt6...",
+        if use_sudo { " (sudo)" } else { "" },
+        prefix.display()
+    );
+    let mut install_cmd = Command::new("cmake");
+    install_cmd.arg("--install").arg(&build_dir);
+    let installed = if use_sudo {
+        run_as_root_ok(&mut install_cmd)
+    } else {
+        run_ok(&mut install_cmd)
+    };
+    if !installed {
+        println!("    [SKIP] cmake install failed.");
+        return false;
+    }
+    true
+}
+
+/// Install the settings-GUI launcher (`.desktop`) to the user applications dir.
+fn install_gui_desktop(ws: &Path, prefix: &Path) {
+    let bin_path = prefix.join("bin/y2skk-settings-qt6");
+
+    let app_src = ws.join("dist/applications/y2skk-settings-qt6.desktop");
+    let app_content = fs::read_to_string(&app_src)
+        .unwrap_or_else(|e| die(&format!("read {}: {e}", app_src.display())));
+    // Desktop Entry spec: quote the Exec value so paths with spaces work, and
+    // backslash-escape `\` and `"` inside the quotes.
+    // Escape `\` and `"` for quoting, and `%` as `%%` (Exec field codes).
+    let escaped = bin_path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%");
+    let exec_value = format!("\"{escaped}\"");
+    let app_content = app_content.replace("%Y2SKK_SETTINGS_QT6_BIN%", &exec_value);
+    let app_dest = home_dir().join(".local/share/applications/y2skk-settings-qt6.desktop");
+    write_user_file(&app_dest, &app_content);
+    println!("  Installed settings launcher: {}", app_dest.display());
+}
+
 // ── systemd services ───────────────────────────────────────────────────────────
 
 fn install_daemon_service(ws: &Path, prefix: &Path) {
@@ -955,6 +1076,29 @@ fn cmd_uninstall(opts: Opts) {
         removed = true;
     }
 
+    // Settings GUI binary and its launcher (launcher is always user-local).
+    let gui_path = opts.mode.daemon_prefix().join("bin/y2skk-settings-qt6");
+    if gui_path.exists() {
+        println!("  Removing settings GUI: {}", gui_path.display());
+        // System mode installs to /usr/local/bin (root-owned); remove via sudo.
+        if matches!(opts.mode, Mode::System) {
+            run_as_root(Command::new("rm").arg("-f").arg(&gui_path));
+        } else {
+            fs::remove_file(&gui_path).unwrap_or_else(|e| eprintln!("  Warning: {e}"));
+        }
+        removed = true;
+    }
+    // The launcher is only installed (user-local) in non-packaging mode, so a
+    // packaging uninstall must not touch the invoking user's environment.
+    if !opts.mode.is_packaging() {
+        let gui_desktop = home_dir().join(".local/share/applications/y2skk-settings-qt6.desktop");
+        if gui_desktop.exists() {
+            println!("  Removing settings launcher: {}", gui_desktop.display());
+            fs::remove_file(&gui_desktop).unwrap_or_else(|e| eprintln!("  Warning: {e}"));
+            removed = true;
+        }
+    }
+
     // Wayland virtual-keyboard desktop file (always user-local).  Older
     // installs may also have left an autostart entry around — clean it up too.
     let wayland_desktop_files = [
@@ -1108,6 +1252,30 @@ fn run_as_root(cmd: &mut Command) {
     sudo_cmd.arg(prog);
     sudo_cmd.args(args);
     run(&mut sudo_cmd);
+}
+
+/// Like `run`, but returns whether the command succeeded instead of aborting.
+/// Used where a failed step should be skipped (returning `false`) rather than
+/// terminating the whole install.
+fn run_ok(cmd: &mut Command) -> bool {
+    match cmd.status() {
+        Ok(status) => status.success(),
+        Err(e) => {
+            let prog = cmd.get_program().to_string_lossy().to_string();
+            eprintln!("    failed to run {prog}: {e}");
+            false
+        }
+    }
+}
+
+/// Like `run_as_root`, but returns success instead of aborting on failure.
+fn run_as_root_ok(cmd: &mut Command) -> bool {
+    let prog: OsString = cmd.get_program().to_os_string();
+    let args: Vec<OsString> = cmd.get_args().map(|a| a.to_os_string()).collect();
+    let mut sudo_cmd = Command::new("sudo");
+    sudo_cmd.arg(prog);
+    sudo_cmd.args(args);
+    run_ok(&mut sudo_cmd)
 }
 
 fn die(msg: &str) -> ! {

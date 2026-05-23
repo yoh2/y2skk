@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 use skk_core::dict::DictEncoding;
+use skk_core::kana::table::KanaTable;
 
 /// Expands a leading `~` component to the user's home directory.
 /// Returns the path unchanged if it does not start with `~` or if the home
@@ -432,7 +433,10 @@ pub fn parse_toggle_key(
 /// Fully validates a loaded [`Config`], checking value correctness and path
 /// existence.  Returns the first error encountered, or `Ok(())` if the config
 /// is usable to start the daemon.
-pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
+/// Validates the config and returns the kana table it builds, so callers that
+/// also need the table (e.g. a live reload) can reuse it instead of parsing it
+/// a second time.
+pub fn validate(config: &Config) -> Result<KanaTable, ConfigValidationError> {
     // 1. default_mode
     parse_default_mode(&config.input.default_mode)?;
 
@@ -456,8 +460,8 @@ pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
         }
     }
 
-    // 4. kana table — existence + parse
-    load_kana_table(&config.input)?;
+    // 4. kana table — existence + parse (returned so the caller can reuse it)
+    let kana_table = load_kana_table(&config.input)?;
 
     // 5. dict sources — each path must exist
     for source in &config.dict.sources {
@@ -478,7 +482,7 @@ pub fn validate(config: &Config) -> Result<(), ConfigValidationError> {
         }
     }
 
-    Ok(())
+    Ok(kana_table)
 }
 
 #[cfg(test)]
