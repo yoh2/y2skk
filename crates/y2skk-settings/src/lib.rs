@@ -313,6 +313,12 @@ unsafe fn from_c(ptr: *const c_char) -> String {
     }
 }
 
+/// Returns the crate version string (single source: workspace version).
+#[no_mangle]
+pub extern "C" fn y2skk_settings_version() -> *mut c_char {
+    to_c(env!("CARGO_PKG_VERSION").to_string())
+}
+
 /// Returns the current config (or defaults) as a JSON object string.
 #[no_mangle]
 pub extern "C" fn y2skk_settings_load_json() -> *mut c_char {

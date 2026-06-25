@@ -3,10 +3,34 @@
 #include <QLocale>
 #include <QTranslator>
 
+#include <cstdio>
+#include <string>
+
 #include "settings_window.h"
+#include "y2skk_settings.h"
 
 int main(int argc, char **argv)
 {
+    // Handle informational flags before constructing QApplication so they work
+    // without a display (headless / no X11 or Wayland session).
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--version") {
+            char *v = y2skk_settings_version();
+            std::printf("y2skk-settings-qt6 %s\n", v ? v : "");
+            y2skk_settings_string_free(v);
+            return 0;
+        }
+        if (arg == "--help") {
+            std::printf(
+                "Usage: y2skk-settings-qt6 [OPTIONS]\n"
+                "  --version  Print version and exit\n"
+                "  --help     Print this help and exit\n"
+                "Standard Qt options (e.g. -style) are also accepted.\n");
+            return 0;
+        }
+    }
+
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("y2skk-settings-qt6"));
 

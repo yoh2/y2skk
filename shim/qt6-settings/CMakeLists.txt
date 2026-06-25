@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(y2skk-settings-qt6 VERSION 0.9.0 LANGUAGES CXX)
+project(y2skk-settings-qt6 VERSION 0.9.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

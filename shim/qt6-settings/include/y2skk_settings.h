@@ -8,6 +8,9 @@
 extern "C" {
 #endif
 
+// The crate version string (e.g. "0.9.5").
+char *y2skk_settings_version(void);
+
 // Current config (or defaults) serialised as a JSON object string.
 char *y2skk_settings_load_json(void);
 
