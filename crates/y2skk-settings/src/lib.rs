@@ -319,6 +319,12 @@ pub extern "C" fn y2skk_settings_version() -> *mut c_char {
     to_c(env!("CARGO_PKG_VERSION").to_string())
 }
 
+/// Returns the full MIT license text (embedded at build time).
+#[no_mangle]
+pub extern "C" fn y2skk_settings_license_text() -> *mut c_char {
+    to_c(include_str!("../../../LICENSE").to_string())
+}
+
 /// Returns the current config (or defaults) as a JSON object string.
 #[no_mangle]
 pub extern "C" fn y2skk_settings_load_json() -> *mut c_char {

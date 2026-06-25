@@ -11,6 +11,9 @@ extern "C" {
 // The crate version string (e.g. "0.9.5").
 char *y2skk_settings_version(void);
 
+// The full MIT license text.
+char *y2skk_settings_license_text(void);
+
 // Current config (or defaults) serialised as a JSON object string.
 char *y2skk_settings_load_json(void);
 

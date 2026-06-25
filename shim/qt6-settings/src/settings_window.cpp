@@ -39,6 +39,26 @@ void setLines(QPlainTextEdit *edit, const QJsonArray &arr)
     edit->setPlainText(lines.join(QLatin1Char('\n')));
 }
 
+// Collapses the hard-wrapped lines within each blank-line-separated paragraph
+// into one line, so a word-wrapping view can reflow the text to its own width
+// instead of mixing the source's fixed-width breaks with the widget's soft
+// wrapping.  Blank lines are kept as paragraph separators.
+QString reflowParagraphs(const QString &text)
+{
+    QStringList paragraphs;
+    for (const QString &para : text.split(QStringLiteral("\n\n"))) {
+        QStringList lines;
+        for (const QString &line : para.split(QLatin1Char('\n'))) {
+            const QString trimmed = line.trimmed();
+            if (!trimmed.isEmpty()) {
+                lines << trimmed;
+            }
+        }
+        paragraphs << lines.join(QLatin1Char(' '));
+    }
+    return paragraphs.join(QStringLiteral("\n\n"));
+}
+
 // Calls a Rust FFI getter and returns the result as a QString, freeing the
 // owned buffer.
 QString takeString(char *owned)
@@ -61,6 +81,7 @@ SettingsWindow::SettingsWindow(QWidget *parent)
     tabs->addTab(buildCandidatesTab(), tr("Candidates"));
     tabs->addTab(buildIndicatorTab(), tr("Indicator"));
     tabs->addTab(buildAdvancedTab(), tr("Advanced"));
+    tabs->addTab(buildAboutTab(), tr("About"));
 
     auto *pathLabel = new QLabel(
         tr("Config: %1").arg(takeString(y2skk_settings_default_config_path())));
@@ -243,6 +264,31 @@ QWidget *SettingsWindow::buildAdvancedTab()
     note->setWordWrap(true);
     note->setStyleSheet(QStringLiteral("color: gray;"));
     form->addRow(QString(), note);
+
+    return w;
+}
+
+QWidget *SettingsWindow::buildAboutTab()
+{
+    auto *w = new QWidget;
+    auto *layout = new QVBoxLayout(w);
+
+    auto *title =
+        new QLabel(tr("y2skk Settings %1").arg(takeString(y2skk_settings_version())));
+    title->setStyleSheet(QStringLiteral("font-weight: bold; font-size: 14pt;"));
+    layout->addWidget(title);
+
+    auto *desc = new QLabel(tr("A Qt6 settings GUI for the y2skk IME.  (Qt runtime %1)")
+                                .arg(QString::fromLatin1(qVersion())));
+    desc->setWordWrap(true);
+    layout->addWidget(desc);
+
+    layout->addWidget(new QLabel(tr("License")));
+
+    auto *license = new QPlainTextEdit;
+    license->setReadOnly(true);
+    license->setPlainText(reflowParagraphs(takeString(y2skk_settings_license_text())));
+    layout->addWidget(license, 1); // license box takes the remaining space
 
     return w;
 }

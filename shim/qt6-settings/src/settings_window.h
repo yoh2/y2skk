@@ -30,6 +30,7 @@ private:
     QWidget *buildCandidatesTab();
     QWidget *buildIndicatorTab();
     QWidget *buildAdvancedTab();
+    QWidget *buildAboutTab();
 
     void loadFromCore();
     QByteArray toJson() const;
