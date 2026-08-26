@@ -5,367 +5,818 @@ description = "AZIK extended romaji (US keyboard)"
 [trans]
 #from	input	to	output
 
-# vowels
+# AZIK extended romaji for y2skk — generated from the current base table plus
+# the AZIK rule set (per uim's japanese-azik.scm), adapted for SKK:
+#
+# AZIK suffix keys (2nd stroke), regular pattern for every consonant row:
+#   z=〜あん  k=〜いん  j=〜うん  d=〜えん  l=〜おん   (vowel-key row below)
+#   q=〜あい  h=〜うう  w=〜えい  p=〜おう             (double vowels)
+# Other AZIK changes: `;`=っ, `:`=ー, c row=ちゃ行, x row=しゃ行,
+# `g` replaces `y` in 拗音 (kga=きゃ), plus frequent-word shortcuts (kt=こと …).
+#
+# SKK adaptations (deviations from stock AZIK):
+#   - ん is on `[` (US) / `@` (JP); bare `q` is the kana toggle in SKK
+#   - `tt` stays っ so okurigana like omoTte works (uim tt=たち not adopted)
+#   - `nd` is not defined so okurigana like yoNde stays ん+で (uim nd=ねん not adopted)
+#   - small ぁぃぅぇぉ/ゎ/ゐ/ゑ are on `xx` prefix; ゃゅょ=xy*, ゕゖ=xk*/xc*, っ=xtu
+#   - arrows moved from zh/zj/zk/zl to xxh/xxj/xxk/xxl
+#   - uim's l-prefix rules are omitted (l = ASCII mode)
 	a		あ
 	i		い
 	u		う
 	e		え
 	o		お
 
-# AZIK: semicolon = ん (main AZIK shortcut)
-	;		ん
+# AZIK single keys
+	;		っ
+	:		ー
 
-# AZIK: slash = っ (geminate shortcut; z/ remains ・)
-	/		っ
-
-# か行
+# か行 (+ky 拗音, kg=g-substituted 拗音, AZIK 拡張)
 	k	k
 k	a		か
 k	i		き
 k	u		く
 k	e		け
 k	o		こ
+k	z		かん
+k	k		きん
+k	j		くん
+k	d		けん
+k	l		こん
+k	q		かい
+k	h		くう
+k	w		けい
+k	p		こう
+k	n		かん
+k	f		き
+k	t		こと
+k	g	kg
 k	y	ky
+k	m		かも
+k	r		から
 ky	a		きゃ
 ky	i		きぃ
 ky	u		きゅ
 ky	e		きぇ
 ky	o		きょ
-k	k	k	っ
+ky	z		きゃん
+ky	j		きゅん
+ky	d		きぇん
+ky	l		きょん
+ky	q		きゃい
+ky	h		きゅう
+ky	w		きぇい
+ky	p		きょう
+ky	n		きゃん
+kg	a		きゃ
+kg	u		きゅ
+kg	e		きぇ
+kg	o		きょ
+kg	z		きゃん
+kg	j		きゅん
+kg	d		きぇん
+kg	l		きょん
+kg	q		きゃい
+kg	h		きゅう
+kg	w		きぇい
+kg	p		きょう
+kg	n		きゃん
 
-# が行
+# が行 (+gy/gg 拗音, ぐぁ行 gw* — gw+その他=げい)
 	g	g
 g	a		が
 g	i		ぎ
 g	u		ぐ
 g	e		げ
 g	o		ご
+g	z		がん
+g	k		ぎん
+g	j		ぐん
+g	d		げん
+g	l		ごん
+g	q		がい
+g	h		ぐう
+g	w	gw
+g	p		ごう
+g	n		がん
+g	t		ごと
+g	g	gg
 g	y	gy
+g	r		がら
 gy	a		ぎゃ
 gy	i		ぎぃ
 gy	u		ぎゅ
 gy	e		ぎぇ
 gy	o		ぎょ
-g	g	g	っ
+gy	z		ぎゃん
+gy	j		ぎゅん
+gy	d		ぎぇん
+gy	l		ぎょん
+gy	q		ぎゃい
+gy	h		ぎゅう
+gy	w		ぎぇい
+gy	p		ぎょう
+gy	n		ぎゃん
+gg	a		ぎゃ
+gg	u		ぎゅ
+gg	e		ぎぇ
+gg	o		ぎょ
+gg	z		ぎゃん
+gg	j		ぎゅん
+gg	d		ぎぇん
+gg	l		ぎょん
+gg	q		ぎゃい
+gg	h		ぎゅう
+gg	w		ぎぇい
+gg	p		ぎょう
+gg	n		ぎゃん
+gw	a		ぐぁ
+gw	i		ぐぃ
+gw	u		ぐぅ
+gw	e		ぐぇ
+gw	o		ぐぉ
+gw	*		げい
 
-# さ行
+# さ行 (+sy 拗音; sh=すう, しゃ行は x 行へ)
 	s	s
 s	a		さ
 s	i		し
 s	u		す
 s	e		せ
 s	o		そ
-s	h	sh
-sh	a		しゃ
-sh	i		し
-sh	u		しゅ
-sh	e		しぇ
-sh	o		しょ
+s	z		さん
+s	k		しん
+s	j		すん
+s	d		せん
+s	l		そん
+s	q		さい
+s	h		すう
+s	w		せい
+s	p		そう
+s	n		さん
+s	f		さい
+s	t		した
 s	y	sy
+s	s		せい
+s	r		する
 sy	a		しゃ
 sy	i		しぃ
 sy	u		しゅ
 sy	e		しぇ
 sy	o		しょ
-s	s	s	っ
+sy	z		しゃん
+sy	j		しゅん
+sy	d		しぇん
+sy	l		しょん
+sy	q		しゃい
+sy	h		しゅう
+sy	w		しぇい
+sy	p		しょう
+sy	n		しゃん
 
-# ざ行
+# ざ行 (+zy/zg 拗音, z 記号は非衝突分のみ)
 	z	z
 z	a		ざ
 z	i		じ
 z	u		ず
 z	e		ぜ
 z	o		ぞ
+z	z		ざん
+z	k		じん
+z	j		ずん
+z	d		ぜん
+z	l		ぞん
+z	q		ざい
+z	h		ずう
+z	w		ぜい
+z	p		ぞう
+z	n		ざん
+z	f		ぜ
+z	g	zg
+z	y	zy
+z	c		ざ
+z	r		ざる
+z	v		ざい
 z	 		　
 z	-		〜
 z	,		‥
 z	.		…
+z	/		・
 z	[		『
 z	]		』
-z	/		・
-z	h		←
-z	j		↓
-z	k		↑
-z	l		→
-z	z	z	っ
+z	x		ぜい
+zy	a		じゃ
+zy	i		じぃ
+zy	u		じゅ
+zy	e		じぇ
+zy	o		じょ
+zy	z		じゃん
+zy	j		じゅん
+zy	d		じぇん
+zy	l		じょん
+zy	q		じゃい
+zy	h		じゅう
+zy	w		じぇい
+zy	p		じょう
+zy	n		じゃん
+zg	a		じゃ
+zg	u		じゅ
+zg	e		じぇ
+zg	o		じょ
+zg	z		じゃん
+zg	j		じゅん
+zg	d		じぇん
+zg	l		じょん
+zg	q		じゃい
+zg	h		じゅう
+zg	w		じぇい
+zg	p		じょう
+zg	n		じゃん
 
-# た行
+# た行 (+ty 拗音, ts, tg=てぃ/とぅ, tch)
 	t	t
 t	a		た
 t	i		ち
 t	u		つ
 t	e		て
 t	o		と
-t	s	ts
-ts	u		つ
-ts	a		つぁ
-ts	e		つぇ
-ts	o		つぉ
+t	z		たん
+t	k		ちん
+t	j		つん
+t	d		てん
+t	l		とん
+t	q		たい
+t	h		つう
+t	w		てい
+t	p		とう
+t	n		たん
+t	t	t	っ
+t	g	tg
 t	y	ty
+t	b		たび
+t	c	tc
+t	s	ts
+t	m		ため
+t	r		たら
 ty	a		ちゃ
 ty	i		ちぃ
 ty	u		ちゅ
 ty	e		ちぇ
 ty	o		ちょ
-t	h	th
-th	a		てゃ
-th	i		てぃ
-th	u		てゅ
-th	e		てぇ
-th	o		てょ
-t	t	t	っ
+ty	z		ちゃん
+ty	j		ちゅん
+ty	d		ちぇん
+ty	l		ちょん
+ty	q		ちゃい
+ty	h		ちゅう
+ty	w		ちぇい
+ty	p		ちょう
+ty	n		ちゃん
+ts	a		つぁ
+ts	i		つぃ
+ts	u		つ
+ts	e		つぇ
+ts	o		つぉ
+tg	i		てぃ
+tg	u		とぅ
+tc	h		っ
 
-# だ行
+# だ行 (+dy 拗音, dg/dc=でぃ/どぅ)
 	d	d
 d	a		だ
 d	i		ぢ
 d	u		づ
 d	e		で
 d	o		ど
+d	z		だん
+d	k		ぢん
+d	j		づん
+d	d		でん
+d	l		どん
+d	q		だい
+d	h		づう
+d	w		でい
+d	p		どう
+d	n		だん
+d	f		で
+d	t		だち
+d	g	dg
 d	y	dy
+d	c	dc
+d	s		です
+d	m		でも
 dy	a		ぢゃ
 dy	i		ぢぃ
 dy	u		ぢゅ
 dy	e		ぢぇ
 dy	o		ぢょ
-d	h	dh
-dh	a		でゃ
-dh	i		でぃ
-dh	u		でゅ
-dh	e		でぇ
-dh	o		でょ
-d	d	d	っ
+dg	i		でぃ
+dg	u		どぅ
+dc	i		でぃ
+dc	u		どぅ
 
-# な行
+# な行 (+ny/ng 拗音; nd は送り仮名のため未定義)
 	n	n
 n	a		な
 n	i		に
 n	u		ぬ
 n	e		ね
 n	o		の
+n	z		なん
+n	k		にん
+n	j		ぬん
+n	l		のん
+n	q		ない
+n	h		ぬう
+n	w		ねい
+n	p		のう
 n	n		ん
-n	;		ん
+n	f		ぬ
+n	t		にち
+n	g	ng
 n	y	ny
+n	b		ねば
+n	r		なる
+n	*		ん
 ny	a		にゃ
 ny	i		にぃ
 ny	u		にゅ
 ny	e		にぇ
 ny	o		にょ
-n	*		ん
+ny	z		にゃん
+ny	j		にゅん
+ny	d		にぇん
+ny	l		にょん
+ny	q		にゃい
+ny	h		にゅう
+ny	w		にぇい
+ny	p		にょう
+ny	n		にゃん
+ng	a		にゃ
+ng	u		にゅ
+ng	e		にぇ
+ng	o		にょ
+ng	z		にゃん
+ng	j		にゅん
+ng	d		にぇん
+ng	l		にょん
+ng	q		にゃい
+ng	h		にゅう
+ng	w		にぇい
+ng	p		にょう
+ng	n		にゃん
 
-# は行
+# は行 (+hy/hg 拗音)
 	h	h
 h	a		は
 h	i		ひ
 h	u		ふ
 h	e		へ
 h	o		ほ
+h	z		はん
+h	k		ひん
+h	j		ふん
+h	d		へん
+h	l		ほん
+h	q		はい
+h	h		ふう
+h	w		へい
+h	p		ほう
+h	n		はん
+h	f		ふ
+h	t		ひと
+h	g	hg
 h	y	hy
 hy	a		ひゃ
 hy	i		ひぃ
 hy	u		ひゅ
 hy	e		ひぇ
 hy	o		ひょ
-h	h	h	っ
+hy	z		ひゃん
+hy	j		ひゅん
+hy	d		ひぇん
+hy	l		ひょん
+hy	q		ひゃい
+hy	h		ひゅう
+hy	w		ひぇい
+hy	p		ひょう
+hy	n		ひゃん
+hg	a		ひゃ
+hg	u		ひゅ
+hg	e		ひぇ
+hg	o		ひょ
+hg	z		ひゃん
+hg	j		ひゅん
+hg	d		ひぇん
+hg	l		ひょん
+hg	q		ひゃい
+hg	h		ひゅう
+hg	w		ひぇい
+hg	p		ひょう
+hg	n		ひゃん
 
-# ば行
+# ば行 (+by/bg 拗音)
 	b	b
 b	a		ば
 b	i		び
 b	u		ぶ
 b	e		べ
 b	o		ぼ
+b	z		ばん
+b	k		びん
+b	j		ぶん
+b	d		べん
+b	l		ぼん
+b	q		ばい
+b	h		ぶう
+b	w		べい
+b	p		ぼう
+b	n		ばん
+b	t		びと
+b	g	bg
 b	y	by
+b	b	b	っ
 by	a		びゃ
 by	i		びぃ
 by	u		びゅ
 by	e		びぇ
 by	o		びょ
-b	b	b	っ
+by	z		びゃん
+by	j		びゅん
+by	d		びぇん
+by	l		びょん
+by	q		びゃい
+by	h		びゅう
+by	w		びぇい
+by	p		びょう
+by	n		びゃん
+bg	a		びゃ
+bg	u		びゅ
+bg	e		びぇ
+bg	o		びょ
+bg	z		びゃん
+bg	j		びゅん
+bg	d		びぇん
+bg	l		びょん
+bg	q		びゃい
+bg	h		びゅう
+bg	w		びぇい
+bg	p		びょう
+bg	n		びゃん
 
-# ぱ行
+# ぱ行 (+py/pg 拗音)
 	p	p
 p	a		ぱ
 p	i		ぴ
 p	u		ぷ
 p	e		ぺ
 p	o		ぽ
+p	z		ぱん
+p	k		ぴん
+p	j		ぷん
+p	d		ぺん
+p	l		ぽん
+p	q		ぱい
+p	h		ぷう
+p	w		ぺい
+p	p		ぽう
+p	n		ぱん
+p	f		ぽん
+p	g	pg
 p	y	py
 py	a		ぴゃ
 py	i		ぴぃ
 py	u		ぴゅ
 py	e		ぴぇ
 py	o		ぴょ
-p	p	p	っ
+py	z		ぴゃん
+py	j		ぴゅん
+py	d		ぴぇん
+py	l		ぴょん
+py	q		ぴゃい
+py	h		ぴゅう
+py	w		ぴぇい
+py	p		ぴょう
+py	n		ぴゃん
+pg	a		ぴゃ
+pg	u		ぴゅ
+pg	e		ぴぇ
+pg	o		ぴょ
+pg	z		ぴゃん
+pg	j		ぴゅん
+pg	d		ぴぇん
+pg	l		ぴょん
+pg	q		ぴゃい
+pg	h		ぴゅう
+pg	w		ぴぇい
+pg	p		ぴょう
+pg	n		ぴゃん
 
-# ま行
+# ま行 (+my/mg 拗音)
 	m	m
 m	a		ま
 m	i		み
 m	u		む
 m	e		め
 m	o		も
+m	z		まん
+m	k		みん
+m	j		むん
+m	d		めん
+m	l		もん
+m	q		まい
+m	h		むう
+m	w		めい
+m	p		もう
+m	n		もの
+m	f		む
+m	t		また
+m	g	mg
 m	y	my
+m	s		ます
+m	m	m	っ
 my	a		みゃ
 my	i		みぃ
 my	u		みゅ
 my	e		みぇ
 my	o		みょ
-m	m	m	っ
+my	z		みゃん
+my	j		みゅん
+my	d		みぇん
+my	l		みょん
+my	q		みゃい
+my	h		みゅう
+my	w		みぇい
+my	p		みょう
+my	n		みゃん
+mg	a		みゃ
+mg	u		みゅ
+mg	e		みぇ
+mg	o		みょ
+mg	z		みゃん
+mg	j		みゅん
+mg	d		みぇん
+mg	l		みょん
+mg	q		みゃい
+mg	h		みゅう
+mg	w		みぇい
+mg	p		みょう
+mg	n		みゃん
 
 # や行
 	y	y
 y	a		や
+y	i		い
 y	u		ゆ
+y	e		いぇ
 y	o		よ
+y	z		やん
+y	j		ゆん
+y	l		よん
+y	q		やい
+y	h		ゆう
+y	w		いぇい
+y	p		よう
+y	n		やん
+y	f		ゆ
+y	r		よる
 
-# ら行
+# ら行 (+ry/rg 拗音)
 	r	r
 r	a		ら
 r	i		り
 r	u		る
 r	e		れ
 r	o		ろ
+r	z		らん
+r	k		りん
+r	j		るん
+r	d		れん
+r	l		ろん
+r	q		らい
+r	h		るう
+r	w		れい
+r	p		ろう
+r	n		らん
+r	g	rg
 r	y	ry
+r	r		られ
 ry	a		りゃ
 ry	i		りぃ
 ry	u		りゅ
 ry	e		りぇ
 ry	o		りょ
-r	r	r	っ
+ry	z		りゃん
+ry	j		りゅん
+ry	d		りぇん
+ry	l		りょん
+ry	q		りゃい
+ry	h		りゅう
+ry	w		りぇい
+ry	p		りょう
+ry	n		りゃん
+rg	a		りゃ
+rg	u		りゅ
+rg	e		りぇ
+rg	o		りょ
+rg	z		りゃん
+rg	j		りゅん
+rg	d		りぇん
+rg	l		りょん
+rg	q		りゃい
+rg	h		りゅう
+rg	w		りぇい
+rg	p		りょう
+rg	n		りゃん
 
-# わ行
+# わ行 (+wh, ws; wi/we は歴史的仮名)
 	w	w
 w	a		わ
 w	i		ゐ
+w	u		う
 w	e		ゑ
 w	o		を
+w	z		わん
+w	k		うぃん
+w	d		うぇん
+w	l		うぉん
+w	q		わい
 w	h	wh
+w	p		うぉー
+w	n		わん
+w	f		わい
+w	t		わた
+w	s	ws
+w	r		われ
 wh	a		うぁ
 wh	i		うぃ
+wh	u		うゅ
 wh	e		うぇ
 wh	o		うぉ
+ws	o		うぉ
 
-# ふ行
+# ふ行 (+fy 拗音)
 	f	f
 f	a		ふぁ
 f	i		ふぃ
 f	u		ふ
 f	e		ふぇ
 f	o		ふぉ
+f	z		ふぁん
+f	k		ふぃん
+f	j		ふん
+f	d		ふぇん
+f	l		ふぉん
+f	q		ふぁい
+f	h		ふう
+f	w		ふぇい
+f	p		ふぉー
+f	n		ふぁん
+f	f	f	っ
 f	y	fy
 fy	a		ふぁ
 fy	i		ふぃ
 fy	u		ふゅ
 fy	e		ふぇ
 fy	o		ふぉ
-f	f	f	っ
 
-# じ行 (j)
+# じ行 (j) (+jy 拗音)
 	j	j
 j	a		じゃ
 j	i		じ
 j	u		じゅ
 j	e		じぇ
 j	o		じょ
+j	z		じゃん
+j	k		じん
+j	j		じゅん
+j	d		じぇん
+j	l		じょん
+j	q		じゃい
+j	h		じゅう
+j	w		じぇい
+j	p		じょう
+j	n		じゃん
+j	f		じゅ
 j	y	jy
 jy	a		じゃ
 jy	i		じぃ
 jy	u		じゅ
 jy	e		じぇ
 jy	o		じょ
-j	j	j	っ
 
-# ち行 (c/ch)
+# ちゃ行 (c) — AZIK: c=ちゃ行 (+cy 拗音)
 	c	c
-c	a		か
-c	i		し
-c	u		く
-c	e		せ
-c	o		こ
-c	h	ch
-ch	a		ちゃ
-ch	i		ち
-ch	u		ちゅ
-ch	e		ちぇ
-ch	o		ちょ
+c	a		ちゃ
+c	u		ちゅ
+c	e		ちぇ
+c	o		ちょ
+c	z		ちゃん
+c	j		ちゅん
+c	d		ちぇん
+c	l		ちょん
+c	q		ちゃい
+c	h		ちゅう
+c	w		ちぇい
+c	p		ちょう
+c	n		ちゃん
 c	y	cy
 cy	a		ちゃ
 cy	i		ちぃ
 cy	u		ちゅ
 cy	e		ちぇ
 cy	o		ちょ
-c	c	c	っ
 
 # vu
 	v	v
+v	a		ゔぁ
+v	i		ゔぃ
 v	u		ゔ
+v	e		ゔぇ
+v	o		ゔぉ
 v	y	vy
+v	v	v	っ
 vy	a		ゔぁ
 vy	i		ゔぃ
 vy	u		ゔゅ
 vy	e		ゔぇ
 vy	o		ゔぉ
-v	a		ゔぁ
-v	i		ゔぃ
-v	e		ゔぇ
-v	o		ゔぉ
-v	v	v	っ
 
-# small kana (x prefix)
+# しゃ行 (x) — AZIK: x=しゃ行; 小書き等は xx と空きスロットへ
 	x	x
-x	a		ぁ
-x	i		ぃ
-x	u		ぅ
-x	e		ぇ
-x	o		ぉ
-x	n		ん
+x	a		しゃ
+x	u		しゅ
+x	e		しぇ
+x	o		しょ
+x	z		しゃん
+x	k	xk
+x	j		しゅん
+x	d		しぇん
+x	l		しょん
+x	q		しゃい
+x	h		しゅう
+x	w		しぇい
+x	p		しょう
+x	n		しゃん
+x	t	xt
 x	y	xy
+x	c	xc
+x	x	xx
 xy	a		ゃ
 xy	u		ゅ
 xy	o		ょ
-x	t	xt
-xt	s	xts
-xts	u		っ
-x	k	xk
 xk	a		ゕ
 xk	e		ゖ
-x	w	xw
-xw	a		ゎ
+xc	a		ゕ
+xt	u		っ
+xt	s	xts
+xts	u		っ
+
+# 小書き・移設記号 (xx)
+xx	a		ぁ
+xx	i		ぃ
+xx	u		ぅ
+xx	e		ぇ
+xx	o		ぉ
+xx	k		↑
+xx	j		↓
+xx	l		→
+xx	[		「
+xx	]		」
+xx	h		←
+xx	w	xxw
+xxw	a		ゎ
+xxw	i		ゐ
+xxw	e		ゑ
 
 # 1-letter fullwidth symbols
-	`		‘
-	~		〜
 	!		！
-	@		＠
+	"		”
 	\#		＃
-	\*		＊
 	$		＄
 	%		％
-	^		＾
 	&		＆
+	'		’
 	(		（
 	)		）
-	[		「
-	{		｛
-	]		」
-	}		｝
-	/		／
-	?		？
-	=		＝
+	\*		＊
 	+		＋
-	-		ー
-	_		＿
-	|		｜
-	'		’
-	"		”
 	,		、
-	<		＜
+	-		ー
 	.		。
+	/		／
+	<		＜
+	=		＝
 	>		＞
-	:		；
+	?		？
+	@		＠
+	[		ん  # AZIK: ん (US; 「 is on xx[)
+	]		」
+	^		＾
+	_		＿
+	`		‘
+	{		｛
+	|		｜
+	}		｝
+	~		〜
 	¥		￥
-
-[trans.katakana]
-
-[okuri_alias]
