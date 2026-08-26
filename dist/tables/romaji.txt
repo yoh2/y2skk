@@ -81,6 +81,12 @@ z	h		←
 z	j		↓
 z	k		↑
 z	l		→
+z	y	zy
+zy	a		じゃ
+zy	i		じぃ
+zy	u		じゅ
+zy	e		じぇ
+zy	o		じょ
 z	z	z	っ
 
 # た行
@@ -91,8 +97,9 @@ t	u		つ
 t	e		て
 t	o		と
 t	s	ts
-ts	u		つ
 ts	a		つぁ
+ts	i		つぃ
+ts	u		つ
 ts	e		つぇ
 ts	o		つぉ
 t	y	ty
@@ -209,7 +216,9 @@ m	m	m	っ
 # や行
 	y	y
 y	a		や
+# yi is not available
 y	u		ゆ
+y	e		いぇ
 y	o		よ
 
 # ら行
@@ -231,11 +240,13 @@ r	r	r	っ
 	w	w
 w	a		わ
 w	i		ゐ
+w	u		うゅ
 w	e		ゑ
 w	o		を
 w	h	wh
 wh	a		うぁ
 wh	i		うぃ
+wh	u		うゅ
 wh	e		うぇ
 wh	o		うぉ
 
@@ -318,11 +329,14 @@ xy	a		ゃ
 xy	u		ゅ
 xy	o		ょ
 x	t	xt
+xt	u		っ
 xt	s	xts
 xts	u		っ
 x	k	xk
 xk	a		ゕ
 xk	e		ゖ
+x	c	xc
+xc	a		ゕ
 x	w	xw
 xw	a		ゎ
 
