@@ -1310,6 +1310,32 @@ impl SkkEngine {
             return vec![EngineAction::ClearPreedit];
         }
 
+        // BackSpace: delete the pending romaji first, then the settled okuri kana.
+        // When nothing of the okurigana remains, drop the okuri marker and return
+        // to Midashi phase (mirrors the BackSpace handling in handle_midashi).
+        if event.key == Key::BackSpace {
+            if !self.kana_state.is_empty() {
+                self.kana_state.pop();
+            } else if !kana_buf.is_empty() {
+                kana_buf.pop();
+            }
+            if self.kana_state.is_empty() && kana_buf.is_empty() {
+                // Okurigana fully deleted — back to midashi mode.
+                self.update_completion(&midashi);
+                self.phase = SkkPhase::Midashi {
+                    kana_buf: midashi,
+                    roman_buf: String::new(),
+                };
+                return vec![self.preedit_action()];
+            }
+            self.phase = SkkPhase::Okuri {
+                midashi,
+                okuri_prefix,
+                kana_buf,
+            };
+            return vec![self.preedit_action()];
+        }
+
         let Some(ch) = event.printable_char() else {
             return vec![EngineAction::Passthrough];
         };
@@ -3635,6 +3661,70 @@ mod tests {
             "preedit should start with ▽から: {:?}",
             preedit.text
         );
+    }
+
+    #[test]
+    fn test_okuri_backspace_pending_romaji_reverts_to_midashi() {
+        // ▽あ*k + BackSpace → the pending okuri romaji is deleted and the okuri
+        // marker is dropped: back to ▽あ.  The key must not leak to the app.
+        let mut eng = engine();
+        eng.process_key(&press('A')); // ▽あ
+        eng.process_key(&press('K')); // ▽あ*k
+        let actions = eng.process_key(&backspace());
+        assert!(
+            !actions.contains(&EngineAction::Passthrough),
+            "BackSpace must be consumed in okuri mode: {:?}",
+            actions
+        );
+        assert!(
+            matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "あ"),
+            "should revert to midashi: {:?}",
+            eng.phase
+        );
+        assert_eq!(eng.build_preedit().text, "▽あ");
+    }
+
+    #[test]
+    fn test_okuri_backspace_deletes_settled_kana() {
+        // ▽あ*っt: the first BackSpace deletes the pending "t" (っ remains in
+        // okuri mode), the second deletes っ and reverts to ▽あ.
+        let mut eng = engine();
+        eng.process_key(&press('A')); // ▽あ
+        eng.process_key(&press('T')); // ▽あ*t
+        eng.process_key(&press('t')); // ▽あ*っt
+        let actions = eng.process_key(&backspace());
+        assert!(
+            !actions.contains(&EngineAction::Passthrough),
+            "BackSpace must be consumed in okuri mode: {:?}",
+            actions
+        );
+        assert_eq!(eng.build_preedit().text, "▽あ*っ");
+        assert!(matches!(eng.phase, SkkPhase::Okuri { .. }));
+        let actions = eng.process_key(&backspace());
+        assert!(
+            !actions.contains(&EngineAction::Passthrough),
+            "BackSpace must be consumed in okuri mode: {:?}",
+            actions
+        );
+        assert_eq!(eng.build_preedit().text, "▽あ");
+        assert!(
+            matches!(eng.phase, SkkPhase::Midashi { ref kana_buf, .. } if kana_buf == "あ"),
+            "should revert to midashi: {:?}",
+            eng.phase
+        );
+    }
+
+    #[test]
+    fn test_okuri_backspace_pops_multi_char_romaji() {
+        // Multi-char pending romaji ("ch") is deleted one character at a time,
+        // staying in okuri mode while some of it remains.
+        let mut eng = engine();
+        eng.process_key(&press('A')); // ▽あ
+        eng.process_key(&press('C')); // ▽あ*c
+        eng.process_key(&press('h')); // ▽あ*ch
+        eng.process_key(&backspace());
+        assert_eq!(eng.build_preedit().text, "▽あ*c");
+        assert!(matches!(eng.phase, SkkPhase::Okuri { .. }));
     }
 
     #[test]
