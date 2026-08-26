@@ -183,4 +183,8 @@ See [`dist/config.toml.example`](dist/config.toml.example) for all available opt
 
 ## License
 
-MIT
+y2skk is licensed under the MIT License; see [`LICENSE`](LICENSE).
+
+It dynamically links third-party libraries (Qt under LGPLv3, GTK under
+LGPLv2.1) that remain under their own licenses. See
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for details.

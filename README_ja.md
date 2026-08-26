@@ -188,4 +188,8 @@ journalctl --user -u y2skk-xim -f
 
 ## ライセンス
 
-MIT
+y2skk 本体は MIT ライセンスです。[`LICENSE`](LICENSE) を参照してください。
+
+サードパーティライブラリ（Qt: LGPLv3、GTK: LGPLv2.1）を動的リンクしており、
+これらは各自のライセンスのままです。詳細は
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) を参照してください。
