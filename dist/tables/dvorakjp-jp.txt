@@ -118,8 +118,9 @@ t	u		つ
 t	e		て
 t	o		と
 t	s	ts
-ts	u		つ
 ts	a		つぁ
+ts	i		つぃ
+ts	u		つ
 ts	e		つぇ
 ts	o		つぉ
 t	y	ty
@@ -168,13 +169,12 @@ n	e		ね
 n	o		の
 n	n		ん
 n	y	ny
+n	h	ny
 ny	a		にゃ
 ny	i		にぃ
 ny	u		にゅ
 ny	e		にぇ
 ny	o		にょ
-# DvorakJP: nh is an alias for ny (h is adjacent to n on Dvorak home row)
-n	h	ny
 n	*		ん
 
 # は行
@@ -244,7 +244,9 @@ m	m	m	っ
 # や行
 	y	y
 y	a		や
+# yi is not available
 y	u		ゆ
+y	e		いぇ
 y	o		よ
 
 # ら行
@@ -267,13 +269,16 @@ r	r	r	っ
 	w	w
 w	a		わ
 w	i		ゐ
+w	u		うゅ
 w	e		ゑ
 w	o		を
-w	h	wh
-wh	a		うぁ
-wh	i		うぃ
-wh	e		うぇ
-wh	o		うぉ
+w	h	wy
+w	y	wy
+wy	a		うぁ
+wy	i		うぃ
+wy	u		うゅ
+wy	e		うぇ
+wy	o		うぉ
 
 # ふ行
 	f	f
@@ -337,15 +342,17 @@ xy	a		ゃ
 xy	u		ゅ
 xy	o		ょ
 x	t	xt
+xt	u		っ
 xt	s	xts
 xts	u		っ
 x	k	xk
+x	c	xk
 xk	a		ゕ
 xk	e		ゖ
 x	w	xw
 xw	a		ゎ
 
-# ────────────────────────────────────���────────────────────────
+# ─────────────────────────────────────────────────────────────
 # DvorakJP contraction shortcuts
 #
 # After a consonant state, a special second key gives a common
@@ -360,13 +367,10 @@ xw	a		ゎ
 #   x  →  consonant_i + ん   (e.g. kx = きん)
 #
 # Omitted slots where they conflict with existing entries:
-#   k+k (くん): conflicts with double-consonant っ
+#   k+k (くん): conflicts with double-consonant っ (use ck instead)
 #   j+j (じぇん): conflicts with double-consonant っ
-#   n+; (なん): conflicts with ん
-#   z+, (ぞう): conflicts with ‥
-#   z+. (ぜい): conflicts with …
-#   z+j (ぜん): conflicts with ↓
-#   z+k (ずん): conflicts with ↑
+# The z+, / z+. / z+j / z+k kana contractions take priority; the
+# symbol mappings ‥ … ↓ ↑ are omitted instead (see ざ行 section).
 # ─────────────────────────────────────────────────────────────
 
 # か行 contractions (k+k omitted: conflicts with っ)
@@ -709,22 +713,22 @@ ry	x		りぃん
 # わ行 contractions
 w	:		わい
 w	,		をう
-w	.		うぇい
+w	.		ゑい
 w	;		わん
 w	q		をん
-w	j		うぇん
-w	k		うん
-w	x		うぃん
+w	j		ゑん
+w	k		うゅん
+w	x		ゐん
 
-# wh contractions
-wh	:		うぁい
-wh	,		うぉう
-wh	.		うぇい
-wh	;		うぁん
-wh	q		うぉん
-wh	j		うぇん
-wh	k		うゅん
-wh	x		うぃん
+# wy contractions
+wy	:		うぁい
+wy	,		うぉう
+wy	.		うぇい
+wy	;		うぁん
+wy	q		うぉん
+wy	j		うぇん
+wy	k		うゅん
+wy	x		うぃん
 
 # じ行 contractions (j+j omitted: conflicts with っ)
 j	:		じゃい
