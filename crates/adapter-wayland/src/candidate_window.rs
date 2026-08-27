@@ -145,7 +145,7 @@ fn with_mapped_canvas<F: FnOnce(&mut Canvas<'_>)>(fd: &OwnedFd, width: i32, heig
 }
 
 fn fill_transparent(canvas: &mut Canvas<'_>) {
-    for chunk in canvas.pixels.chunks_exact_mut(4) {
+    for chunk in canvas.pixels.as_chunks_mut::<4>().0 {
         chunk.copy_from_slice(&TRANSPARENT);
     }
 }
