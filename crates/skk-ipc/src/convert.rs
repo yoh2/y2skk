@@ -3,7 +3,7 @@
 use skk_core::engine::{EngineAction, Preedit};
 use skk_core::key::{Key, KeyEvent, Modifiers};
 
-use crate::{keysym, IpcAction, NO_GHOST};
+use crate::{keysym, IpcAction, IpcCandidate, NO_GHOST};
 
 // ── EngineAction → IpcAction ──────────────────────────────────────────────────
 
@@ -21,17 +21,15 @@ impl From<EngineAction> for IpcAction {
             }
             EngineAction::ClearPreedit => IpcAction::clear_preedit(),
             EngineAction::ShowCandidates(candidates, focused, sel_keys) => {
-                // Include annotation with ';' separator when present (standard SKK convention).
-                let words = candidates
+                // Word and annotation travel as separate fields so a word that
+                // itself contains ';' is never confused with an annotation.
+                let rows = candidates
                     .into_iter()
-                    .map(|c| match c.annotation {
-                        Some(ann) => format!("{};{}", c.word, ann),
-                        None => c.word,
-                    })
+                    .map(|c| IpcCandidate::new(c.word, c.annotation.unwrap_or_default()))
                     .collect();
                 // Use the `text` field (otherwise unused for ShowCandidates) to carry
                 // the selection key characters so the UI can display labels like "a:候補".
-                let mut action = IpcAction::show_candidates(words, focused as u32);
+                let mut action = IpcAction::show_candidates(rows, focused as u32);
                 action.text = sel_keys;
                 action
             }
