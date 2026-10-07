@@ -16,6 +16,8 @@ use x11rb::protocol::xproto::{
 use x11rb::rust_connection::RustConnection;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
+use skk_ipc::IpcCandidate;
+
 use crate::preedit::{SpotHint, FONT_CANDIDATES};
 
 /// Normal row: light yellow background, black text.
@@ -112,13 +114,13 @@ impl CandidateWindow {
 
     /// Shows the candidate list window.
     ///
-    /// `candidates` — each entry is `"word"` or `"word;annotation"`.
+    /// `candidates` — one `(word, annotation)` row each; `annotation` is empty when absent.
     /// `sel_keys`   — one selection key character per candidate (e.g. `"asdfjkl;"`).
     /// `focused`    — index of the highlighted candidate.
     /// `spot`       — cursor position hint for positioning the window.
     pub fn show(
         &mut self,
-        candidates: &[String],
+        candidates: &[IpcCandidate],
         sel_keys: &str,
         focused: u32,
         spot: Option<&SpotHint>,
@@ -137,14 +139,10 @@ impl CandidateWindow {
             .enumerate()
             .map(|(i, cand)| {
                 let key = sel_chars.get(i).copied().unwrap_or(' ');
-                // Split "word;annotation" into word and optional annotation.
-                let (word, annotation) = match cand.split_once(';') {
-                    Some((w, a)) => (w, Some(a)),
-                    None => (cand.as_str(), None),
-                };
-                let label = match annotation {
-                    Some(ann) => format!("{key}: {word}  ;{ann}"),
-                    None => format!("{key}: {word}"),
+                let label = if cand.has_annotation() {
+                    format!("{key}: {}  ;{}", cand.word, cand.annotation)
+                } else {
+                    format!("{key}: {}", cand.word)
                 };
                 str_to_char2b(&label)
             })
