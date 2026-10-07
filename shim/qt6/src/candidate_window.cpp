@@ -22,9 +22,13 @@ CandidateWindow::CandidateWindow()
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
-void CandidateWindow::updateCandidates(const QStringList &words)
+void CandidateWindow::updateCandidates(const QStringList &words, const QStringList &annotations)
 {
     m_words = words;
+    m_annotations = annotations;
+    // Keep the two lists the same length so row lookups never go out of range.
+    while (m_annotations.size() < m_words.size())
+        m_annotations.append(QString());
 
     if (words.isEmpty()) {
         hide();
@@ -110,10 +114,8 @@ void CandidateWindow::recalcSize()
     int visibleRows = qMin(m_words.size(), kMaxVisible);
 
     for (int i = 0; i < visibleRows; ++i) {
-        const QString &raw = m_words[i];
-        int semi = raw.indexOf(';');
-        QString word = (semi >= 0) ? raw.left(semi) : raw;
-        QString ann  = (semi >= 0) ? raw.mid(semi + 1) : QString();
+        const QString &word = m_words[i];
+        const QString &ann  = m_annotations[i];
 
         // key label + separator + word
         QString label = (i < m_keys.size()) ? QString(m_keys[i]) + " " : QString();
@@ -153,10 +155,8 @@ void CandidateWindow::paintEvent(QPaintEvent *)
         int y = kVPad + 1 + row * kLineHeight;
         QRect rowRect(1, y, width() - 2, kLineHeight);
 
-        const QString &raw = m_words[row];
-        int semi = raw.indexOf(';');
-        QString word = (semi >= 0) ? raw.left(semi) : raw;
-        QString ann  = (semi >= 0) ? raw.mid(semi + 1) : QString();
+        const QString &word = m_words[row];
+        const QString &ann  = m_annotations[row];
 
         int x = rowRect.left() + kHPad;
 

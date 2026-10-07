@@ -212,19 +212,29 @@ void Y2skkInputContext::cbClearPreedit(void *ctx)
     send_im_event(ev);
 }
 
-void Y2skkInputContext::cbShowCandidates(void *ctx, const char **words, uint32_t focused, const char *keys)
+void Y2skkInputContext::cbShowCandidates(void *ctx, const char **words, const char **annotations,
+                                         uint32_t focused, const char *keys)
 {
     auto *self = static_cast<Y2skkInputContext *>(ctx);
 
     if (!self->m_candidates)
         self->m_candidates = new CandidateWindow();
 
-    QStringList list;
-    for (const char **p = words; *p != nullptr; ++p)
-        list.append(QString::fromUtf8(*p));
+    QStringList wordList;
+    QStringList annList;
+    for (const char **w = words, **a = annotations; *w != nullptr; ++w) {
+        wordList.append(QString::fromUtf8(*w));
+        // The arrays are parallel, but guard against a short annotation array.
+        if (*a != nullptr) {
+            annList.append(QString::fromUtf8(*a));
+            ++a;
+        } else {
+            annList.append(QString());
+        }
+    }
 
     self->m_candidates->setSelectionKeys(QString::fromUtf8(keys));
-    self->m_candidates->updateCandidates(list);
+    self->m_candidates->updateCandidates(wordList, annList);
 
     // Position the window only on first show; subsequent calls just repaint.
     if (!self->m_candidates->isVisible())
