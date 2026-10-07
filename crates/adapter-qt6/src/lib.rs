@@ -35,6 +35,12 @@ struct CallbackSink {
     cbs: *const Y2skkCallbacks,
 }
 
+/// Converts `s` to a `CString`, dropping any interior NUL bytes instead of
+/// failing.  Used for strings that cross the C ABI for display only.
+fn c_string_lossy(s: &str) -> CString {
+    CString::new(s.replace('\0', "")).unwrap_or_default()
+}
+
 impl ActionSink for CallbackSink {
     fn commit(&mut self, text: &str) {
         if let Ok(cs) = CString::new(text) {
@@ -54,17 +60,13 @@ impl ActionSink for CallbackSink {
     }
 
     fn show_candidates(&mut self, candidates: &[IpcCandidate], focused: u32, sel_keys: &str) {
-        // Build two parallel NULL-terminated arrays.  A row whose word or
-        // annotation contains an interior NUL is dropped from both arrays so
-        // they stay aligned.
+        // Build two parallel NULL-terminated arrays.  Every row is kept so
+        // that `focused` and the selection keys stay aligned with what the
+        // shim displays; an interior NUL (which a C string cannot carry) is
+        // stripped rather than causing the row to be dropped.
         let rows: Vec<(CString, CString)> = candidates
             .iter()
-            .filter_map(|c| {
-                Some((
-                    CString::new(c.word.as_str()).ok()?,
-                    CString::new(c.annotation.as_str()).ok()?,
-                ))
-            })
+            .map(|c| (c_string_lossy(&c.word), c_string_lossy(&c.annotation)))
             .collect();
         let word_ptrs: Vec<*const c_char> = rows
             .iter()
@@ -76,7 +78,7 @@ impl ActionSink for CallbackSink {
             .map(|(_, a)| a.as_ptr())
             .chain(std::iter::once(std::ptr::null()))
             .collect();
-        let keys_cs = CString::new(sel_keys).unwrap_or_default();
+        let keys_cs = c_string_lossy(sel_keys);
         unsafe {
             ((*self.cbs).show_candidates)(
                 self.ctx,
