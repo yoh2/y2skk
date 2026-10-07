@@ -59,7 +59,7 @@ pub unsafe extern "C" fn im_module_create(context_id: *const c_char) -> *mut c_v
 
 use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink, DispatchResult};
 use skk_ipc::proxy::reconnect::ReconnectingClient;
-use skk_ipc::NO_GHOST;
+use skk_ipc::{IpcCandidate, NO_GHOST};
 
 // ── Callbacks struct (mirrors y2skk_im.h) ────────────────────────────────────
 
@@ -69,8 +69,15 @@ pub struct Y2skkCallbacks {
     pub commit: unsafe extern "C" fn(*mut c_void, *const c_char),
     pub update_preedit: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint, c_uint),
     pub clear_preedit: unsafe extern "C" fn(*mut c_void),
-    pub show_candidates:
-        unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
+    /// ctx, words (NULL-terminated), annotations (NULL-terminated, same length,
+    /// "" when absent), focused, selection keys
+    pub show_candidates: unsafe extern "C" fn(
+        *mut c_void,
+        *const *const c_char,
+        *const *const c_char,
+        c_uint,
+        *const c_char,
+    ),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
     pub update_status: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint),
 }
@@ -100,18 +107,39 @@ impl ActionSink for CallbackSink {
         unsafe { ((*self.cbs).clear_preedit)(self.ctx) }
     }
 
-    fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
-        let cstrings: Vec<CString> = candidates
+    fn show_candidates(&mut self, candidates: &[IpcCandidate], focused: u32, sel_keys: &str) {
+        // Build two parallel NULL-terminated arrays.  A row whose word or
+        // annotation contains an interior NUL is dropped from both arrays so
+        // they stay aligned.
+        let rows: Vec<(CString, CString)> = candidates
             .iter()
-            .filter_map(|w| CString::new(w.as_str()).ok())
+            .filter_map(|c| {
+                Some((
+                    CString::new(c.word.as_str()).ok()?,
+                    CString::new(c.annotation.as_str()).ok()?,
+                ))
+            })
             .collect();
-        let ptrs: Vec<*const c_char> = cstrings
+        let word_ptrs: Vec<*const c_char> = rows
             .iter()
-            .map(|s| s.as_ptr())
+            .map(|(w, _)| w.as_ptr())
+            .chain(std::iter::once(std::ptr::null()))
+            .collect();
+        let ann_ptrs: Vec<*const c_char> = rows
+            .iter()
+            .map(|(_, a)| a.as_ptr())
             .chain(std::iter::once(std::ptr::null()))
             .collect();
         let keys_cs = CString::new(sel_keys).unwrap_or_default();
-        unsafe { ((*self.cbs).show_candidates)(self.ctx, ptrs.as_ptr(), focused, keys_cs.as_ptr()) }
+        unsafe {
+            ((*self.cbs).show_candidates)(
+                self.ctx,
+                word_ptrs.as_ptr(),
+                ann_ptrs.as_ptr(),
+                focused,
+                keys_cs.as_ptr(),
+            )
+        }
     }
 
     fn hide_candidates(&mut self) {

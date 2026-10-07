@@ -245,8 +245,24 @@ static void cb_clear_preedit(void *ctx_ptr)
     cb_update_preedit(ctx_ptr, "", 0, UINT32_MAX);
 }
 
-static void cb_show_candidates(void *ctx_ptr, const char **words, uint32_t focused,
-                                const char *sel_keys)
+/* Builds the Pango markup for one candidate row: "<key>: <word>" followed by
+ * the annotation (if any) in a dimmed span.  word and annotation come from
+ * the dictionary, so they are escaped before being embedded in the markup. */
+static gchar *cand_row_markup(const char *key, const char *word, const char *annotation)
+{
+    gboolean has_ann = annotation && *annotation;
+    if (key && has_ann)
+        return g_markup_printf_escaped("%s: %s  <span alpha=\"60%%\">;%s</span>",
+                                       key, word, annotation);
+    if (key)
+        return g_markup_printf_escaped("%s: %s", key, word);
+    if (has_ann)
+        return g_markup_printf_escaped("%s  <span alpha=\"60%%\">;%s</span>", word, annotation);
+    return g_markup_printf_escaped("%s", word);
+}
+
+static void cb_show_candidates(void *ctx_ptr, const char **words, const char **annotations,
+                                uint32_t focused, const char *sel_keys)
 {
     Y2skkIMContext *self = (Y2skkIMContext *)ctx_ptr;
 
@@ -298,15 +314,13 @@ static void cb_show_candidates(void *ctx_ptr, const char **words, uint32_t focus
         if (i == (int)focused)
             gtk_style_context_add_class(rsc, "y2skk-cand-focused");
 
-        gchar *text;
-        if (i < n_keys)
-            text = g_strdup_printf("%c: %s", sel_keys[i], words[i]);
-        else
-            text = g_strdup(words[i]);
+        char key[2] = { (i < n_keys) ? sel_keys[i] : '\0', '\0' };
+        gchar *markup = cand_row_markup(key[0] ? key : NULL, words[i], annotations[i]);
 
-        GtkWidget *label = gtk_label_new(text);
+        GtkWidget *label = gtk_label_new(NULL);
+        gtk_label_set_markup(GTK_LABEL(label), markup);
         gtk_label_set_xalign(GTK_LABEL(label), 0.0);
-        g_free(text);
+        g_free(markup);
 
         gtk_container_add(GTK_CONTAINER(row), label);
         gtk_box_pack_start(GTK_BOX(vbox), row, FALSE, FALSE, 0);
