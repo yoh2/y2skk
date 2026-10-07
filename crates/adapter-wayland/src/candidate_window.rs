@@ -15,6 +15,8 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
 };
 
+use skk_ipc::IpcCandidate;
+
 use crate::server::WaylandState;
 
 // ── Layout constants ──────────────────────────────────────────────────────────
@@ -259,7 +261,7 @@ fn draw_rect(canvas: &mut Canvas<'_>, x: i32, y: i32, w: i32, h: i32, color: [u8
 fn render_candidates(
     fd: &OwnedFd,
     font: &Font,
-    candidates: &[String],
+    candidates: &[IpcCandidate],
     focused: u32,
     sel_keys: &str,
 ) {
@@ -279,11 +281,15 @@ fn render_candidates(
             if i == focused as usize {
                 draw_filled_rect(canvas, 1, row_y, CAND_W - 2, LINE_H, FOCUS_BG);
             }
-            let text = if i < key_chars.len() {
-                format!("{}: {}", key_chars[i], cand)
+            let mut text = if i < key_chars.len() {
+                format!("{}: {}", key_chars[i], cand.word)
             } else {
-                cand.clone()
+                cand.word.clone()
             };
+            if cand.has_annotation() {
+                text.push_str("  ;");
+                text.push_str(&cand.annotation);
+            }
             let baseline_y = row_y + baseline_offset;
             draw_text(canvas, font, &text, H_MARGIN, baseline_y, TEXT_COLOR);
         }
@@ -350,7 +356,7 @@ impl SurfaceBackend {
 /// Pending draw queued while the layer surface is not yet configured.
 enum PendingDraw {
     Candidates {
-        candidates: Vec<String>,
+        candidates: Vec<IpcCandidate>,
         focused: u32,
         sel_keys: String,
     },
@@ -447,7 +453,7 @@ impl CandidateWindow {
     /// Show candidates (takes priority over the status indicator).
     pub fn show(
         &mut self,
-        candidates: &[String],
+        candidates: &[IpcCandidate],
         focused: u32,
         sel_keys: &str,
         qh: &QueueHandle<WaylandState>,
@@ -550,7 +556,7 @@ impl CandidateWindow {
 
     fn do_draw_candidates(
         &mut self,
-        candidates: &[String],
+        candidates: &[IpcCandidate],
         focused: u32,
         sel_keys: &str,
         qh: &QueueHandle<WaylandState>,

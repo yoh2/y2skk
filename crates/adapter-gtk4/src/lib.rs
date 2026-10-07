@@ -46,7 +46,7 @@ pub extern "C" fn g_io_module_query() -> *mut *mut c_char {
 
 use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink, DispatchResult};
 use skk_ipc::proxy::reconnect::ReconnectingClient;
-use skk_ipc::NO_GHOST;
+use skk_ipc::{IpcCandidate, NO_GHOST};
 
 // ── Callbacks struct (mirrors y2skk_im.h) ────────────────────────────────────
 
@@ -56,8 +56,15 @@ pub struct Y2skkCallbacks {
     pub commit: unsafe extern "C" fn(*mut c_void, *const c_char),
     pub update_preedit: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint, c_uint),
     pub clear_preedit: unsafe extern "C" fn(*mut c_void),
-    pub show_candidates:
-        unsafe extern "C" fn(*mut c_void, *const *const c_char, c_uint, *const c_char),
+    /// ctx, words (NULL-terminated), annotations (NULL-terminated, same length,
+    /// "" when absent), focused, selection keys
+    pub show_candidates: unsafe extern "C" fn(
+        *mut c_void,
+        *const *const c_char,
+        *const *const c_char,
+        c_uint,
+        *const c_char,
+    ),
     pub hide_candidates: unsafe extern "C" fn(*mut c_void),
     pub update_status: unsafe extern "C" fn(*mut c_void, *const c_char, c_uint),
 }
@@ -67,6 +74,12 @@ pub struct Y2skkCallbacks {
 struct CallbackSink {
     ctx: *mut c_void,
     cbs: *const Y2skkCallbacks,
+}
+
+/// Converts `s` to a `CString`, dropping any interior NUL bytes instead of
+/// failing.  Used for strings that cross the C ABI for display only.
+fn c_string_lossy(s: &str) -> CString {
+    CString::new(s.replace('\0', "")).unwrap_or_default()
 }
 
 impl ActionSink for CallbackSink {
@@ -87,18 +100,35 @@ impl ActionSink for CallbackSink {
         unsafe { ((*self.cbs).clear_preedit)(self.ctx) }
     }
 
-    fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
-        let cstrings: Vec<CString> = candidates
+    fn show_candidates(&mut self, candidates: &[IpcCandidate], focused: u32, sel_keys: &str) {
+        // Build two parallel NULL-terminated arrays.  Every row is kept so
+        // that `focused` and the selection keys stay aligned with what the
+        // shim displays; an interior NUL (which a C string cannot carry) is
+        // stripped rather than causing the row to be dropped.
+        let rows: Vec<(CString, CString)> = candidates
             .iter()
-            .filter_map(|w| CString::new(w.as_str()).ok())
+            .map(|c| (c_string_lossy(&c.word), c_string_lossy(&c.annotation)))
             .collect();
-        let ptrs: Vec<*const c_char> = cstrings
+        let word_ptrs: Vec<*const c_char> = rows
             .iter()
-            .map(|s| s.as_ptr())
+            .map(|(w, _)| w.as_ptr())
             .chain(std::iter::once(std::ptr::null()))
             .collect();
-        let keys_cs = CString::new(sel_keys).unwrap_or_default();
-        unsafe { ((*self.cbs).show_candidates)(self.ctx, ptrs.as_ptr(), focused, keys_cs.as_ptr()) }
+        let ann_ptrs: Vec<*const c_char> = rows
+            .iter()
+            .map(|(_, a)| a.as_ptr())
+            .chain(std::iter::once(std::ptr::null()))
+            .collect();
+        let keys_cs = c_string_lossy(sel_keys);
+        unsafe {
+            ((*self.cbs).show_candidates)(
+                self.ctx,
+                word_ptrs.as_ptr(),
+                ann_ptrs.as_ptr(),
+                focused,
+                keys_cs.as_ptr(),
+            )
+        }
     }
 
     fn hide_candidates(&mut self) {

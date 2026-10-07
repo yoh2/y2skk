@@ -24,6 +24,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLay
 
 use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink};
 use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
+use skk_ipc::IpcCandidate;
 
 use crate::candidate_window::{self, CandidateWindow};
 use crate::keymap;
@@ -502,7 +503,7 @@ impl ActionSink for ContextSink<'_> {
             .preedit_string(self.serial, String::new(), String::new());
     }
 
-    fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
+    fn show_candidates(&mut self, candidates: &[IpcCandidate], focused: u32, sel_keys: &str) {
         if let Some(qh) = self.qh {
             for cw in self.candidate_windows.iter_mut() {
                 cw.show(candidates, focused, sel_keys, qh);

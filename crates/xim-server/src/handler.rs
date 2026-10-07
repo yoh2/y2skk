@@ -11,6 +11,7 @@ use xim::{InputStyle, Server, ServerError, ServerHandler, UserInputContext};
 
 use skk_ipc::dispatch::{dispatch as dispatch_actions, ActionSink};
 use skk_ipc::proxy::reconnect::{LocalHandle, ReconnectingClient};
+use skk_ipc::IpcCandidate;
 
 use crate::candidates::CandidateWindow;
 use crate::key::KeyMap;
@@ -81,7 +82,7 @@ impl<S: Server<XEvent = KeyPressEvent>> ActionSink for IcSink<'_, S> {
         }
     }
 
-    fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
+    fn show_candidates(&mut self, candidates: &[IpcCandidate], focused: u32, sel_keys: &str) {
         if let Err(e) = self
             .candidates
             .show(candidates, sel_keys, focused, self.spot.as_ref())

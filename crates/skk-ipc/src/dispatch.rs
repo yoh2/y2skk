@@ -1,6 +1,7 @@
 use crate::{
-    IpcAction, ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES, ACTION_PASSTHROUGH,
-    ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS, NO_GHOST,
+    IpcAction, IpcCandidate, ACTION_CLEAR_PREEDIT, ACTION_COMMIT, ACTION_HIDE_CANDIDATES,
+    ACTION_PASSTHROUGH, ACTION_SHOW_CANDIDATES, ACTION_UPDATE_PREEDIT, ACTION_UPDATE_STATUS,
+    NO_GHOST,
 };
 
 /// Receiver of IME actions produced by dispatching a `Vec<IpcAction>`.
@@ -12,7 +13,9 @@ pub trait ActionSink {
     /// `ghost_start`: `None` = no ghost preview, `Some(byte_offset)` = ghost begins here.
     fn update_preedit(&mut self, text: &str, cursor: u32, ghost_start: Option<u32>);
     fn clear_preedit(&mut self);
-    fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str);
+    /// `candidates`: one `(word, annotation)` row each; `sel_keys`: one
+    /// selection-key character per row.
+    fn show_candidates(&mut self, candidates: &[IpcCandidate], focused: u32, sel_keys: &str);
     fn hide_candidates(&mut self);
     /// `timeout_ms`: hint for how long to show the status indicator (0 = persistent).
     fn update_status(&mut self, indicator: &str, timeout_ms: u32);
@@ -92,7 +95,7 @@ mod tests {
         committed: Vec<String>,
         preedit: Option<(String, u32, Option<u32>)>,
         preedit_cleared: bool,
-        candidates_shown: Option<(Vec<String>, u32, String)>,
+        candidates_shown: Option<(Vec<IpcCandidate>, u32, String)>,
         candidates_hidden: bool,
         status: Option<(String, u32)>,
     }
@@ -107,7 +110,7 @@ mod tests {
         fn clear_preedit(&mut self) {
             self.preedit_cleared = true;
         }
-        fn show_candidates(&mut self, candidates: &[String], focused: u32, sel_keys: &str) {
+        fn show_candidates(&mut self, candidates: &[IpcCandidate], focused: u32, sel_keys: &str) {
             self.candidates_shown = Some((candidates.to_vec(), focused, sel_keys.to_string()));
         }
         fn hide_candidates(&mut self) {
@@ -171,6 +174,20 @@ mod tests {
             &mut sink,
         );
         assert_eq!(sink.preedit, Some(("かいかわらず".to_string(), 3, Some(3))));
+    }
+
+    #[test]
+    fn show_candidates_passes_rows_and_keys() {
+        let mut sink = MockSink::default();
+        let rows = vec![
+            IpcCandidate::new("以前", "previous"),
+            IpcCandidate::new("(;_;)", ""),
+        ];
+        let mut action = IpcAction::show_candidates(rows.clone(), 1);
+        action.text = "as".to_string();
+        let r = dispatch(&[action], &mut sink);
+        assert!(r.consumed);
+        assert_eq!(sink.candidates_shown, Some((rows, 1, "as".to_string())));
     }
 
     #[test]

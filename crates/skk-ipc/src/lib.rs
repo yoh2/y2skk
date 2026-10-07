@@ -36,17 +36,20 @@ pub const ACTION_SESSION_INVALID: u8 = 7;
 /// | 1 Commit         | committed text | –    | –          | –       | –                  |
 /// | 2 UpdatePreedit  | preedit text   | byte offset | –   | –       | ghost byte offset  |
 /// | 3 ClearPreedit   | –   | –             | –          | –       | –                  |
-/// | 4 ShowCandidates | –   | –             | word list  | index   | –                  |
+/// | 4 ShowCandidates | selection keys | –    | (word, annotation) list | index | –           |
 /// | 5 HideCandidates | –   | –             | –          | –       | –                  |
 ///
 /// For `UpdatePreedit`: `ghost_start` is the byte offset within `text` where the
 /// completion ghost preview begins.  `u32::MAX` means no ghost is present.
+///
+/// For `ShowCandidates`: `candidates` carries one `IpcCandidate` per row and
+/// `text` carries the selection-key characters (one per row, e.g. `"asdfjkl;"`).
 #[derive(Debug, Clone, PartialEq, Eq, Type, Serialize, Deserialize)]
 pub struct IpcAction {
     pub kind: u8,
     pub text: String,
     pub cursor: u32,
-    pub candidates: Vec<String>,
+    pub candidates: Vec<IpcCandidate>,
     pub focused: u32,
     /// Byte offset of the ghost (completion preview) start in `text`.
     /// `u32::MAX` = no ghost.  Only meaningful for `UpdatePreedit`.
@@ -55,6 +58,32 @@ pub struct IpcAction {
 
 /// Sentinel value for `IpcAction::ghost_start` meaning "no ghost text present".
 pub const NO_GHOST: u32 = u32::MAX;
+
+/// One row of a candidate list, as carried by `IpcAction::candidates`.
+///
+/// `word` is the conversion result exactly as it will be committed; it may
+/// contain any character, including `;`.  `annotation` is the dictionary
+/// annotation for display only, or an empty string when the candidate has none.
+/// D-Bus signature: `(ss)`.
+#[derive(Debug, Clone, PartialEq, Eq, Type, Serialize, Deserialize)]
+pub struct IpcCandidate {
+    pub word: String,
+    pub annotation: String,
+}
+
+impl IpcCandidate {
+    pub fn new(word: impl Into<String>, annotation: impl Into<String>) -> Self {
+        Self {
+            word: word.into(),
+            annotation: annotation.into(),
+        }
+    }
+
+    /// Returns `true` when this candidate carries an annotation.
+    pub fn has_annotation(&self) -> bool {
+        !self.annotation.is_empty()
+    }
+}
 
 impl IpcAction {
     pub fn passthrough() -> Self {
@@ -101,7 +130,7 @@ impl IpcAction {
         }
     }
 
-    pub fn show_candidates(candidates: Vec<String>, focused: u32) -> Self {
+    pub fn show_candidates(candidates: Vec<IpcCandidate>, focused: u32) -> Self {
         Self {
             kind: ACTION_SHOW_CANDIDATES,
             text: String::new(),

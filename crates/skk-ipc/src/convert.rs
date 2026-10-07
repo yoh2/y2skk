@@ -3,7 +3,7 @@
 use skk_core::engine::{EngineAction, Preedit};
 use skk_core::key::{Key, KeyEvent, Modifiers};
 
-use crate::{keysym, IpcAction, NO_GHOST};
+use crate::{keysym, IpcAction, IpcCandidate, NO_GHOST};
 
 // ── EngineAction → IpcAction ──────────────────────────────────────────────────
 
@@ -21,17 +21,15 @@ impl From<EngineAction> for IpcAction {
             }
             EngineAction::ClearPreedit => IpcAction::clear_preedit(),
             EngineAction::ShowCandidates(candidates, focused, sel_keys) => {
-                // Include annotation with ';' separator when present (standard SKK convention).
-                let words = candidates
+                // Word and annotation travel as separate fields so a word that
+                // itself contains ';' is never confused with an annotation.
+                let rows = candidates
                     .into_iter()
-                    .map(|c| match c.annotation {
-                        Some(ann) => format!("{};{}", c.word, ann),
-                        None => c.word,
-                    })
+                    .map(|c| IpcCandidate::new(c.word, c.annotation.unwrap_or_default()))
                     .collect();
                 // Use the `text` field (otherwise unused for ShowCandidates) to carry
                 // the selection key characters so the UI can display labels like "a:候補".
-                let mut action = IpcAction::show_candidates(words, focused as u32);
+                let mut action = IpcAction::show_candidates(rows, focused as u32);
                 action.text = sel_keys;
                 action
             }
@@ -150,5 +148,32 @@ mod tests {
         let ipc: IpcAction = action.into();
         assert_eq!(ipc.kind, crate::ACTION_COMMIT);
         assert_eq!(ipc.text, "か");
+    }
+
+    #[test]
+    fn test_engine_action_show_candidates_keeps_word_and_annotation_apart() {
+        use skk_core::dict::entry::Candidate;
+
+        // A word that itself contains ';' must survive unchanged, and the
+        // annotation must land in its own field rather than being appended.
+        let action = EngineAction::ShowCandidates(
+            vec![
+                Candidate::with_annotation("(;_;)", "顔文字"),
+                Candidate::new("以前"),
+            ],
+            1,
+            "as".into(),
+        );
+        let ipc: IpcAction = action.into();
+        assert_eq!(ipc.kind, crate::ACTION_SHOW_CANDIDATES);
+        assert_eq!(
+            ipc.candidates,
+            vec![
+                IpcCandidate::new("(;_;)", "顔文字"),
+                IpcCandidate::new("以前", ""),
+            ]
+        );
+        assert_eq!(ipc.focused, 1);
+        assert_eq!(ipc.text, "as");
     }
 }

@@ -40,7 +40,8 @@ private:
     static void cbCommit(void *ctx, const char *text);
     static void cbUpdatePreedit(void *ctx, const char *text, uint32_t cursor, uint32_t ghost_start);
     static void cbClearPreedit(void *ctx);
-    static void cbShowCandidates(void *ctx, const char **words, uint32_t focused, const char *keys);
+    static void cbShowCandidates(void *ctx, const char **words, const char **annotations,
+                                 uint32_t focused, const char *keys);
     static void cbHideCandidates(void *ctx);
     static void cbUpdateStatus(void *ctx, const char *indicator);
 

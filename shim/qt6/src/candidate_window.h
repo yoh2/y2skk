@@ -19,7 +19,8 @@ public:
     explicit CandidateWindow();
 
     // Replace the candidate list and repaint.  Hides the window when empty.
-    void updateCandidates(const QStringList &words);
+    // `annotations` is parallel to `words`; an empty string means no annotation.
+    void updateCandidates(const QStringList &words, const QStringList &annotations);
 
     // Set the selection key characters shown as labels (e.g. "asdfjkl;").
     void setSelectionKeys(const QString &keys) { m_keys = keys; }
@@ -32,7 +33,8 @@ protected:
 
 private:
     QStringList m_words;
-    QString     m_keys;   // selection key characters, one per candidate row
+    QStringList m_annotations; // parallel to m_words; empty string = no annotation
+    QString     m_keys;        // selection key characters, one per candidate row
 
     // Layout constants (logical pixels)
     static constexpr int kLineHeight = 26;
