@@ -800,7 +800,7 @@ vy	x		ゔぃん
 	.		。
 	>		＞
 	;		；
-	:		；
+	:		：
 	¥		￥
 
 [trans.katakana]
