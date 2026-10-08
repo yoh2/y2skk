@@ -49,7 +49,8 @@ Outside KDE, prefer the X11 path (XIM + GTK3 / GTK4 / Qt6 adapters).
 - **SKK protocol** — hiragana / katakana / half-width katakana / wide-ASCII / ASCII modes
 - **Kana input layouts** — Romaji, AZIK (US/JP), DvorakJP (US/JP)
 - **Dictionary support** — UTF-8 and EUC-JP / EUC-JISX0213 dictionaries; multiple system dictionaries with configurable priority
-- **User dictionary** — word registration (`▼` mode), automatic save on commit
+- **User dictionary** — word registration (`▼` mode), automatic save on commit;
+  type `word;annotation` in the registration buffer to register an annotation along with the word
 - **Number conversion** — DDSKK-style numeric templates (`#0`–`#3`, `#5`, `#9`) plus
   y2skk extensions (`#6`, `#7`, `#a`, `#b`, `#c`); synthetic candidates are produced
   even when the dictionary has no entry for the templated reading

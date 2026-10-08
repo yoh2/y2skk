@@ -179,6 +179,31 @@ struct CompletionState {
     preview: String,
 }
 
+// ── Registration buffer parsing ──────────────────────────────────────────────
+
+/// Splits a registration buffer into `(word, annotation)`.
+///
+/// Following CorvusSKK, the text after the **last** `;` is the annotation,
+/// unless that `;` is the first character (so a lone `;` registers a
+/// semicolon).  An empty annotation (trailing `;`) is treated as none.
+///
+/// ```text
+/// "漢字;コメント" → ("漢字", Some("コメント"))
+/// "(;_;);顔文字"  → ("(;_;)", Some("顔文字"))
+/// ";;セミコロン"   → (";", Some("セミコロン"))
+/// "漢字;"         → ("漢字", None)
+/// ";"             → (";", None)
+/// ```
+fn split_register_annotation(buf: &str) -> (&str, Option<&str>) {
+    match buf.rfind(';') {
+        Some(i) if i > 0 => {
+            let annotation = &buf[i + 1..];
+            (&buf[..i], (!annotation.is_empty()).then_some(annotation))
+        }
+        _ => (buf, None),
+    }
+}
+
 // ── Engine ───────────────────────────────────────────────────────────────────
 
 pub struct SkkEngine {
@@ -2169,12 +2194,17 @@ impl SkkEngine {
 
     /// Completes the topmost registration frame: saves to user dict and either
     /// commits to the application (outermost frame) or appends to the outer frame.
+    ///
+    /// The registration buffer may carry an annotation after its last `;`
+    /// (see `split_register_annotation`); only the word part is committed or
+    /// inserted into the enclosing frame.
     fn finalize_register(&mut self) -> Vec<EngineAction> {
         let frame = self
             .register_stack
             .pop()
             .expect("finalize_register called with empty stack");
-        let word = frame.committed.clone();
+        let (word, annotation) = split_register_annotation(&frame.committed);
+        let word = word.to_string();
         let okuri_kana = frame.okuri_kana.as_deref().unwrap_or("");
 
         // Save the new entry to all writable dictionaries.
@@ -2183,7 +2213,7 @@ impl SkkEngine {
             okuri: frame.okuri_key.clone(),
             candidates: vec![Candidate {
                 word: word.clone(),
-                annotation: None,
+                annotation: annotation.map(str::to_string),
                 lisp_form: None,
             }],
         };
@@ -3310,6 +3340,91 @@ mod tests {
         let result = eng.dict[0].lookup("あい", None);
         assert!(result.is_some(), "user dict should have learned あい");
         assert_eq!(result.unwrap().candidates[0].word, "か");
+    }
+
+    /// Types "か;こ" into the current registration buffer: "か" by romaji, an
+    /// ASCII ';' through a temporary switch to ASCII mode (`l` … `C-j`), then "こ".
+    fn type_word_semicolon_word(eng: &mut SkkEngine) {
+        eng.process_key(&press('k'));
+        eng.process_key(&press('a'));
+        eng.process_key(&press('l'));
+        eng.process_key(&press(';'));
+        eng.process_key(&ctrl('j'));
+        eng.process_key(&press('k'));
+        eng.process_key(&press('o'));
+    }
+
+    #[test]
+    fn test_split_register_annotation() {
+        let cases = [
+            ("漢字;コメント", ("漢字", Some("コメント"))),
+            ("(;_;);顔文字", ("(;_;)", Some("顔文字"))),
+            (";;セミコロン", (";", Some("セミコロン"))),
+            ("漢字;", ("漢字", None)),
+            (";", (";", None)),
+            ("漢字", ("漢字", None)),
+            ("", ("", None)),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                split_register_annotation(input),
+                expected,
+                "input {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_register_with_annotation_commits_word_only() {
+        use crate::dict::file::UserDict;
+        let table = romaji_table();
+        let mut eng = SkkEngine::new(table, SkkKeybindings::default());
+        let user_dict = UserDict::empty(std::path::PathBuf::from(
+            "/tmp/y2skk_test_register_annotation.dict",
+        ));
+        eng.add_dict(Box::new(user_dict));
+
+        eng.process_key(&press('A'));
+        eng.process_key(&press('i'));
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty())); // enter register
+
+        // Type "か;こ": "か" via romaji, an ASCII ';' via a temporary switch to
+        // ASCII mode (in kana mode ';' would become full-width '；'), then "こ".
+        // "か" is the word, "こ" the annotation.
+        type_word_semicolon_word(&mut eng);
+        assert_eq!(eng.register_stack.last().unwrap().committed, "か;こ");
+        let actions = eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
+
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, EngineAction::Commit(s) if s == "か")),
+            "should commit only the word; got: {actions:?}"
+        );
+        let result = eng.dict[0].lookup("あい", None).expect("learned あい");
+        assert_eq!(result.candidates[0].word, "か");
+        assert_eq!(result.candidates[0].annotation.as_deref(), Some("こ"));
+    }
+
+    #[test]
+    fn test_register_recursive_inserts_word_without_annotation() {
+        let mut eng = engine(); // no dict
+
+        for ch in ['S', 'a', 'i', 'k', 'i', 't', 'e', 'k', 'i'] {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        for ch in ['S', 'a', 'i', 'k', 'i'] {
+            eng.process_key(&press(ch));
+        }
+        eng.process_key(&KeyEvent::press(Key::Space, Modifiers::empty()));
+        assert_eq!(eng.register_stack.len(), 2);
+
+        // Inner registration "か;こ": only "か" must reach the outer buffer.
+        type_word_semicolon_word(&mut eng);
+        eng.process_key(&KeyEvent::press(Key::Return, Modifiers::empty()));
+        assert_eq!(eng.register_stack.len(), 1);
+        assert_eq!(eng.register_stack[0].committed, "か");
     }
 
     #[test]
