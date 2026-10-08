@@ -162,13 +162,13 @@ pub fn needs_quoting(s: &str) -> bool {
     s.starts_with('(') || s.contains(['/', ';', '"', '\\', '\n', '\r'])
 }
 
-/// Wraps `s` as `(concat "...")`, escaping it the way DDSKK's
-/// `skk-quote-char` does so other SKK implementations read it back
-/// correctly: `/` → `\057`, `;` → `\073`, `"` → `\"`, `\` → `\\`,
-/// LF → `\n`, CR → `\r`.
-pub fn quote_concat(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 12);
-    out.push_str("(concat \"");
+/// Appends `s` to `out` as a double-quoted Lisp string literal, escaping it
+/// the way DDSKK's `skk-quote-char` does so other SKK implementations read
+/// it back correctly: `/` → `\057`, `;` → `\073`, `"` → `\"`, `\` → `\\`,
+/// LF → `\n`, CR → `\r`.  This is the inverse of `read_string_literal` for
+/// every character that would otherwise break the dictionary line format.
+fn write_string_literal(out: &mut String, s: &str) {
+    out.push('"');
     for c in s.chars() {
         match c {
             '/' => out.push_str("\\057"),
@@ -180,7 +180,15 @@ pub fn quote_concat(s: &str) -> String {
             c => out.push(c),
         }
     }
-    out.push_str("\")");
+    out.push('"');
+}
+
+/// Wraps `s` as `(concat "...")` using `write_string_literal` escaping.
+pub fn quote_concat(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 12);
+    out.push_str("(concat ");
+    write_string_literal(&mut out, s);
+    out.push(')');
     out
 }
 
@@ -196,14 +204,13 @@ pub fn quote_if_needed(s: &str) -> String {
 /// Renders a `LispForm::IgnoreDicWord` back to its S-expression string.
 /// Used when re-serializing a user dictionary that contains such an entry.
 pub fn render_ignore_dic_word(words: &[String]) -> String {
-    let quoted: Vec<String> = words
-        .iter()
-        .map(|w| {
-            let escaped = w.replace('\\', "\\\\").replace('"', "\\\"");
-            format!("\"{escaped}\"")
-        })
-        .collect();
-    format!("(skk-ignore-dic-word {})", quoted.join(" "))
+    let mut out = String::from("(skk-ignore-dic-word");
+    for w in words {
+        out.push(' ');
+        write_string_literal(&mut out, w);
+    }
+    out.push(')');
+    out
 }
 
 #[cfg(test)]
@@ -294,6 +301,20 @@ mod tests {
             rendered,
             "(skk-ignore-dic-word \"say \\\"hi\\\"\" \"back\\\\slash\")"
         );
+    }
+
+    #[test]
+    fn test_render_ignore_dic_word_escapes_reserved_characters() {
+        // Octal and control escapes decoded on load must be re-encoded on
+        // save; otherwise a raw '/' or newline would corrupt the dictionary.
+        let words = vec!["and/or".to_string(), "a;b".to_string(), "x\ny".to_string()];
+        let rendered = render_ignore_dic_word(&words);
+        assert_eq!(
+            rendered,
+            "(skk-ignore-dic-word \"and\\057or\" \"a\\073b\" \"x\\ny\")"
+        );
+        assert!(!rendered.contains(['/', ';', '\n']));
+        assert_eq!(classify(&rendered), Some(LispForm::IgnoreDicWord(words)));
     }
 
     // ── concat ───────────────────────────────────────────────────────────────
