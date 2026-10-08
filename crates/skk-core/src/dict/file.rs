@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use super::entry::{Candidate, DictEntry, DictError, LispForm};
+use super::lisp;
 use super::traits::DictionaryProvider;
 
 // ── Encoding ──────────────────────────────────────────────────────────────────
@@ -363,22 +364,57 @@ fn split_midashi_okuri(raw: &str) -> (&str, Option<&str>) {
     (raw, None)
 }
 
+/// Decodes an annotation field: a `(concat "...")` form is evaluated, any
+/// other text is kept verbatim.
+fn decode_annotation(raw: &str) -> String {
+    lisp::parse_concat(raw).unwrap_or_else(|| raw.to_string())
+}
+
+/// Parses one slash-delimited candidate field into a `Candidate`.
+///
+/// Plain fields split at the first `;` into word and annotation.  Fields
+/// starting with `(` are Lisp forms: the S-expression may contain `;` inside
+/// string literals, so the annotation separator is looked for only after the
+/// closing `)`.  A `(concat ...)` form is evaluated into a plain candidate;
+/// other forms are kept as `LispForm` entries.
+fn parse_candidate_field(field: &str) -> Candidate {
+    if field.starts_with('(') {
+        let (sexp, rest) = match lisp::sexp_end(field) {
+            // Only `;annotation` may follow the form; anything else means the
+            // field is not a well-formed candidate, so keep it opaque as a whole.
+            Some(end) if field[end..].is_empty() || field[end..].starts_with(';') => {
+                field.split_at(end)
+            }
+            _ => (field, ""),
+        };
+        let annotation = rest.strip_prefix(';').map(decode_annotation);
+        if let Some(word) = lisp::parse_concat(sexp) {
+            return Candidate {
+                word,
+                annotation,
+                lisp_form: None,
+            };
+        }
+        let form = lisp::classify(sexp).unwrap_or(LispForm::Unknown);
+        let mut cand = Candidate::lisp(sexp, form);
+        cand.annotation = annotation;
+        return cand;
+    }
+    match field.find(';') {
+        Some(semi) => {
+            Candidate::with_annotation(&field[..semi], decode_annotation(&field[semi + 1..]))
+        }
+        None => Candidate::new(field),
+    }
+}
+
 fn parse_candidates(s: &str, line_num: usize) -> Result<Vec<Candidate>, DictError> {
     let mut candidates = Vec::new();
     for field in s.split('/') {
         if field.is_empty() {
             continue;
         }
-        // Lisp-form candidates start with `(`.  They may contain `;` inside
-        // string literals, so we must NOT apply the annotation `;` split.
-        let cand = if field.starts_with('(') {
-            let form = crate::dict::lisp::classify(field);
-            Candidate::lisp(field, form.unwrap_or(crate::dict::entry::LispForm::Unknown))
-        } else if let Some(semi) = field.find(';') {
-            Candidate::with_annotation(&field[..semi], &field[semi + 1..])
-        } else {
-            Candidate::new(field)
-        };
+        let cand = parse_candidate_field(field);
         if cand.word.is_empty() {
             return Err(DictError::Parse {
                 line: line_num,
@@ -445,20 +481,19 @@ fn serialize_user_dict(map: &UserEntryMap) -> String {
             let cands: String = candidates
                 .iter()
                 .map(|c| {
-                    // Lisp-form candidates: re-render the S-expression; annotations
-                    // are not supported for Lisp forms to avoid `;` ambiguity.
-                    if let Some(form) = &c.lisp_form {
-                        use crate::dict::entry::LispForm;
-                        match form {
-                            LispForm::IgnoreDicWord(words) => {
-                                crate::dict::lisp::render_ignore_dic_word(words)
-                            }
-                            LispForm::Unknown => c.word.clone(),
-                        }
-                    } else if let Some(ann) = &c.annotation {
-                        format!("{};{}", c.word, ann)
-                    } else {
-                        c.word.clone()
+                    // Lisp-form candidates re-render their S-expression.  Plain
+                    // words are wrapped in `(concat "...")` when they contain a
+                    // character the dictionary syntax reserves (see
+                    // `lisp::needs_quoting`), as are annotations.  The
+                    // annotation follows the first `;` after the word/form.
+                    let word = match &c.lisp_form {
+                        Some(LispForm::IgnoreDicWord(words)) => lisp::render_ignore_dic_word(words),
+                        Some(LispForm::Unknown) => c.word.clone(),
+                        None => lisp::quote_if_needed(&c.word),
+                    };
+                    match &c.annotation {
+                        Some(ann) => format!("{word};{}", lisp::quote_if_needed(ann)),
+                        None => word,
                     }
                 })
                 .collect::<Vec<_>>()
@@ -571,6 +606,89 @@ mod tests {
         // Check key entries survived the roundtrip
         assert!(reparsed.get("あ").unwrap().get(&Some("k".into())).is_some());
         assert!(reparsed.get("てすと").unwrap().get(&None).is_some());
+    }
+
+    #[test]
+    fn test_parse_concat_candidates_and_annotations() {
+        // Shapes taken from SKK-JISYO.L.
+        let src = "ao /(concat \"and\\057or\")/\n\
+                   GPL /GNU General Public License;(concat \"http:\\057\\057www.gnu.org\\057\")/\n\
+                   なき /(concat \"(\\073_\\073)\");顔文字/\n\
+                   むし /(skk-ignore-dic-word \"虫\");note/(unknown-form 1)/\n";
+        let entries = parse_skk_dict(src).unwrap();
+
+        let ao = &entries["ao"][&None];
+        assert_eq!(ao[0].word, "and/or");
+        assert!(ao[0].lisp_form.is_none());
+        assert_eq!(ao[0].annotation, None);
+
+        let gpl = &entries["GPL"][&None];
+        assert_eq!(gpl[0].word, "GNU General Public License");
+        assert_eq!(gpl[0].annotation.as_deref(), Some("http://www.gnu.org/"));
+
+        let naki = &entries["なき"][&None];
+        assert_eq!(naki[0].word, "(;_;)");
+        assert_eq!(naki[0].annotation.as_deref(), Some("顔文字"));
+        assert!(naki[0].lisp_form.is_none());
+
+        let mushi = &entries["むし"][&None];
+        assert_eq!(
+            mushi[0].lisp_form,
+            Some(LispForm::IgnoreDicWord(vec!["虫".to_string()]))
+        );
+        assert_eq!(mushi[0].word, "(skk-ignore-dic-word \"虫\")");
+        assert_eq!(mushi[0].annotation.as_deref(), Some("note"));
+        assert_eq!(mushi[1].lisp_form, Some(LispForm::Unknown));
+        assert_eq!(mushi[1].word, "(unknown-form 1)");
+    }
+
+    #[test]
+    fn test_serialize_quotes_reserved_characters_and_roundtrips() {
+        let mut map: UserEntryMap = IndexMap::new();
+        map.entry("てすと".to_string())
+            .or_default()
+            .entry(None)
+            .or_default()
+            .extend([
+                Candidate::with_annotation("(;_;)", "顔文字"),
+                Candidate::new("and/or"),
+                Candidate::new("(笑)"),
+                Candidate::with_annotation("記番号", "http://example.com/"),
+                Candidate::with_annotation("普通", "注釈"),
+            ]);
+
+        let serialized = serialize_user_dict(&map);
+        assert_eq!(
+            serialized
+                .lines()
+                .find(|l| l.starts_with("てすと"))
+                .unwrap(),
+            "てすと /(concat \"(\\073_\\073)\");顔文字/(concat \"and\\057or\")/(concat \"(笑)\")\
+             /記番号;(concat \"http:\\057\\057example.com\\057\")/普通;注釈/"
+        );
+
+        let reparsed = parse_skk_dict_ordered(&serialized).unwrap();
+        assert_eq!(reparsed["てすと"][&None], map["てすと"][&None]);
+    }
+
+    #[test]
+    fn test_serialize_keeps_annotation_on_lisp_forms() {
+        let mut map: UserEntryMap = IndexMap::new();
+        let mut cand = Candidate::lisp(
+            "(skk-ignore-dic-word \"虫\")",
+            LispForm::IgnoreDicWord(vec!["虫".to_string()]),
+        );
+        cand.annotation = Some("note".to_string());
+        map.entry("むし".to_string())
+            .or_default()
+            .entry(None)
+            .or_default()
+            .push(cand.clone());
+
+        let serialized = serialize_user_dict(&map);
+        assert!(serialized.contains("むし /(skk-ignore-dic-word \"虫\");note/"));
+        let reparsed = parse_skk_dict_ordered(&serialized).unwrap();
+        assert_eq!(reparsed["むし"][&None][0], cand);
     }
 
     #[test]

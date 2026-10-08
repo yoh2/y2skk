@@ -1,9 +1,21 @@
-/// Classification and serialization of Lisp-form dictionary candidates.
+/// Classification, evaluation and serialization of Lisp-form dictionary
+/// candidates.
 ///
 /// SKK-JISYO files may contain candidates that start with `(`, indicating an
-/// Emacs Lisp S-expression.  The only currently supported directive is
-/// `skk-ignore-dic-word`; all other Lisp forms are classified as `Unknown` and
-/// passed through opaquely (displayed to the user, round-tripped unchanged).
+/// Emacs Lisp S-expression.  Two forms are understood:
+///
+/// - `(concat "..." ...)` — a string built from literals.  It is the standard
+///   way to store a candidate or annotation that contains characters the
+///   dictionary syntax reserves (`/` and `;`, written as `\057` and `\073`).
+///   `parse_concat` evaluates it to a plain string at load time and
+///   `quote_concat` produces it at save time.
+/// - `(skk-ignore-dic-word "w1" ...)` — a directive, never displayed.
+///
+/// Any other form is classified as `Unknown`: it is hidden from the user and
+/// round-tripped unchanged when the user dictionary is saved.
+use std::iter::Peekable;
+use std::str::Chars;
+
 use crate::dict::entry::LispForm;
 
 /// Classifies a candidate word string.
@@ -21,31 +33,61 @@ pub fn classify(word: &str) -> Option<LispForm> {
     }
 }
 
-/// Attempts to parse `(skk-ignore-dic-word "w1" "w2" ...)` and returns the
-/// list of words to ignore, or `None` if the string does not match.
+/// Reads one Emacs Lisp string literal from `chars`, which must be positioned
+/// just after the opening `"`.  Consumes the closing `"`.
 ///
-/// Handles `\"` and `\\` escape sequences inside quoted strings.
-fn parse_ignore_dic_word(s: &str) -> Option<Vec<String>> {
-    let s = s.trim();
+/// Supported escapes: `\\`, `\"`, `\n`, `\t`, `\r`, and octal `\ooo` (one to
+/// three digits, e.g. `\057` for `/`).  Returns `None` on an unterminated
+/// literal or an unsupported escape.
+fn read_string_literal(chars: &mut Peekable<Chars<'_>>) -> Option<String> {
+    let mut out = String::new();
+    loop {
+        match chars.next()? {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                '"' => out.push('"'),
+                '\\' => out.push('\\'),
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                'r' => out.push('\r'),
+                d @ '0'..='7' => {
+                    let mut code = d.to_digit(8)?;
+                    for _ in 0..2 {
+                        match chars.peek() {
+                            Some(c @ '0'..='7') => {
+                                code = code * 8 + c.to_digit(8)?;
+                                chars.next();
+                            }
+                            _ => break,
+                        }
+                    }
+                    out.push(char::from_u32(code)?);
+                }
+                _ => return None,
+            },
+            c => out.push(c),
+        }
+    }
+}
 
-    // Must start with '(' and end with ')'
-    let inner = s.strip_prefix('(')?.strip_suffix(')')?;
-    let inner = inner.trim();
-
-    // First token must be the keyword
-    let rest = inner.strip_prefix("skk-ignore-dic-word")?;
+/// Splits `s` (trimmed, starting with `(` and ending with `)`) into the
+/// head symbol and the remainder after it, or `None` if the shape is wrong.
+fn split_head<'a>(s: &'a str, head: &str) -> Option<&'a str> {
+    let inner = s.trim().strip_prefix('(')?.strip_suffix(')')?.trim();
+    let rest = inner.strip_prefix(head)?;
     // After the keyword there must be whitespace (or end of expression)
     if !rest.is_empty() && !rest.starts_with(|c: char| c.is_ascii_whitespace()) {
         return None;
     }
-    let rest = rest.trim_start();
+    Some(rest.trim_start())
+}
 
-    // Parse zero or more quoted string literals
+/// Parses zero or more whitespace-separated string literals until the end of
+/// `rest`.  Returns `None` on any other token.
+fn parse_string_list(rest: &str) -> Option<Vec<String>> {
     let mut words = Vec::new();
     let mut chars = rest.chars().peekable();
-
     loop {
-        // Skip whitespace
         while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) {
             chars.next();
         }
@@ -53,26 +95,102 @@ fn parse_ignore_dic_word(s: &str) -> Option<Vec<String>> {
             None => break,
             Some('"') => {
                 chars.next(); // consume opening `"`
-                let mut word = String::new();
-                loop {
-                    match chars.next() {
-                        None => return None, // unterminated string
-                        Some('"') => break,
-                        Some('\\') => match chars.next() {
-                            Some('"') => word.push('"'),
-                            Some('\\') => word.push('\\'),
-                            _ => return None, // unsupported escape
-                        },
-                        Some(c) => word.push(c),
-                    }
-                }
-                words.push(word);
+                words.push(read_string_literal(&mut chars)?);
             }
             Some(_) => return None, // unexpected token
         }
     }
-
     Some(words)
+}
+
+/// Attempts to parse `(skk-ignore-dic-word "w1" "w2" ...)` and returns the
+/// list of words to ignore, or `None` if the string does not match.
+fn parse_ignore_dic_word(s: &str) -> Option<Vec<String>> {
+    parse_string_list(split_head(s, "skk-ignore-dic-word")?)
+}
+
+/// Evaluates `(concat "s1" "s2" ...)` to the concatenated string.
+///
+/// Returns `None` if `s` is not a `concat` form made only of string literals
+/// (such candidates stay `LispForm::Unknown`).
+pub fn parse_concat(s: &str) -> Option<String> {
+    Some(parse_string_list(split_head(s, "concat")?)?.concat())
+}
+
+/// Returns the byte offset just past the `)` that closes the S-expression
+/// starting at the beginning of `s`, honouring string literals (a `)` or
+/// `"` inside a literal does not count).  Returns `None` if `s` does not
+/// start with `(` or the parentheses are unbalanced.
+pub fn sexp_end(s: &str) -> Option<usize> {
+    if !s.starts_with('(') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, c) in s.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Returns `true` if `s` cannot be written into a dictionary file verbatim
+/// and must be wrapped with `quote_concat` instead: it contains a character
+/// the dictionary syntax reserves (`/`, `;`, `"`, `\`, newline), or it starts
+/// with `(` and would otherwise be read back as a Lisp form.
+pub fn needs_quoting(s: &str) -> bool {
+    s.starts_with('(') || s.contains(['/', ';', '"', '\\', '\n', '\r'])
+}
+
+/// Wraps `s` as `(concat "...")`, escaping it the way DDSKK's
+/// `skk-quote-char` does so other SKK implementations read it back
+/// correctly: `/` → `\057`, `;` → `\073`, `"` → `\"`, `\` → `\\`,
+/// LF → `\n`, CR → `\r`.
+pub fn quote_concat(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 12);
+    out.push_str("(concat \"");
+    for c in s.chars() {
+        match c {
+            '/' => out.push_str("\\057"),
+            ';' => out.push_str("\\073"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c => out.push(c),
+        }
+    }
+    out.push_str("\")");
+    out
+}
+
+/// Quotes `s` with `quote_concat` only when `needs_quoting` says so.
+pub fn quote_if_needed(s: &str) -> String {
+    if needs_quoting(s) {
+        quote_concat(s)
+    } else {
+        s.to_string()
+    }
 }
 
 /// Renders a `LispForm::IgnoreDicWord` back to its S-expression string.
@@ -176,5 +294,91 @@ mod tests {
             rendered,
             "(skk-ignore-dic-word \"say \\\"hi\\\"\" \"back\\\\slash\")"
         );
+    }
+
+    // ── concat ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_concat_octal_escapes() {
+        assert_eq!(
+            parse_concat(r#"(concat "and\057or")"#).as_deref(),
+            Some("and/or")
+        );
+        assert_eq!(
+            parse_concat(r#"(concat "(\073_\073)")"#).as_deref(),
+            Some("(;_;)")
+        );
+        assert_eq!(
+            parse_concat(r#"(concat "http:\057\057example.com\057")"#).as_deref(),
+            Some("http://example.com/")
+        );
+    }
+
+    #[test]
+    fn test_parse_concat_multiple_literals_and_escapes() {
+        assert_eq!(
+            parse_concat(r#"(concat "a" "b\"c" "\\d" "e\nf")"#).as_deref(),
+            Some("ab\"c\\de\nf")
+        );
+        assert_eq!(parse_concat("(concat)").as_deref(), Some(""));
+        assert_eq!(parse_concat("( concat \"x\" )").as_deref(), Some("x"));
+    }
+
+    #[test]
+    fn test_parse_concat_rejects_non_literal_forms() {
+        assert!(parse_concat("(concat foo)").is_none());
+        assert!(parse_concat("(concat \"unterminated)").is_none());
+        assert!(parse_concat("(concat \"bad\\q\")").is_none());
+        assert!(parse_concat("(concatenate \"x\")").is_none());
+        assert!(parse_concat("(skk-ignore-dic-word \"x\")").is_none());
+        assert!(parse_concat("plain").is_none());
+    }
+
+    #[test]
+    fn test_quote_concat_roundtrip() {
+        for s in [
+            "a/b",
+            "x;y",
+            "(;_;)",
+            "say \"hi\"",
+            "back\\slash",
+            "line\nbreak",
+            "(笑)",
+        ] {
+            let quoted = quote_concat(s);
+            assert!(quoted.starts_with("(concat \""), "{quoted}");
+            assert!(
+                !quoted[9..quoted.len() - 2].contains(['/', ';']),
+                "{quoted}"
+            );
+            assert_eq!(parse_concat(&quoted).as_deref(), Some(s), "{quoted}");
+        }
+        assert_eq!(quote_concat("a/b;c"), r#"(concat "a\057b\073c")"#);
+    }
+
+    #[test]
+    fn test_needs_quoting() {
+        assert!(!needs_quoting("漢字"));
+        assert!(!needs_quoting("and or"));
+        assert!(needs_quoting("and/or"));
+        assert!(needs_quoting("a;b"));
+        assert!(needs_quoting("(笑)"));
+        assert!(needs_quoting("q\"q"));
+        assert!(needs_quoting("a\\b"));
+        assert!(needs_quoting("a\nb"));
+        assert_eq!(quote_if_needed("漢字"), "漢字");
+        assert_eq!(quote_if_needed("(笑)"), r#"(concat "(笑)")"#);
+    }
+
+    #[test]
+    fn test_sexp_end() {
+        assert_eq!(sexp_end("(concat \"a\")"), Some(12));
+        assert_eq!(sexp_end("(concat \"a\");note"), Some(12));
+        // `)` and `"` inside a string literal are ignored.
+        let s = r#"(concat "x)\"y");ann"#;
+        assert_eq!(sexp_end(s), Some(s.len() - 4));
+        assert_eq!(sexp_end("(a (b c) d)"), Some(11));
+        assert!(sexp_end("(unbalanced").is_none());
+        assert!(sexp_end("plain").is_none());
     }
 }
